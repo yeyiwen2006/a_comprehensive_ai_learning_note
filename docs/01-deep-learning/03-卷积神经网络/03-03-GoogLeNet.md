@@ -2,14 +2,14 @@
 title: "3.3 GoogLeNet"
 source_docx: "第1部分 深度学习/3.卷积神经网络/3.3 GoogLeNet.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 3.3 GoogLeNet
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 ## 一、核心创新：Inception 模块
 

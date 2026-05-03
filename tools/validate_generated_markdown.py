@@ -52,14 +52,18 @@ def warn(message: str) -> None:
 
 
 def validate_no_banned_files(repo_root: Path, failures: list[str]) -> None:
+    local_only_warned = False
     for path in repo_root.rglob("*"):
-        if ".git" in path.parts:
+        relative = path.relative_to(repo_root)
+        if ".git" in relative.parts:
+            continue
+        if "local-only" in relative.parts:
+            if not local_only_warned:
+                warn("检测到本地-only目录，必须保持 gitignore 不上传: local-only")
+                local_only_warned = True
             continue
         if path.is_file() and path.suffix.lower() in BANNED_SUFFIXES:
             fail(f"禁止上传的文件类型: {path.relative_to(repo_root)}", failures)
-        if path.is_dir() and path.name == "local-only":
-            warn(f"检测到本地-only目录，必须保持 gitignore 不上传: {path.relative_to(repo_root)}")
-            continue
         if path.is_dir() and path.name in {"_ocr_tmp", "_tmp"}:
             fail(f"禁止上传的临时或本地目录: {path.relative_to(repo_root)}", failures)
 
@@ -94,7 +98,6 @@ def validate_required_files(repo_root: Path, failures: list[str]) -> None:
         "TODO.md",
         "OCR质量报告.md",
         "引用与版权清理报告.md",
-        "项目结构说明.md",
     ]
     for relative in required:
         if not (repo_root / relative).exists():

@@ -2,14 +2,14 @@
 title: "19.7 稀疏注意力（Sparse Attention）"
 source_docx: "第3部分 大语言模型/19.注意力机制的工程优化/19.7 稀疏注意力（Sparse Attention）.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 19.7 稀疏注意力（Sparse Attention）
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 ## 一、核心思想：认为并非所有 token 对之间都需要进行交互。通过引入结构性稀疏模式，只计算注意力矩阵中一部分重要的元素，将复杂度从O(n^2) 降低到 O(n*sqrt(n))或O(nlogn)。
 
@@ -29,38 +29,13 @@ Global + Local Attention：指定少数 token（如 <s>）拥有全局注意力
 
 1.核心思想：“先粗筛，后细算”
 
-> [图片 1：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-目标： 在不计算所有 Query-Key 点积的情况下， 快速找到高价值的 Keyo 输入： Query 侧的索引信号： 从嗨衍生出的 qtjo · Key 侧的索引信号：。 权重 / 亻扁置项： 0。 处理流程： 部分 RoPE (Partially apply RoPE): 为了降低计算量， 索引器不需要全精度的位置纟扁码， 1 ． 只对索引向量应用部分 RoPE0 Lightning lndexer （闪电索引器）： 这是一个轻量级的计算模块。 它接收粗粒度的 Query 和 2 ． Key 索引向量， 快速计算粗略的相关性分数。 3 ． Top-k Selector (Top-k 选择器）： 基于索引器计算出的分数， 动态选择出当前最关注的个 Key-Value 块。
-
+> [图片内容待重建：img-3603ece21575-0001] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
 2.推理工作流
 
-> [图片 2：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-Ste p 1： 投影降维 (Down-Projection) 原理： 模型不直接使用高维的或完整的进行检索， 而是通过一个轻量级的线性层彬 7 将输入投影到一个极低维度的空间。 数学表示 · 7 一 · （Query 侧索引向量） 7 KV (Key 侧索引向量） 关键点： 这里的索引向量维度 “ 远小于正常的 Head 维度 dheado 例如， dhead 可能是 128， 而 “ 可能只有 32 或 16。 这就极大减少了计算量。 Ste p 2： 块级划分 (BIock-wise Segmentation) 原理： " 粗粒度 " 不仅指向量维度低， 还指时间步的粒度。 DSA 通常不会对每一个历史 Token 逐个计算分数， 而是将 KV Cache 划分为多个固定大小的 Block （块） （例如每 64 个 Token 为一块）。 · 操作： 索引器为每一个 Block 计算一个代表性的 Key 索引向量 （通常是该 Block 内所有的均值或特定位置的采样）。
-
-> [图片 3：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-Ste p 1： 投影降维 (Down-Projection) 原理： 模型不直接使用高维的或完整的进行检索， 而是通过一个轻量级的线性层彬 7 将输入投影到一个极低维度的空间。 数学表示 · 7 一 · （Query 侧索引向量） 7 KV (Key 侧索引向量） 关键点： 这里的索引向量维度 “ 远小于正常的 Head 维度 dheado 例如， dhead 可能是 128， 而 “ 可能只有 32 或 16。 这就极大减少了计算量。 Ste p 2： 块级划分 (BIock-wise Segmentation) 原理： " 粗粒度 " 不仅指向量维度低， 还指时间步的粒度。 DSA 通常不会对每一个历史 Token 逐个计算分数， 而是将 KV Cache 划分为多个固定大小的 Block （块） （例如每 64 个 Token 为一块）。 · 操作： 索引器为每一个 Block 计算一个代表性的 Key 索引向量 （通常是该 Block 内所有的均值或特定位置的采样）。
-
-> [图片 4：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-Ste p 3： 快速打分 (Lightweight Scoring) 原理： 使用点积计算相关性分数。 数学表示： block block 注意图中提到的 "partially apply RoPE： 为了进一步节省算力， 同时保留位置信息， 索引器只对向量的一小部分维度应用旋转位置编码， 或者使用简化版的位置编码。 Ste p 4： Top-k 筛选 (Gating) 根据 Sblock 的大小， 选出分数最高的个 Block0 结果： 后续的 " 重型 " 注意力计算 ℃ ore Attention) 只针对这个被选中的 Block 进行加载和计算， 其余 90 ％ + 的无关信息被直接忽略。
-
-> [图片 5：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-为什么它能 “ 快 "？ 计算量级差异： 假设原计算量是 0 · “ 刁。 索引器的计算量是 0 · dindex）， 其中 B 是块大小。 由于 B > 1 且 “ 《 dhead， 索引器的开销几乎可以忽略不计。
-
+> [图片内容待重建：img-3603ece21575-0002] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+> [图片内容待重建：img-3603ece21575-0003] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+> [图片内容待重建：img-3603ece21575-0004] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+> [图片内容待重建：img-3603ece21575-0005] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
 3.训练方法
 
 （1）Lightning Indexer的训练目标

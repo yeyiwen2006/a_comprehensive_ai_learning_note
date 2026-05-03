@@ -2,14 +2,14 @@
 title: "3.5 DenseNet"
 source_docx: "第1部分 深度学习/3.卷积神经网络/3.5 DenseNet.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 3.5 DenseNet
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 在ResNet中，我们看到了跳跃连接（x + F(x)）的巨大威力。DenseNet的作者提出了一个更激进的想法：为了最大化网络中各层之间的信息流动，能否让每一层都直接连接到它后面的所有层？
 

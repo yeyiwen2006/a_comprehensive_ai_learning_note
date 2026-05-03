@@ -2,14 +2,14 @@
 title: "20.4 Attention Residuals（论文）"
 source_docx: "第3部分 大语言模型/20.大模型的架构和训练方法优化/20.4 Attention Residuals（论文）.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 20.4 Attention Residuals（论文）
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 > 本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
 

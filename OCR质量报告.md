@@ -1,223 +1,39 @@
-# OCR质量报告
+# 图片重建与OCR处理报告
 
-本报告由转换脚本自动生成，用于说明每个 Word 文档的正文抽取、图片数量和 OCR 状态。
+本报告说明当前开源 Markdown 中的图片处理状态。普通 OCR 已弃用，不再把 OCR 识别文本写入公开正文。
 
-| 文档 | 上传状态 | 正文字数 | 图片数 | OCR成功 | OCR失败 | 疑似公式OCR | OCR字数 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| docs/01-deep-learning/01-深度学习基础理论/01-01-机器学习的分类.md | upload | 1779 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/01-深度学习基础理论/01-02-神经网络与深度学习.md | upload | 2622 | 6 | 5 | 1 | 3 | 711 |
-| docs/01-deep-learning/01-深度学习基础理论/01-03-梯度下降与反向传播.md | upload | 2629 | 6 | 4 | 2 | 2 | 378 |
-| docs/01-deep-learning/01-深度学习基础理论/01-04-过拟合.md | upload | 2125 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/01-深度学习基础理论/01-05-交叉熵损失-CE与Softmax回归.md | upload | 3177 | 11 | 11 | 0 | 9 | 2378 |
-| docs/01-deep-learning/02-神经网络训练的常用方法/02-01-模型正则化.md | upload | 2008 | 8 | 8 | 0 | 6 | 2428 |
-| docs/01-deep-learning/02-神经网络训练的常用方法/02-02-超参数优化与验证集.md | upload | 732 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/02-神经网络训练的常用方法/02-03-批量规范化-BN.md | upload | 3378 | 1 | 1 | 0 | 0 | 100 |
-| docs/01-deep-learning/02-神经网络训练的常用方法/02-04-参数初始化.md | upload | 778 | 11 | 11 | 0 | 11 | 1591 |
-| docs/01-deep-learning/02-神经网络训练的常用方法/02-05-数据分布偏移的解决方案.md | upload | 2460 | 12 | 12 | 0 | 11 | 3142 |
-| docs/01-deep-learning/03-卷积神经网络/03-01-卷积神经网络-CNN.md | upload | 5659 | 1 | 1 | 0 | 1 | 435 |
-| docs/01-deep-learning/03-卷积神经网络/03-02-NiN.md | upload | 1690 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/03-卷积神经网络/03-03-GoogLeNet.md | upload | 3200 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/03-卷积神经网络/03-04-残差网络-ResNet.md | upload | 1796 | 3 | 3 | 0 | 1 | 682 |
-| docs/01-deep-learning/03-卷积神经网络/03-05-DenseNet.md | upload | 3062 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/03-卷积神经网络/03-06-基于卷积神经网络的目标检测算法.md | upload | 1966 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/04-循环神经网络/04-01-自回归模型.md | upload | 614 | 1 | 1 | 0 | 0 | 203 |
-| docs/01-deep-learning/04-循环神经网络/04-02-循环神经网络-RNN.md | upload | 2368 | 3 | 3 | 0 | 3 | 566 |
-| docs/01-deep-learning/04-循环神经网络/04-03-编码器-解码器架构.md | upload | 2399 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/04-循环神经网络/04-04-门控记忆单元-GRU.md | upload | 1914 | 3 | 3 | 0 | 3 | 932 |
-| docs/01-deep-learning/04-循环神经网络/04-05-长短期记忆网络-LSTM.md | upload | 1560 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/04-循环神经网络/04-06-深度循环神经网络.md | upload | 507 | 3 | 2 | 1 | 2 | 1074 |
-| docs/01-deep-learning/04-循环神经网络/04-07-双向循环神经网络.md | upload | 1041 | 13 | 13 | 0 | 11 | 4367 |
-| docs/01-deep-learning/04-循环神经网络/04-08-序列到序列-Seq2Seq学习.md | upload | 225 | 2 | 2 | 0 | 2 | 698 |
-| docs/01-deep-learning/05-优化算法/05-01-随机梯度下降-SGD.md | upload | 566 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/05-优化算法/05-02-动量法-Momentum.md | upload | 748 | 1 | 1 | 0 | 1 | 248 |
-| docs/01-deep-learning/05-优化算法/05-03-自适应学习率.md | upload | 1141 | 1 | 1 | 0 | 1 | 217 |
-| docs/01-deep-learning/05-优化算法/05-04-Adam优化器.md | upload | 1482 | 1 | 1 | 0 | 1 | 358 |
-| docs/01-deep-learning/05-优化算法/05-05-AdamW优化器.md | upload | 274 | 4 | 4 | 0 | 2 | 420 |
-| docs/01-deep-learning/05-优化算法/05-06-Muon优化器.md | upload | 350 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/05-优化算法/05-07-零阶优化算法.md | upload | 2309 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/06-分类任务/06-01-对比学习.md | upload | 281 | 1 | 1 | 0 | 1 | 342 |
-| docs/01-deep-learning/06-分类任务/06-02-分类任务的评估标准.md | upload | 2694 | 0 | 0 | 0 | 0 | 0 |
-| docs/01-deep-learning/07-计算性能与AI-Infra/07-01-硬件部件.md | upload | 4008 | 1 | 1 | 0 | 0 | 396 |
-| docs/01-deep-learning/07-计算性能与AI-Infra/07-02-深度学习框架.md | upload | 2955 | 4 | 4 | 0 | 4 | 2145 |
-| docs/01-deep-learning/07-计算性能与AI-Infra/07-03-多GPU计算.md | upload | 2353 | 3 | 3 | 0 | 1 | 902 |
-| docs/01-deep-learning/07-计算性能与AI-Infra/07-04-1F1B与DualPipe.md | upload | 554 | 23 | 23 | 0 | 8 | 5020 |
-| docs/01-deep-learning/08-生成模型/08-01-生成对抗网络-GANs.md | upload | 5112 | 23 | 23 | 0 | 19 | 5171 |
-| docs/01-deep-learning/08-生成模型/08-02-GANs训练的模式崩溃问题与解决方案.md | upload | 2117 | 6 | 6 | 0 | 5 | 931 |
-| docs/01-deep-learning/08-生成模型/08-03-变分自编码器-VAE与VQ-VAE.md | upload | 1841 | 5 | 5 | 0 | 5 | 1733 |
-| docs/01-deep-learning/08-生成模型/08-04-表征因果的自编码.md | upload | 248 | 9 | 9 | 0 | 6 | 1729 |
-| docs/01-deep-learning/09-图神经网络/09-01-图神经网络.md | upload | 1215 | 0 | 0 | 0 | 0 | 0 |
-| docs/02-reinforcement-learning/10-强化学习的基本知识/10-01-多臂老虎机与上置信界-UCB算法.md | upload | 2198 | 11 | 11 | 0 | 7 | 2768 |
-| docs/02-reinforcement-learning/10-强化学习的基本知识/10-02-马尔可夫过程.md | upload | 303 | 12 | 12 | 0 | 8 | 4647 |
-| docs/02-reinforcement-learning/10-强化学习的基本知识/10-03-状态分布与占用度量.md | upload | 370 | 16 | 15 | 1 | 7 | 2357 |
-| docs/02-reinforcement-learning/10-强化学习的基本知识/10-04-同步更新和异步更新.md | upload | 894 | 10 | 10 | 0 | 3 | 2136 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-01-蒙特卡洛方法.md | upload | 385 | 1 | 1 | 0 | 1 | 623 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-02-动态规划算法.md | upload | 915 | 8 | 8 | 0 | 6 | 2596 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-03-时序差分算法.md | upload | 1075 | 15 | 15 | 0 | 8 | 5381 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-04-环境模型与Dyna-Q算法.md | upload | 933 | 7 | 7 | 0 | 5 | 1914 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-05-DQN算法.md | upload | 2068 | 6 | 5 | 1 | 4 | 853 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-06-Double-DQN.md | upload | 636 | 12 | 12 | 0 | 7 | 1259 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-07-Dueling-DQN.md | upload | 446 | 6 | 6 | 0 | 1 | 871 |
-| docs/02-reinforcement-learning/11-基于价值的强化学习/11-08-有模型的DQN算法.md | upload | 431 | 7 | 7 | 0 | 3 | 1648 |
-| docs/02-reinforcement-learning/12-基于策略的强化学习/12-01-基于策略的强化学习的基本思想.md | upload | 963 | 4 | 4 | 0 | 3 | 434 |
-| docs/02-reinforcement-learning/12-基于策略的强化学习/12-02-REINFORCE算法.md | upload | 1204 | 9 | 9 | 0 | 6 | 1736 |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-01-Actor-Critic算法.md | upload | 1916 | 10 | 10 | 0 | 5 | 1464 |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-02-TRPO算法与重要性采样.md | upload | 1203 | 18 | 18 | 0 | 17 | 4008 |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-03-PPO算法与GAE.md | upload | 1565 | 18 | 18 | 0 | 13 | 3663 |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-04-KL散度在RL中的其他应用.md | upload | 0 | 3 | 3 | 0 | 3 | 1408 |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-05-DDPG算法.md | upload | 738 | 6 | 6 | 0 | 4 | 1471 |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-06-SAC算法.md | upload | 2596 | 15 | 15 | 0 | 10 | 2741 |
-| docs/02-reinforcement-learning/14-强化学习的其他算法/14-01-模仿学习.md | upload | 614 | 5 | 5 | 0 | 3 | 1133 |
-| docs/02-reinforcement-learning/14-强化学习的其他算法/14-02-基于模型的强化学习.md | upload | 2383 | 27 | 27 | 0 | 15 | 5090 |
-| docs/02-reinforcement-learning/14-强化学习的其他算法/14-03-离线强化学习.md | upload | 835 | 16 | 16 | 0 | 11 | 4383 |
-| docs/02-reinforcement-learning/14-强化学习的其他算法/14-04-多智能体强化学习.md | upload | 629 | 6 | 6 | 0 | 3 | 1725 |
-| docs/02-reinforcement-learning/14-强化学习的其他算法/14-05-目标导向的强化学习.md | upload | 1289 | 26 | 26 | 0 | 17 | 7661 |
-| docs/02-reinforcement-learning/14-强化学习的其他算法/14-06-传递强化学习-论文.md | upload | 1164 | 13 | 12 | 1 | 7 | 1273 |
-| docs/03-large-language-model/15-注意力机制与Transformer/15-01-注意力机制的核心原理.md | upload | 8121 | 2 | 2 | 0 | 2 | 336 |
-| docs/03-large-language-model/15-注意力机制与Transformer/15-02-Bahdanau注意力.md | upload | 743 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/15-注意力机制与Transformer/15-03-Transformer.md | upload | 3588 | 4 | 4 | 0 | 0 | 807 |
-| docs/03-large-language-model/15-注意力机制与Transformer/15-04-位置编码.md | upload | 805 | 13 | 12 | 1 | 9 | 2932 |
-| docs/03-large-language-model/15-注意力机制与Transformer/15-05-BERT.md | upload | 2857 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/16-大语言模型的基本原理/16-01-GPT与预训练.md | upload | 2770 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/16-大语言模型的基本原理/16-02-词嵌入-Embedding.md | upload | 756 | 1 | 1 | 0 | 1 | 311 |
-| docs/03-large-language-model/16-大语言模型的基本原理/16-03-生成过程的干预.md | upload | 89 | 8 | 8 | 0 | 1 | 935 |
-| docs/03-large-language-model/16-大语言模型的基本原理/16-04-后训练.md | upload | 5627 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/16-大语言模型的基本原理/16-05-混合专家模块.md | upload | 1277 | 21 | 21 | 0 | 11 | 4816 |
-| docs/03-large-language-model/16-大语言模型的基本原理/16-06-多模态大语言模型.md | upload | 2506 | 14 | 14 | 0 | 12 | 4596 |
-| docs/03-large-language-model/17-强化微调/17-01-基于人类反馈的强化学习.md | upload | 716 | 5 | 4 | 1 | 3 | 870 |
-| docs/03-large-language-model/17-强化微调/17-02-DPO算法.md | upload | 76 | 7 | 7 | 0 | 5 | 898 |
-| docs/03-large-language-model/17-强化微调/17-03-专家迭代与拒绝采样.md | upload | 708 | 7 | 7 | 0 | 4 | 2486 |
-| docs/03-large-language-model/17-强化微调/17-04-基于可验证奖励的强化学习.md | upload | 1545 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/17-强化微调/17-05-奖励函数的改进.md | upload | 4455 | 6 | 5 | 1 | 1 | 427 |
-| docs/03-large-language-model/17-强化微调/17-06-PPO算法在强化微调中的应用.md | upload | 1066 | 29 | 29 | 0 | 21 | 9777 |
-| docs/03-large-language-model/17-强化微调/17-07-GRPO算法.md | upload | 1651 | 10 | 10 | 0 | 4 | 2204 |
-| docs/03-large-language-model/17-强化微调/17-08-KL散度的选择.md | upload | 708 | 12 | 12 | 0 | 10 | 1889 |
-| docs/03-large-language-model/17-强化微调/17-09-为什么Online-RL比SFT更能避免“灾难性遗忘”.md | upload | 1186 | 7 | 7 | 0 | 7 | 1720 |
-| docs/03-large-language-model/18-模型压缩/18-01-模型量化.md | upload | 1716 | 8 | 8 | 0 | 8 | 2014 |
-| docs/03-large-language-model/18-模型压缩/18-02-模型蒸馏.md | upload | 1838 | 16 | 16 | 0 | 11 | 2335 |
-| docs/03-large-language-model/18-模型压缩/18-03-模型剪枝.md | upload | 228 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/18-模型压缩/18-04-高维向量的量化-论文.md | upload | 101 | 5 | 5 | 0 | 3 | 1736 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-01-键值缓存-KV-Cache.md | upload | 1522 | 6 | 5 | 1 | 5 | 252 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-02-Flash-Attention.md | upload | 732 | 14 | 14 | 0 | 9 | 2855 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-03-环状注意力-Ring-Attention.md | upload | 639 | 5 | 5 | 0 | 3 | 1225 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-04-Multi-Query与Grouped-Query-Attention.md | upload | 519 | 3 | 3 | 0 | 2 | 583 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-05-Multi-Head-Latent-Attention.md | upload | 1715 | 13 | 13 | 0 | 6 | 1355 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-06-KV压缩的其他方法.md | upload | 247 | 2 | 2 | 0 | 1 | 635 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-07-稀疏注意力-Sparse-Attention.md | upload | 1015 | 5 | 5 | 0 | 0 | 1643 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-08-线性注意力-Linear-Attention.md | upload | 1008 | 12 | 12 | 0 | 7 | 2185 |
-| docs/03-large-language-model/19-注意力机制的工程优化/19-09-门控注意力-Gated-Attention-论文.md | upload | 598 | 4 | 4 | 0 | 3 | 533 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-01-Multi-token-Prediction.md | upload | 1425 | 9 | 8 | 1 | 6 | 2183 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-02-Engram模块.md | upload | 2015 | 1 | 1 | 0 | 0 | 556 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-03-流形假设与超连接.md | upload | 1788 | 2 | 2 | 0 | 0 | 736 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-04-Attention-Residuals-论文.md | upload | 790 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-05-自蒸馏.md | upload | 1235 | 4 | 4 | 0 | 2 | 234 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-06-多专家On-policy-Distillation.md | upload | 539 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-07-KL散度与JSD散度.md | upload | 594 | 3 | 3 | 0 | 3 | 195 |
-| docs/03-large-language-model/20-大模型的架构和训练方法优化/20-08-困惑度.md | upload | 2432 | 0 | 0 | 0 | 0 | 0 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-01-DAPO算法-论文.md | upload | 424 | 9 | 9 | 0 | 0 | 2271 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-02-VAPO算法-论文.md | upload | 1770 | 10 | 10 | 0 | 5 | 2235 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-03-GSPO算法-论文.md | upload | 396 | 9 | 9 | 0 | 6 | 1777 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-04-GFPO算法-论文.md | upload | 981 | 2 | 2 | 0 | 2 | 648 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-05-最大似然强化学习-论文.md | upload | 705 | 4 | 4 | 0 | 3 | 834 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-06-Reinforcement-Attention-Learning-论文.md | upload | 369 | 7 | 7 | 0 | 5 | 1240 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-07-基于经验的强化学习-论文.md | upload | 688 | 7 | 7 | 0 | 2 | 1333 |
-| docs/03-large-language-model/21-强化微调的前沿探索/21-08-结合自蒸馏的强化学习-论文.md | upload | 618 | 3 | 3 | 0 | 2 | 976 |
-| docs/04-agents-and-continual-learning/22-大模型智能体/22-01-智能体及其架构.md | upload | 3201 | 1 | 1 | 0 | 0 | 111 |
-| docs/04-agents-and-continual-learning/22-大模型智能体/22-02-提示工程.md | upload | 1387 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/22-大模型智能体/22-03-多智能体及其训练.md | upload | 2674 | 3 | 3 | 0 | 1 | 530 |
-| docs/04-agents-and-continual-learning/22-大模型智能体/22-04-大模型的中期训练.md | upload | 1129 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/22-大模型智能体/22-05-OpenClaw.md | upload | 1787 | 2 | 1 | 1 | 0 | 500 |
-| docs/04-agents-and-continual-learning/23-工具调用/23-01-工具调用.md | upload | 1469 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/23-工具调用/23-02-模型上下文协议.md | upload | 1602 | 1 | 1 | 0 | 0 | 325 |
-| docs/04-agents-and-continual-learning/23-工具调用/23-03-Skills.md | upload | 691 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/24-大模型推理/24-01-基于提示的方法.md | upload | 825 | 1 | 1 | 0 | 1 | 330 |
-| docs/04-agents-and-continual-learning/24-大模型推理/24-02-基于搜索的方法.md | upload | 3831 | 17 | 16 | 1 | 12 | 2557 |
-| docs/04-agents-and-continual-learning/24-大模型推理/24-03-AlphaEvolve.md | upload | 2559 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/24-大模型推理/24-04-多轮推理和并行推理-论文.md | upload | 1301 | 1 | 1 | 0 | 0 | 137 |
-| docs/04-agents-and-continual-learning/24-大模型推理/24-05-思维社会理论-论文.md | upload | 700 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/25-检索增强生成/25-01-检索增强生成的基本方法.md | upload | 1867 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/25-检索增强生成/25-02-稀疏检索.md | upload | 21 | 2 | 2 | 0 | 1 | 568 |
-| docs/04-agents-and-continual-learning/25-检索增强生成/25-03-稠密检索与混合检索.md | upload | 1481 | 4 | 4 | 0 | 3 | 1300 |
-| docs/04-agents-and-continual-learning/25-检索增强生成/25-04-Faiss加速.md | upload | 1088 | 13 | 13 | 0 | 3 | 2918 |
-| docs/04-agents-and-continual-learning/25-检索增强生成/25-05-重排序与精炼.md | upload | 1139 | 5 | 5 | 0 | 3 | 1289 |
-| docs/04-agents-and-continual-learning/26-上下文与记忆/26-01-模型的记忆.md | upload | 3324 | 4 | 4 | 0 | 0 | 734 |
-| docs/04-agents-and-continual-learning/26-上下文与记忆/26-02-上下文管理.md | upload | 2682 | 8 | 8 | 0 | 1 | 3232 |
-| docs/04-agents-and-continual-learning/26-上下文与记忆/26-03-基于注意力匹配的KV压缩-论文.md | upload | 1207 | 26 | 26 | 0 | 15 | 6025 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-01-注意力机制与梯度下降的等价性.md | upload | 6943 | 51 | 49 | 2 | 34 | 7614 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-02-Delta-Attention.md | upload | 2434 | 18 | 18 | 0 | 8 | 3547 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-03-基于上下文的元强化学习-论文.md | upload | 859 | 20 | 20 | 0 | 6 | 7054 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-04-基于上下文和长期记忆的持续学习-论文.md | upload | 2668 | 6 | 6 | 0 | 2 | 2924 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-05-利用RL训练记忆管理-论文.md | upload | 628 | 13 | 12 | 1 | 3 | 3938 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-06-Hymba-头级别混合注意力-论文.md | upload | 992 | 0 | 0 | 0 | 0 | 0 |
-| docs/04-agents-and-continual-learning/27-基于上下文的持续学习/27-07-Memory-Sparse-Attention-论文.md | upload | 297 | 6 | 6 | 0 | 3 | 1784 |
-| docs/04-agents-and-continual-learning/28-持续强化学习/28-01-基于梯度的元强化学习.md | upload | 696 | 6 | 6 | 0 | 3 | 1691 |
-| docs/04-agents-and-continual-learning/28-持续强化学习/28-02-DiscoRL-元学习设计RL算法-论文.md | upload | 965 | 9 | 9 | 0 | 7 | 3017 |
-| docs/04-agents-and-continual-learning/28-持续强化学习/28-03-TTT-Discover-测试时RL-论文.md | upload | 803 | 13 | 13 | 0 | 10 | 3400 |
-| docs/04-agents-and-continual-learning/28-持续强化学习/28-04-EvoTune-进化搜索与RL结合-论文.md | upload | 374 | 5 | 5 | 0 | 5 | 1390 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-01-基于在线自蒸馏的持续学习-论文.md | upload | 1617 | 3 | 3 | 0 | 1 | 751 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-02-部分权重就地更新的TTT-论文.md | upload | 1599 | 30 | 30 | 0 | 19 | 9131 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-03-Titans与Nested-Learning-论文.md | upload | 3771 | 32 | 30 | 2 | 17 | 7043 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-04-旁路微调-论文.md | upload | 940 | 14 | 14 | 0 | 5 | 4125 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-05-OpenClaw-RL-个人Agent的持续学习-论文.md | upload | 278 | 7 | 7 | 0 | 5 | 2630 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-06-利用超网络的持续LoRA微调-论文.md | upload | 201 | 12 | 12 | 0 | 5 | 3190 |
-| docs/04-agents-and-continual-learning/29-基于梯度与超网络的持续学习/29-07-自主学习的智能系统展望-论文.md | upload | 140 | 8 | 8 | 0 | 3 | 2715 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-01-扩散模型的基本原理.md | upload | 1804 | 25 | 24 | 1 | 12 | 3806 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-10-基于RL的扩散模型调参-论文.md | upload | 81 | 8 | 8 | 0 | 4 | 2092 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-02-随机梯度朗之万动力学.md | upload | 513 | 11 | 11 | 0 | 8 | 2969 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-03-Diffusion-U-Net.md | upload | 143 | 3 | 3 | 0 | 2 | 673 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-04-Diffusion-Transformer.md | upload | 779 | 13 | 13 | 0 | 10 | 4159 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-05-扩散模型如何解决“折中问题”.md | upload | 144 | 5 | 5 | 0 | 5 | 1567 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-06-Just-Image-Transformer-论文.md | upload | 354 | 10 | 10 | 0 | 6 | 3352 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-07-流匹配模型.md | upload | 1170 | 6 | 6 | 0 | 3 | 1908 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-08-离散流匹配-论文.md | upload | 946 | 12 | 12 | 0 | 7 | 2149 |
-| docs/05-world-models-multimodal-embodied-ai/30-扩散模型与流匹配模型的原理和架构/30-09-从非纯噪声开始的流匹配-论文.md | upload | 25 | 13 | 12 | 1 | 3 | 1837 |
-| docs/05-world-models-multimodal-embodied-ai/31-扩散模型与流匹配模型的强化学习/31-01-扩散模型与流匹配模型中强化学习的难点.md | upload | 232 | 9 | 9 | 0 | 5 | 2788 |
-| docs/05-world-models-multimodal-embodied-ai/31-扩散模型与流匹配模型的强化学习/31-02-Offline-RL转化为加权监督学习-论文.md | upload | 82 | 13 | 13 | 0 | 9 | 3620 |
-| docs/05-world-models-multimodal-embodied-ai/31-扩散模型与流匹配模型的强化学习/31-03-每步引入可学习噪声的Online-RL-论文.md | upload | 222 | 7 | 7 | 0 | 7 | 2325 |
-| docs/05-world-models-multimodal-embodied-ai/31-扩散模型与流匹配模型的强化学习/31-04-FlowGRPO-化ODE为SDE-论文.md | upload | 181 | 10 | 10 | 0 | 7 | 2493 |
-| docs/05-world-models-multimodal-embodied-ai/32-具身智能的基本知识/32-01-具身智能的模型架构路线.md | upload | 1345 | 1 | 1 | 0 | 0 | 395 |
-| docs/05-world-models-multimodal-embodied-ai/32-具身智能的基本知识/32-02-具身智能的训练数据.md | upload | 2068 | 18 | 18 | 0 | 1 | 7671 |
-| docs/05-world-models-multimodal-embodied-ai/32-具身智能的基本知识/32-03-策略函数的训练方法.md | upload | 228 | 9 | 9 | 0 | 2 | 3008 |
-| docs/05-world-models-multimodal-embodied-ai/32-具身智能的基本知识/32-04-VLA模型.md | upload | 994 | 10 | 10 | 0 | 4 | 3928 |
-| docs/05-world-models-multimodal-embodied-ai/33-世界模型的基本知识/33-01-世界模型概况.md | upload | 3087 | 2 | 2 | 0 | 0 | 776 |
-| docs/05-world-models-multimodal-embodied-ai/33-世界模型的基本知识/33-02-世界模型的主要技术路线.md | upload | 3659 | 1 | 1 | 0 | 1 | 121 |
-| docs/05-world-models-multimodal-embodied-ai/33-世界模型的基本知识/33-03-世界模型的训练数据与泛化性.md | upload | 974 | 0 | 0 | 0 | 0 | 0 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-01-自回归-扩散的结合与时空Transformer.md | upload | 1214 | 14 | 14 | 0 | 8 | 5689 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-02-生成式世界模型的主要训练阶段.md | upload | 1914 | 15 | 15 | 0 | 4 | 4140 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-03-扩散模型的蒸馏与Self-Forcing.md | upload | 1707 | 34 | 34 | 0 | 17 | 8750 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-04-生成式世界模型中的多种扩散范式-论文.md | upload | 376 | 28 | 28 | 0 | 15 | 7313 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-05-Diffusion-Forcing与上下文分步去噪-论文.md | upload | 908 | 42 | 42 | 0 | 18 | 12051 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-06-生成式世界模型的上下文工程-论文.md | upload | 501 | 6 | 6 | 0 | 0 | 2571 |
-| docs/05-world-models-multimodal-embodied-ai/34-多模态生成与生成式世界模型/34-07-生成式世界模型的表征学习与Tokenizer-论文.md | upload | 1511 | 33 | 33 | 0 | 19 | 9941 |
-| docs/05-world-models-multimodal-embodied-ai/35-建模三维与对象的世界模型/35-01-同一性三维世界的多视角世界模型-论文.md | upload | 451 | 5 | 5 | 0 | 1 | 2595 |
-| docs/05-world-models-multimodal-embodied-ai/35-建模三维与对象的世界模型/35-02-多视角一致性的具身世界模型-论文.md | upload | 201 | 6 | 6 | 0 | 4 | 2156 |
-| docs/05-world-models-multimodal-embodied-ai/35-建模三维与对象的世界模型/35-03-以对象为中心的世界模型-论文.md | upload | 442 | 18 | 18 | 0 | 10 | 4755 |
-| docs/05-world-models-multimodal-embodied-ai/36-基于隐变量预测支持下游任务的世界模型/36-01-RL中的世界模型.md | upload | 914 | 0 | 0 | 0 | 0 | 0 |
-| docs/05-world-models-multimodal-embodied-ai/36-基于隐变量预测支持下游任务的世界模型/36-02-RSSM与Block-Causal-Transformer.md | upload | 1039 | 28 | 28 | 0 | 13 | 7930 |
-| docs/05-world-models-multimodal-embodied-ai/36-基于隐变量预测支持下游任务的世界模型/36-03-损失分步解耦-论文.md | upload | 824 | 6 | 6 | 0 | 1 | 2318 |
-| docs/05-world-models-multimodal-embodied-ai/36-基于隐变量预测支持下游任务的世界模型/36-04-基于隐变量实现多步规划-论文.md | upload | 711 | 10 | 10 | 0 | 1 | 2701 |
-| docs/05-world-models-multimodal-embodied-ai/36-基于隐变量预测支持下游任务的世界模型/36-05-任意步动力学预测-论文.md | upload | 978 | 17 | 17 | 0 | 4 | 4914 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-01-V-JEPA-论文.md | upload | 731 | 19 | 19 | 0 | 3 | 4095 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-02-隐变量的时间直道化-论文.md | upload | 148 | 4 | 4 | 0 | 1 | 541 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | upload | 1273 | 14 | 14 | 0 | 7 | 4622 |
-| docs/05-world-models-multimodal-embodied-ai/38-结合世界模型的具身智能与物理推理/38-01-结合世界模型的具身智能与物理推理概述.md | upload | 676 | 5 | 5 | 0 | 2 | 1799 |
-| docs/05-world-models-multimodal-embodied-ai/38-结合世界模型的具身智能与物理推理/38-02-世界-策略解耦架构的具身智能与物理推理-论文.md | upload | 3343 | 59 | 59 | 0 | 23 | 18913 |
-| docs/05-world-models-multimodal-embodied-ai/38-结合世界模型的具身智能与物理推理/38-03-世界-策略顺序架构的具身智能与物理推理-论文.md | upload | 989 | 10 | 10 | 0 | 5 | 2374 |
-| docs/05-world-models-multimodal-embodied-ai/38-结合世界模型的具身智能与物理推理/38-04-世界-策略统一架构的具身智能-论文.md | upload | 2016 | 32 | 31 | 1 | 14 | 6877 |
-| docs/05-world-models-multimodal-embodied-ai/38-结合世界模型的具身智能与物理推理/38-05-仅在训练时融入预测能力的具身智能-论文.md | upload | 362 | 17 | 17 | 0 | 4 | 5756 |
-| docs/05-world-models-multimodal-embodied-ai/38-结合世界模型的具身智能与物理推理/38-06-世界模型与具身智能的测试时学习-论文.md | upload | 708 | 40 | 39 | 1 | 14 | 13117 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-01-多模态统一理解-生成模型概述.md | upload | 720 | 0 | 0 | 0 | 0 | 0 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-02-多模态统一理解-生成模型的输入编码-论文.md | upload | 3896 | 20 | 19 | 1 | 8 | 6260 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-03-多模态统一理解-生成模型的主干架构与训练-论文.md | upload | 3100 | 25 | 25 | 0 | 15 | 9064 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-04-将视觉融入CoT的推理-论文.md | upload | 1485 | 17 | 16 | 1 | 8 | 3771 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-05-将视觉隐状态融入CoT的推理-论文.md | upload | 3493 | 27 | 26 | 1 | 13 | 5334 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-06-UAE-训练中理解与生成合为自编码器-论文.md | upload | 1112 | 3 | 3 | 0 | 1 | 779 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-07-VisionBanana-用视觉生成统一理解任务-论文.md | upload | 1249 | 3 | 3 | 0 | 2 | 830 |
-| docs/05-world-models-multimodal-embodied-ai/39-统一架构的多模态理解-生成模型/39-08-Uni-3DAR-跨尺度3D结构的统一理解与生成-论文.md | upload | 174 | 10 | 10 | 0 | 4 | 3958 |
-| 第5部分 世界模型、多模态生成与具身智能/40.世界模型与科学发现/40.1 为什么科学发现需要世界模型.docx | local-only | 6142 | 0 | 0 | 0 | 0 | 0 |
-| 第5部分 世界模型、多模态生成与具身智能/40.世界模型与科学发现/40.2 科学发现智能的展望.docx | local-only | 3300 | 0 | 0 | 0 | 0 | 0 |
+## 当前状态
 
-## 说明
+| 项目 | 数量 |
+|---|---:|
+| 上传范围 Markdown 文件 | 209 |
+| 原 Word 内嵌图片 | 1856 |
+| 公开 Markdown 图片重建占位 | 1856 |
+| 已保留的自动 OCR 正文 | 0 |
+| 已移除的旧 OCR 正文段 | 1830 |
+| 已移除的旧公式风险警告 | 992 |
 
-- OCR 成功不代表内容完全正确，只代表引擎返回了可写入 Markdown 的文字。
-- 公式、表格、代码截图和复杂论文图最容易出现识别错误。
-- 第40章按作者要求只生成本地 Markdown，不上传 GitHub。
+## 处理原则
+
+- 普通 OCR 对数学公式、上下标、矩阵、分式、表格和复杂图示不可靠，旧 OCR 文本已从公开 Markdown 中撤下。
+- 公开仓库不上传 Word 原稿，不上传 Word 内嵌图片，也不上传本地图片重建素材。
+- 每个图片位置保留稳定的 `img-...` 重建 ID，后续依据本地原稿逐张转写为 Markdown/LaTeX。
+- 无法确认的图片内容不会猜测补全，会保留明确的待复核标记。
+
+## 本地重建资料
+
+本地已建立图片重建资料目录：
+
+```text
+local-only/image-reconstruction/
+```
+
+该目录被 `.gitignore` 排除，不上传 GitHub。它包含：
+
+- `manifest.jsonl`：1856 条图片重建记录。
+- `images/`：从本地 Word 原稿提取的图片素材；其中 1854 张图片成功提取，2 条 Word 关系记录在原包中指向 `NULL`，需要后续人工核对原稿。
+- `重建进度.md`：本地批次处理进度。
+
+## 后续流程
+
+后续从第 1 章开始，按 `manifest.jsonl` 顺序逐张查看本地图片，并把能确认的内容写回对应 Markdown。数学公式优先写为 LaTeX；表格写为 Markdown 表格或 HTML 表格；复杂结构图在不上传原图的前提下转写为文字说明或重画为可维护的文本图示。

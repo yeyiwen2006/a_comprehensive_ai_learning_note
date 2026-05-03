@@ -2,14 +2,14 @@
 title: "15.2 Bahdanau注意力"
 source_docx: "第3部分 大语言模型/15.注意力机制与Transformer/15.2 Bahdanau注意力.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 15.2 Bahdanau注意力
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 Bahdanau 注意力将通用的注意力思想巧妙地具体化，以解决当时Seq2Seq模型（如基于RNN的编码器-解码器架构）的一个核心痛点。
 

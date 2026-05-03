@@ -6,7 +6,7 @@
 设计目标：
 1. 不修改任何原始 .docx 文件。
 2. 不把 .docx、Word 内嵌图片或 OCR 临时图片放进 Git 仓库。
-3. 尽量保留 Word 正文顺序，并在图片位置插入 OCR 文字。
+3. 尽量保留 Word 正文顺序，并在图片位置插入稳定的重建占位。
 4. 自动检索正文中的引用线索，把确定不了的引用风险写入报告。
 5. 按用户要求：第40章“世界模型与科学发现”只生成本地 Markdown，不上传 GitHub。
 """
@@ -127,7 +127,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-root", type=Path, default=repo_root)
     parser.add_argument("--local-only-root", type=Path, default=repo_root / "local-only")
     parser.add_argument("--ocr-script", type=Path, default=repo_root / "tools" / "winrt_ocr.ps1")
-    parser.add_argument("--skip-ocr", action="store_true", help="只抽取 Word 正文，不调用 OCR。")
+    parser.add_argument(
+        "--run-ocr",
+        action="store_true",
+        help="调试旧流程时才调用 Windows OCR；开源版默认不写入自动 OCR。",
+    )
     parser.add_argument("--clean", action="store_true", help="清理旧的生成目录后重新生成。")
     parser.add_argument("--max-docs", type=int, default=None, help="只处理前 N 个文档，用于小样本验证。")
     parser.add_argument("--only-sample", action="store_true", help="只处理一组覆盖不同部分的样本文档。")
@@ -627,14 +631,14 @@ def convert_single_doc(
         f'title: "{title}"',
         f'source_docx: "{source_rel}"',
         'status: "auto-converted"',
-        'ocr: "auto-generated, needs human review"',
+        'ocr: "disabled; image content awaits manual reconstruction"',
         'license: "CC BY-NC-SA 4.0"',
         f'local_only: {"true" if local_only else "false"}',
         "---",
         "",
         f"# {title}",
         "",
-        "> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。",
+        "> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。",
         "",
     ]
 
@@ -648,6 +652,8 @@ def convert_single_doc(
 
     content_lines_for_reference: list[str] = []
     image_index = 0
+    output_rel_for_id = output_path.relative_to(local_only_root if local_only else repo_root).as_posix()
+    output_id = hashlib.sha1(output_rel_for_id.encode("utf-8")).hexdigest()[:12]
     for block in blocks:
         if block.kind == "text":
             md = paragraph_to_markdown(block.value)
@@ -656,8 +662,12 @@ def convert_single_doc(
                 content_lines_for_reference.append(block.value)
         elif block.kind == "image":
             image_index += 1
+            rebuild_id = f"img-{output_id}-{image_index:04d}"
             text, error = ocr_by_media.get(block.value, ("", "OCR skipped." if skip_ocr else "OCR result missing."))
-            markdown_lines.append(f"> [图片 {image_index}：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]")
+            markdown_lines.append(
+                f"> [图片内容待重建：{rebuild_id}] 原 Word 此处有图片。"
+                "为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。"
+            )
             if text:
                 record.ocr_success += 1
                 record.ocr_chars += len(text)
@@ -680,7 +690,7 @@ def convert_single_doc(
                     )
                 markdown_lines.extend([text, ""])
                 content_lines_for_reference.append(text)
-            else:
+            elif not skip_ocr:
                 record.ocr_failed += 1
                 message = error or "未识别出有效文字。"
                 markdown_lines.extend(["", f"> [图片 {image_index} OCR 未识别出有效文字：{message}]", ""])
@@ -733,7 +743,6 @@ def clean_outputs(repo_root: Path, local_only_root: Path) -> None:
         repo_root / "DISCLAIMER.md",
         repo_root / "CITATION.cff",
         repo_root / "CHANGELOG.md",
-        repo_root / "项目结构说明.md",
         local_only_root / "chapter40_markdown",
     ]
     for target in safe_targets:
@@ -830,8 +839,8 @@ def build_learning_path_markdown() -> str:
         ## 阅读提示
 
         - 标题含“论文”的文档通常是前沿论文阅读笔记，不代表领域共识或业界标准做法。
-        - OCR 文字可能存在识别错误，尤其是公式、表格、小字号截图和复杂论文图。
-        - 如果你发现概念错误、公式错误、引用缺失或 OCR 错误，欢迎通过 Issue 反馈。
+        - 图片内容暂不使用自动 OCR；公式、表格和图示会按批次人工重建。
+        - 如果你发现概念错误、公式错误、引用缺失或图片重建问题，欢迎通过 Issue 反馈。
         """
     )
 
@@ -840,10 +849,6 @@ def build_readme(records: list[ConvertedDoc], usage_text: str) -> str:
     upload_count = sum(1 for record in records if not record.local_only)
     local_only_count = sum(1 for record in records if record.local_only)
     image_count = sum(record.image_count for record in records)
-    ocr_success = sum(record.ocr_success for record in records)
-    ocr_failed = sum(record.ocr_failed for record in records)
-    formula_risk = sum(record.formula_risk_count for record in records)
-
     usage_excerpt = usage_text[:2800].strip()
     return f"""# A Comprehensive AI Learning Note
 
@@ -867,23 +872,22 @@ def build_readme(records: list[ConvertedDoc], usage_text: str) -> str:
 
 - [学习路径](学习路径.md)
 - [完整目录](目录.md)
-- [OCR质量报告](OCR质量报告.md)
+- [图片重建与OCR处理报告](OCR质量报告.md)
 - [引用与版权清理报告](引用与版权清理报告.md)
 - [免责声明](DISCLAIMER.md)
 - [贡献说明](CONTRIBUTING.md)
 
-## OCR 与图片说明
+## 图片与OCR说明
 
-Word 原稿中有部分内容是图片格式。为提高可搜索性，本仓库在转换时对 Word 内嵌图片做了 OCR，并把识别出的文字写入 Markdown。
+Word 原稿中有部分内容是图片格式。早期转换曾尝试使用普通 OCR，但数学公式、上下标、矩阵、表格和复杂图示的识别质量不可接受，因此开源版已放弃自动 OCR 文本。
 
 - 本次检测到 Word 内嵌图片数量：`{image_count}`
-- OCR 成功写入图片文字数量：`{ocr_success}`
-- OCR 未识别或失败数量：`{ocr_failed}`
-- 疑似包含数学公式、上下标或高密度符号的 OCR 段落数量：`{formula_risk}`
+- 公开 Markdown 中保留的图片重建占位数量：`{image_count}`
+- 自动 OCR 正文写入状态：`已弃用`
 
-OCR 结果不能保证数学公式正确。凡是图片 OCR 段落，尤其是包含公式、上下标、希腊字母、分式、矩阵、表格或伪代码的段落，都需要人工核对后再引用。
+每个图片位置都有稳定的 `img-...` 重建 ID。后续会依据本地 Word 原稿和本地图片清单，按章节把图片内容人工重建为 Markdown/LaTeX；无法确认的内容会明确标注为待复核。
 
-为避免教材截图、论文图、技术报告图等材料产生版权风险，第一版开源仓库不上传 Word 内嵌图片，只上传 OCR 文字和图片占位说明。
+为避免教材截图、论文图、技术报告图等材料产生版权风险，开源仓库不上传 Word 内嵌图片，也不保留普通 OCR 生成的乱码公式。
 
 ## 资料来源与可靠性
 
@@ -922,9 +926,9 @@ def build_disclaimer() -> str:
 
         本资料包含作者个人整理、教材和论文学习笔记，以及 AI 工具辅助生成、改写或校对的内容。作者已尽量进行整理和判断，但不能保证所有内容完全准确。
 
-        ## OCR 说明
+        ## 图片与OCR说明
 
-        本仓库的 Markdown 文件由本地 Word 原稿自动转换而来。Word 中的图片文字由 OCR 自动识别，尤其是数学公式、上下标、希腊字母、分式、矩阵、表格、代码截图、小字号图注和复杂论文图，可能存在漏识别或识别错误。请不要直接把自动 OCR 得到的公式当作可靠公式引用，必须回到原始资料或人工校对后再使用。
+        本仓库的 Markdown 文件由本地 Word 原稿转换而来。Word 中的图片内容不再使用普通 OCR 写入正文；数学公式、上下标、希腊字母、分式、矩阵、表格、代码截图、小字号图注和复杂论文图会按批次人工重建。重建完成前，图片占位不代表内容缺失已解决。
 
         ## 前沿研究说明
 
@@ -944,7 +948,7 @@ def build_contributing() -> str:
 
         - 概念错误
         - 公式错误
-        - OCR 识别错误
+        - 图片内容重建错误或缺失
         - 引用缺失
         - 过时信息
         - 版权风险提示
@@ -962,10 +966,10 @@ def build_contributing() -> str:
         ## 提交 PR 时建议遵守
 
         - 保持中文表达准确、清晰、克制。
-        - 修改 OCR 错误时尽量不要顺手重写整段内容。
+        - 重建图片内容时，尽量只补充图片对应的文字、公式、表格或图示说明。
         - 补引用时优先使用原论文、官方文档、教材页面或作者项目页。
         - 不上传未经确认可复用的教材截图、论文图或商业资料截图。
-        - 不提交 Word 原稿、临时文件、缓存文件或本地 OCR 中间图片。
+        - 不提交 Word 原稿、临时文件、缓存文件或本地图片重建素材。
         """
     )
 
@@ -1055,7 +1059,7 @@ def build_changelog() -> str:
 
         - 初始化 GitHub 开源版资料库。
         - 从本地 Word 原稿自动生成 Markdown。
-        - 对 Word 内嵌图片执行 OCR，并将识别文本写入 Markdown。
+        - 放弃普通 OCR 公式文本，图片位置改为稳定重建占位。
         - 按作者要求不上传 Word 原稿和图片。
         - 按作者要求第40章只在本地转换，不上传 GitHub。
         """
@@ -1066,20 +1070,15 @@ def build_todo(records: list[ConvertedDoc]) -> str:
     lines = [
         "# TODO",
         "",
-        "本文件记录开源后仍需人工处理的事项。自动 OCR 和自动引用检索只能降低工作量，不能替代人工校对。",
+        "本文件记录开源后仍需人工处理的事项。图片内容已放弃普通 OCR，需要按章节人工重建为 Markdown/LaTeX。",
         "",
-        "## OCR 待校对",
+        "## 图片内容待重建",
+        "",
+        "- [ ] 按 `local-only/image-reconstruction/manifest.jsonl` 从第 1 章开始逐张重建图片内容。",
+        "- [ ] 将可确认的公式写为 LaTeX，将表格写为 Markdown 表格或 HTML 表格。",
+        "- [ ] 对无法确认的图片内容保留明确的待复核标记，不猜测公式。",
         "",
     ]
-    ocr_risky = [record for record in records if record.ocr_failed or record.ocr_success]
-    for record in sorted(ocr_risky, key=lambda item: (item.ocr_failed == 0, -item.ocr_failed, item.source_rel))[:80]:
-        location = record.output_rel or f"local-only: {record.source_rel}"
-        lines.append(
-            f"- [ ] {location}：图片 {record.image_count}，OCR成功 {record.ocr_success}，OCR失败 {record.ocr_failed}，疑似公式OCR {record.formula_risk_count}"
-        )
-    if not ocr_risky:
-        lines.append("- 暂无。")
-
     lines.extend(["", "## 待补引用与版权检查", ""])
     ref_risky = [record for record in records if record.missing_reference_notes]
     for record in sorted(ref_risky, key=lambda item: (-len(item.missing_reference_notes), item.source_rel))[:120]:
@@ -1095,7 +1094,7 @@ def build_todo(records: list[ConvertedDoc]) -> str:
             "",
             "## 后续建设",
             "",
-            "- [ ] 人工校对核心学习路径中的 OCR 文本。",
+            "- [ ] 人工重建核心学习路径中的图片公式、图示和表格。",
             "- [ ] 给论文笔记补充原论文标题、作者、年份、会议或 arXiv 链接。",
             "- [ ] 对疑似教材或论文截图的内容重画图或删除图片依赖。",
             "- [ ] 未来可考虑迁移到 MkDocs、VitePress 或 Docusaurus，提供站内搜索和侧边栏导航。",
@@ -1106,26 +1105,27 @@ def build_todo(records: list[ConvertedDoc]) -> str:
 
 def build_ocr_report(records: list[ConvertedDoc]) -> str:
     lines = [
-        "# OCR质量报告",
+        "# 图片重建与OCR处理报告",
         "",
-        "本报告由转换脚本自动生成，用于说明每个 Word 文档的正文抽取、图片数量和 OCR 状态。",
+        "本报告由转换脚本自动生成，用于说明每个 Word 文档的正文抽取和图片重建状态。普通 OCR 已弃用，不再把 OCR 文本写入公开 Markdown。",
         "",
-        "| 文档 | 上传状态 | 正文字数 | 图片数 | OCR成功 | OCR失败 | 疑似公式OCR | OCR字数 |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| 文档 | 上传状态 | 正文字数 | 图片数 | 图片重建状态 |",
+        "|---|---:|---:|---:|---|",
     ]
     for record in sorted(records, key=lambda item: item.source_rel):
         status = "local-only" if record.local_only else "upload"
         doc_label = record.output_rel or record.source_rel
+        rebuild_status = "待重建" if record.image_count else "无图片"
         lines.append(
-            f"| {doc_label} | {status} | {record.text_chars} | {record.image_count} | {record.ocr_success} | {record.ocr_failed} | {record.formula_risk_count} | {record.ocr_chars} |"
+            f"| {doc_label} | {status} | {record.text_chars} | {record.image_count} | {rebuild_status} |"
         )
     lines.extend(
         [
             "",
             "## 说明",
             "",
-            "- OCR 成功不代表内容完全正确，只代表引擎返回了可写入 Markdown 的文字。",
-            "- 公式、表格、代码截图和复杂论文图最容易出现识别错误。",
+            "- 普通 OCR 已确认不适合本资料中的公式、表格、代码截图和复杂论文图。",
+            "- 公开 Markdown 只保留图片重建占位，不上传 Word 内嵌图片。",
             "- 第40章按作者要求只生成本地 Markdown，不上传 GitHub。",
         ]
     )
@@ -1272,7 +1272,6 @@ def write_project_files(repo_root: Path, records: list[ConvertedDoc], usage_text
         "TODO.md": build_todo(records),
         "OCR质量报告.md": build_ocr_report(records),
         "引用与版权清理报告.md": build_reference_report(records),
-        "项目结构说明.md": build_structure_doc(),
     }
     for relative, content in files.items():
         (repo_root / relative).write_text(content, encoding="utf-8")
@@ -1308,7 +1307,7 @@ def main() -> int:
             local_only_root=local_only_root,
             ocr_script=args.ocr_script,
             docx_path=docx_path,
-            skip_ocr=args.skip_ocr,
+            skip_ocr=not args.run_ocr,
             temp_root=temp_root,
         )
         records.append(record)

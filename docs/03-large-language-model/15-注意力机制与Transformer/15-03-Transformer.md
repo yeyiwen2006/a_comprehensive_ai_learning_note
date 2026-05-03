@@ -2,29 +2,19 @@
 title: "15.3 Transformer"
 source_docx: "第3部分 大语言模型/15.注意力机制与Transformer/15.3 Transformer.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 15.3 Transformer
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 Transformer是Google于2017年提出的架构，是目前所有大模型架构的基础。
 
-> [图片 1：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-编码信息 I № 姹 0 cat < 00， 佚 r E 0 r 我有一只猫 Transformer 的整体结构， 左图 Encoder 和右图 Decoder
-
-> [图片 2：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-2.Encoder block A00 & Notm A00 & Norm， 焱曲 4 地 ad Attenton 旨 ℃ 四貊 0 1 输入 lnputs Output Probabilities 凵 《 主 1 8 Norm 们 & Norm Multi-Head Atter 的 1 Masked MuIti-Head At！ 0 山 0 》 0 囝 t Outpt 肽 4 ． 输出 3.Decoder block OSltlO•na 公众号 · AsperAl 0 DN @0 白气一
-
+> [图片内容待重建：img-0a4dbbfc8d81-0001] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+> [图片内容待重建：img-0a4dbbfc8d81-0002] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
 ## 一、输入
 
 1.左下inputs表示输入序列，右下Outputs(shifted right)表示输出内容（其实是只提供该时间步以前生成的内容，训练预测能力）。
@@ -101,18 +91,8 @@ Layer Normalization (LN)是“横向切”，它固定样本（Token），统计
 
 为什么可以用点积作为相似度呢？我们先从余弦相似度说起：
 
-> [图片 3：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-假设我们有两张不同的猫的图片， 对应向量和我们希望它们的欧氏距离很小。 1 ． 在少数轮廓、 皮毛之类的信号维度上， 觞和坊的值可能很相似， 所以 （一） 2 很小。 2 ． 在草地等海量的维度上， 由于光照、 拍扌聂角度的细微不同， 和会有微小的随机差异， 每一个 （一） 2 可能不大， 但它们的数量是压倒性的。 欧氏距离的 L2 度量本质上是一个无差别的累加器： d2@叻一乥一） 2 + 乥一屿） 2 ie Signal 微弱的信号 j eNoise 主导性的噪音累积它将信号维度上的微小差异与海量噪音维度上的随机差异同等对待， 并将它们的平方和累加起来。 最终总距离的计算结果将由噪音项的总和所主导， 这能生效才有鬼了。
-
-> [图片 4：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-那余弦相似度为啥可以？ 余弦相似度衡量的是两个向量在方向上的接近程度， 直接忽略它们的绝对长度。 乥一 1 坊 E 《 1 方向是一种比长度更稳健的度量， 承载了更纯净的各向异性信号 · 高维中随机的背景噪音几乎都是正交的， “、 积会非常接近 0。 而构成猫的信号维度在不同的猫图片向量中表现出一致的方向性， 点积可以增强这一占
-
+> [图片内容待重建：img-0a4dbbfc8d81-0003] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+> [图片内容待重建：img-0a4dbbfc8d81-0004] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
 实际上，大模型中使用的多为点积相似度。原因：
 
 （1）效率与简化计算​：点积运算 (A · B) 本身比余弦相似度计算（需要先计算点积，再除以两个向量的模长 ||A|| * ||B||）更简单高效。在自回归生成中，模型需要为词表中的每一个词（通常是数万甚至数十万个）计算一个相似度分数，点积能显著减少计算量。
@@ -129,7 +109,6 @@ Layer Normalization (LN)是“横向切”，它固定样本（Token），统计
 
 ### 自动检索到的引用线索
 
-- 2.Encoder block A00 & Notm A00 & Norm， 焱曲 4 地 ad Attenton 旨 ℃ 四貊 0 1 输入 lnputs Output Probabilities 凵 《 主 1 8 Norm 们 & Norm Multi-Head Atter 的 1 Masked MuIti-Head At！ 0 山 0 》 0 囝 t Outpt 肽 4 ． 输出 3.Decoder block OSltlO•na 公众号 · AsperAl 0 DN...
 - （2）工作方式：这也是一个多头注意力层，但它的Q, K, V 来源不同：
 
 ### 待补引用或版权检查

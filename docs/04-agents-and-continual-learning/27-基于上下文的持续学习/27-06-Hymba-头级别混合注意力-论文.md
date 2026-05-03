@@ -2,14 +2,14 @@
 title: "27.6 Hymba：头级别混合注意力（论文）"
 source_docx: "第4部分 大模型智能体与持续学习/27.基于上下文的持续学习/27.6 Hymba：头级别混合注意力（论文）.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 27.6 Hymba：头级别混合注意力（论文）
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 > 本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
 

@@ -2,14 +2,14 @@
 title: "22.5 OpenClaw"
 source_docx: "第4部分 大模型智能体与持续学习/22.大模型智能体/22.5 OpenClaw.docx"
 status: "auto-converted"
-ocr: "auto-generated, needs human review"
+ocr: "disabled; image content awaits manual reconstruction"
 license: "CC BY-NC-SA 4.0"
 local_only: false
 ---
 
 # 22.5 OpenClaw
 
-> 本文由本地 Word 原稿自动转换而来。图片中的文字由 OCR 自动识别，可能存在识别错误，欢迎提交 Issue 修正。
+> 本文由本地 Word 原稿自动转换而来。图片内容暂不使用自动 OCR；含公式、图示或表格的图片会在后续人工重建为 Markdown/LaTeX。
 
 作为2026年开年开源社区最具代表性的智能体项目，OpenClaw是一款免费、开源的本地 AI 智能体（Agent）运行框架，可以直接部署在电脑本地。它本身并不包含大语言模型，而是扮演着“智能体运行环境和消息路由器”的角色。它赋予AI直接操作本地计算机的系统权限，让AI自主运行，并将用户常用的通讯软件（如WhatsApp、Discord、Telegram、Signal等）与后端的 LLM（如Claude、ChatGPT等，或通过 LM Studio/Ollama 部署的本地模型）连接起来，从而实现通过通讯软件远程命令AI在电脑上自主操控程序、完成任务。
 
@@ -17,16 +17,8 @@ local_only: false
 
 OpenClaw由奥地利开发者Peter Steinberger一人用约10天的时间用AI Coding构建并发布，最初命名为Clawdbot，因遭到 Anthropic的商标侵权投诉，项目被迫改名为Moltbot（Molt 意为“蜕壳”，契合其龙虾主题），后项目再次更名为OpenClaw。它凭借强大的本地控制能力和开源属性在GitHub及各大社区呈病毒式传播。在Openclaw诞生后，还出现了一个AI Agent专属的社交网站Moltbook。2026年2月14日，Peter Steinberger宣布加入OpenAI，并将OpenClaw项目移交给一个开源基金会进行长效维护。
 
-> [图片 1：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-> [图片 1 OCR 未识别出有效文字：未识别出有效文字。]
-
-> [图片 2：原 Word 此处有图片；为避免版权风险，开源版暂不上传图片。]
-
-**图片文字 OCR（自动识别，待校对；数学公式必须人工核对）：**
-
-16 / 55 AIex Finn 0 0 @AlexFinn 0 Subscribe This is getting scary. l'm dOing some research this moming when all Of a sudden my computer starts speaking tO me 这有点吓人了。 我今天早上正在做研究， 突然我的电脑开始跟我说话 | | 00kt0 my left and my ClawdBot Henry all Of a sudden has a voice 我向左边看去， 我的 CIawdBot 亨利突然有了声音 He coded himself a voice using the ChatGPT API. Without me asking. 他未经我要求， 自己用 ChatGPT API 编写了一个语音。 NOW whenever he finishes long coding/research tasks he alerts me through voice 现在每当他完成长时间的编码 ／ 研究任务时， 他都会通过语音提醒我
-
+> [图片内容待重建：img-7ddee0f7d6a2-0001] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+> [图片内容待重建：img-7ddee0f7d6a2-0002] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
 ## 二、核心架构
 
 1.本地网关：作为一个长期运行的后台服务（基于 Node.js），它监听来自聊天平台的API请求，并将其转化为LLM可理解的指令格式。
