@@ -4,7 +4,7 @@
 上传前验证脚本。
 
 目标不是证明内容完全正确，而是阻止明显错误：
-1. Word 原稿、图片和 OCR 临时文件不能进入上传仓库。
+1. Word 原稿、OCR 临时文件和未经筛选的本地图片素材不能进入上传仓库。
 2. Markdown 文件不能为空，不能出现明显乱码。
 3. 目录中的链接应指向存在的文件。
 4. 第40章不能出现在上传仓库的 docs 目录中。
@@ -19,9 +19,9 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
-BANNED_SUFFIXES = {
-    ".docx",
-    ".doc",
+PUBLIC_IMAGE_ROOT = Path("assets") / "images"
+
+IMAGE_SUFFIXES = {
     ".png",
     ".jpg",
     ".jpeg",
@@ -30,6 +30,11 @@ BANNED_SUFFIXES = {
     ".tif",
     ".tiff",
     ".webp",
+}
+
+BANNED_SUFFIXES = {
+    ".docx",
+    ".doc",
     ".emf",
     ".wmf",
 }
@@ -62,10 +67,16 @@ def validate_no_banned_files(repo_root: Path, failures: list[str]) -> None:
                 warn("检测到本地-only目录，必须保持 gitignore 不上传: local-only")
                 local_only_warned = True
             continue
-        if path.is_file() and path.suffix.lower() in BANNED_SUFFIXES:
+        if not path.is_file():
+            if path.is_dir() and path.name in {"_ocr_tmp", "_tmp"}:
+                fail(f"禁止上传的临时或本地目录: {path.relative_to(repo_root)}", failures)
+            continue
+
+        suffix = path.suffix.lower()
+        if suffix in IMAGE_SUFFIXES and not str(relative).replace("\\", "/").startswith("assets/images/"):
+            fail(f"图片只能放在公开资源目录 assets/images 下: {path.relative_to(repo_root)}", failures)
+        if suffix in BANNED_SUFFIXES:
             fail(f"禁止上传的文件类型: {path.relative_to(repo_root)}", failures)
-        if path.is_dir() and path.name in {"_ocr_tmp", "_tmp"}:
-            fail(f"禁止上传的临时或本地目录: {path.relative_to(repo_root)}", failures)
 
 
 def validate_markdown_files(repo_root: Path, failures: list[str]) -> None:
