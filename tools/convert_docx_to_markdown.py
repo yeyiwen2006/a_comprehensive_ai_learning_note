@@ -8,7 +8,7 @@
 2. 不把 .docx、OCR 临时图片或未经筛选的本地图片素材放进 Git 仓库。
 3. 尽量保留 Word 正文顺序，并在图片位置插入稳定的重建占位。
 4. 只在章节中保留已核验参考文献，不公开自动检索出的引用线索。
-5. 按用户要求：第40章“世界模型与科学发现”只生成本地 Markdown，不上传 GitHub。
+5. 按用户最新要求：第40章“世界模型与科学发现”也进入公开 Markdown 目录。
 """
 
 from __future__ import annotations
@@ -326,7 +326,7 @@ def discover_docx(source_root: Path, only_sample: bool, max_docs: int | None) ->
 def output_path_for_doc(source_root: Path, repo_root: Path, local_only_root: Path, docx_path: Path) -> tuple[Path, bool]:
     """计算 Markdown 输出位置。
 
-    第40章按用户要求输出到 repo 外的 local-only/chapter40_markdown，不进入上传仓库。
+    第40章已改为公开上传，与其他章节一样输出到 docs 目录。
     """
 
     rel = docx_path.relative_to(source_root)
@@ -334,9 +334,6 @@ def output_path_for_doc(source_root: Path, repo_root: Path, local_only_root: Pat
     top_slug = TOP_DIR_SLUGS.get(top, sanitize_dirname(top))
     subdirs = [sanitize_dirname(part) for part in rel.parts[1:-1]]
     filename = sanitize_filename(rel.name)
-
-    if is_chapter40(docx_path, source_root):
-        return local_only_root / "chapter40_markdown" / top_slug / Path(*subdirs) / filename, True
 
     return repo_root / "docs" / top_slug / Path(*subdirs) / filename, False
 
@@ -750,7 +747,7 @@ def build_directory_markdown(records: list[ConvertedDoc]) -> str:
     lines = [
         "# 目录",
         "",
-        "本目录由脚本根据本地 Word 原稿自动生成。第40章“世界模型与科学发现”按作者要求只在本地转换为 Markdown，不上传 GitHub。",
+        "本目录由脚本根据本地 Word 原稿自动生成。第40章“世界模型与科学发现”已纳入公开 Markdown 目录。",
         "",
     ]
     for top in sorted(grouped):
@@ -819,7 +816,7 @@ def build_learning_path_markdown() -> str:
         3. 第5部分：32.具身智能的基本知识
         4. 第5部分：33.世界模型的基本知识
         5. 第5部分：34.多模态生成与生成式世界模型
-        6. 第5部分：35-39 相关论文笔记
+        6. 第5部分：35-40 相关论文笔记与科学发现专题
 
         ## 阅读提示
 
@@ -832,7 +829,6 @@ def build_learning_path_markdown() -> str:
 
 def build_readme(records: list[ConvertedDoc], usage_text: str) -> str:
     upload_count = sum(1 for record in records if not record.local_only)
-    local_only_count = sum(1 for record in records if record.local_only)
     image_count = sum(record.image_count for record in records)
     usage_excerpt = usage_text[:2800].strip()
     return f"""# A Comprehensive AI Learning Note
@@ -849,9 +845,7 @@ def build_readme(records: list[ConvertedDoc], usage_text: str) -> str:
 - 第4部分：大模型智能体与持续学习
 - 第5部分：世界模型、多模态生成与具身智能
 
-当前上传 Markdown 文档数：`{upload_count}`。
-
-第40章“世界模型与科学发现”已按作者要求转换为本地 Markdown，但不上传 GitHub。本地转换数量：`{local_only_count}`。
+当前上传 Markdown 文档数：`{upload_count}`。第40章“世界模型与科学发现”已纳入公开目录。
 
 ## 推荐入口
 
@@ -1046,7 +1040,7 @@ def build_changelog() -> str:
         - 从本地 Word 原稿自动生成 Markdown。
         - 放弃普通 OCR 公式文本，图片位置改为稳定重建占位。
         - 按作者要求不上传 Word 原稿，图片按类型筛选后可作为公开资源上传。
-        - 按作者要求第40章只在本地转换，不上传 GitHub。
+        - 按作者最新要求，第40章“世界模型与科学发现”已纳入公开 GitHub 目录。
         """
     )
 
@@ -1113,7 +1107,7 @@ def build_ocr_report(records: list[ConvertedDoc]) -> str:
             "- 普通 OCR 已确认不适合本资料中的公式、表格、代码截图和复杂论文图。",
             "- Word 原稿和本地图片提取目录不上传；经筛选的视觉图片可以放在 `assets/images/` 下作为公开资源。",
             "- 纯文字、公式和表格图片应转写为正文 Markdown/LaTeX，并保持与正文排版统一。",
-            "- 第40章按作者要求只生成本地 Markdown，不上传 GitHub。",
+            "- 第40章“世界模型与科学发现”已纳入公开 Markdown 目录。",
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
@@ -1165,7 +1159,7 @@ def build_structure_doc() -> str:
         - `TODO.md`：OCR 校对、引用补充和版权检查待办。
         - `OCR质量报告.md`：每个文档的正文、图片和 OCR 统计。
         - `引用与版权清理报告.md`：参考文献正确性和图片版权核验事项。
-        - `docs/`：由 Word 原稿自动转换出的 Markdown 正文。第40章不在此目录内。
+        - `docs/`：由 Word 原稿自动转换出的 Markdown 正文，第40章也在此公开目录内。
         - `tools/convert_docx_to_markdown.py`：批量转换脚本。
         - `tools/winrt_ocr.ps1`：调用 Windows 自带 OCR 的辅助脚本。
         - `tools/validate_generated_markdown.py`：上传前安全验证脚本。
@@ -1186,7 +1180,7 @@ def build_structure_doc() -> str:
         - `is_chapter40`：判断文档是否属于第40章。
         - `is_note_doc`：判断某个 docx 是否属于需要转换的笔记正文。
         - `discover_docx`：扫描本地 Word 原稿，得到待转换文档列表。
-        - `output_path_for_doc`：根据上传规则计算 Markdown 输出路径，第40章输出到仓库外。
+        - `output_path_for_doc`：根据上传规则计算 Markdown 输出路径，第40章与其他章节一样输出到公开 `docs/`。
         - `extract_usage_text`：抽取 `使用说明.docx` 内容，用于生成 README。
         - `normalize_text`：统一换行和空白。
         - `clean_ocr_text`：清理 OCR 常见中文间隔空格。
@@ -1199,7 +1193,7 @@ def build_structure_doc() -> str:
         - `missing_reference_notes`：根据文件名、图片数量和疑似来源文本生成内部核验提示。
         - `convert_single_doc`：转换单个 Word 文档，生成 Markdown 并返回统计记录。
         - `clean_outputs`：清理导出目录中的旧生成物，不接触 Word 原稿。
-        - `build_directory_markdown`：生成完整上传目录。
+        - `build_directory_markdown`：生成包含第1-40章的完整上传目录。
         - `build_learning_path_markdown`：生成学习路径。
         - `build_readme`：生成 GitHub 首页。
         - `build_disclaimer`：生成免责声明。

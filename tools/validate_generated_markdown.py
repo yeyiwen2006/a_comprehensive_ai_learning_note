@@ -7,7 +7,7 @@
 1. Word 原稿、OCR 临时文件和未经筛选的本地图片素材不能进入上传仓库。
 2. Markdown 文件不能为空，不能出现明显乱码。
 3. 目录中的链接应指向存在的文件。
-4. 第40章不能出现在上传仓库的 docs 目录中。
+4. Markdown 数学公式应使用 GitHub 可渲染分隔符。
 """
 
 from __future__ import annotations
@@ -132,8 +132,6 @@ def validate_markdown_files(repo_root: Path, failures: list[str]) -> None:
                 failures,
             )
         validate_github_math_blocks(path, repo_root, text, failures)
-        if relative_posix.startswith("docs/") and "40-" in path.name:
-            fail(f"第40章不应上传到 docs: {path.relative_to(repo_root)}", failures)
 
 
 def validate_required_files(repo_root: Path, failures: list[str]) -> None:
