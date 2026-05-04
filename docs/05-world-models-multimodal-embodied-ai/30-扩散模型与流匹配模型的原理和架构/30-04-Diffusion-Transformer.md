@@ -14,7 +14,26 @@ local_only: false
 
 Diffusion Transformer将Transformer架构引入扩散模型，实现了与大语言模型架构的统一，也提高了可扩展性，使得生成质量可随着模型参数的扩大而提升。
 
-> [图片内容待重建：img-887b39796512-0001] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
+1. **潜在空间分块（Latent Patchification）**
+
+DiT 并不直接操作像素，而是操作 VAE（变分自编码器）编码后的潜在特征。
+
+给定一张输入图像 $x\in\mathbb{R}^{H\times W\times 3}$，首先通过预训练的 VAE 编码器将其映射到潜在空间，得到潜在表示 $z\in\mathbb{R}^{h\times w\times c}$。
+
+接着，DiT 将 $z$ 切分为大小为 $p\times p$ 的空间块（Patches），将这些块展平并经过线性投影，转换为序列长度为 $T=(h/p)\times(w/p)$、维度为 $d$ 的 Token 序列。最后，加上标准的可学习位置编码（Positional Embeddings）。
+
+2. **条件注入机制：adaLN-Zero Block**
+
+标准的扩散模型需要在每个去噪步骤中注入当前的时间步 $t$ 和条件类别 $c$。U-Net 通常通过交叉注意力（Cross-Attention）或特征拼接来实现，而 DiT 采用了自适应层归一化（Adaptive Layer Normalization, adaLN）。
+
+这是 DiT 架构中最关键的设计。对于传入 DiT Block 的隐藏层状态 $h$，adaLN 的操作如下：
+
+$$
+\mathrm{adaLN}(h,t,c)=\gamma_{(t,c)}\mathrm{LayerNorm}(h)+\beta_{(t,c)}
+$$
+
+其中，缩放参数 $\gamma_{(t,c)}$ 和平移参数 $\beta_{(t,c)}$ 是通过对时间步嵌入和类别嵌入的加和应用一个多层感知机（MLP）回归直接生成的，而不是作为可学习参数固定在网络中。
+
 > [图片内容待重建：img-887b39796512-0002] 原 Word 此处有图片。为避免版权风险，开源版暂不上传图片；自动 OCR 已弃用，后续将依据原稿人工重建为 Markdown/LaTeX。
 我们发现adaLN只能注入定长向量c，如[CLS]token。但显然一个token不够，故可以引入基于多模态双流注意力的MM-DiT：（扩散和自回归结合的模型，自回归上下文越来越长，也是运用了此方法）
 
