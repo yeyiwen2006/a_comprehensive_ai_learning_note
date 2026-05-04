@@ -86,12 +86,20 @@ def validate_markdown_files(repo_root: Path, failures: list[str]) -> None:
         return
 
     for path in markdown_files:
+        relative_posix = str(path.relative_to(repo_root)).replace("\\", "/")
+        if relative_posix.startswith("local-only/"):
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if not text.strip():
             fail(f"Markdown 空文件: {path.relative_to(repo_root)}", failures)
         if "\ufffd" in text or "????" in text:
             fail(f"疑似编码乱码: {path.relative_to(repo_root)}", failures)
-        if str(path.relative_to(repo_root)).replace("\\", "/").startswith("docs/") and "40-" in path.name:
+        if any(marker in text for marker in ("\\[", "\\]", "\\(", "\\)")):
+            fail(
+                f"检测到 GitHub 不兼容的数学公式分隔符，请使用 $...$ 或 $$...$$: {path.relative_to(repo_root)}",
+                failures,
+            )
+        if relative_posix.startswith("docs/") and "40-" in path.name:
             fail(f"第40章不应上传到 docs: {path.relative_to(repo_root)}", failures)
 
 
