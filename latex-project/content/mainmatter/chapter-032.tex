@@ -1,0 +1,368 @@
+\hypertarget{ux4e16ux754cux6a21ux578bux7684ux57faux672cux77e5ux8bc6}{%
+\chapter{世界模型的基本知识}\label{ux4e16ux754cux6a21ux578bux7684ux57faux672cux77e5ux8bc6}}
+
+\hypertarget{ux4e16ux754cux6a21ux578bux6982ux51b5}{%
+\section{世界模型概况}\label{ux4e16ux754cux6a21ux578bux6982ux51b5}}
+
+\hypertarget{ux4e00ux4e3aux4ec0ux4e48ux5b9eux73b0agiux9700ux8981ux4e16ux754cux6a21ux578b}{%
+\subsection{一、为什么实现AGI需要世界模型？}\label{ux4e00ux4e3aux4ec0ux4e48ux5b9eux73b0agiux9700ux8981ux4e16ux754cux6a21ux578b}}
+
+现在的AI已经在文本生成、数学推理、编程乃至操控计算机等方面上展现出了强大的能力，对数学研究、软件开发等起到了一定的作用，甚至独立进行初步的算法研究。根本原因在于：现在的LLM（包括多模态大模型）的预训练方法是``预测下一个语言token''，数学证明和代码本身就是离散的文本序列，能通过Next token prediction被建模；后训练方法主要是RLVR，数学代码运行在公理化的数字世界中，所有规则是符号化、显式定义的；可以在计算机中获得即时、廉价的验证，以实现几乎零成本的RL Scaling。
+
+但在所有需要与物理世界交互的领域，上述条件不再成立。System 2推理的前提是规划，这需要能对与模型互动的环境进行建模，以预测行动带来的后果。在数字世界中，环境可以通过文本token的形式被编码，LLM已经承担了这一功能；但在物理世界中，例如机器人（包括人形机器人和未来的扩展形态如纳米机器人等）、自然科学研究、工业过程控制等领域，如果我们希望机器人在现实世界中顺利执行新的任务，希望科学AI不仅是解决已有的猜想，而是能提出关于世界运作的新理论，就要去模型能从直接来自现实世界的连续、高维的数据中对环境进行建模，理解事物之间相互影响的物理规律和特定行动带来的结果（即物理世界的因果关系），进而在``脑海''中模拟并测试假设或动作。这既是人类想象力与创造力的基石，又带来了在现实世界中进行长期规划的能力。
+
+多模态大语言模型虽然也能输入并理解多模态信息，但并不能实现上述目标。AI的空间能力依然远未接近人类水平，在估计距离、方向、大小等任务上表现不佳，难以处理单一物体的旋转，还会在推理中因为语言无法清楚描述指代而容易产生指代混乱。问题的根源在于，模型的核心能力是由数据和训练目标共同决定的，尽管数据是多模态的，但训练目标只监督文本token。模型从其他模态的数据中提取信息，用于语言模态的推理。如训练数据有大量图文，模型可能学到``看到斜坡，就容易掉落''，但这样的监督信号不足以让模型形成对世界动态因果逻辑的抽象，因为浅层相关就足够预测文本了，模型会把更多精力放在让文本本身更通顺上，除非专门要求模型预测未来、用少量变量变量解释共同机制等，这就变成我们讨论的世界模型了。
+
+\hypertarget{ux4e8cux4e16ux754cux6a21ux578bux7684ux5b9aux4e49}{%
+\subsection{二、世界模型的定义}\label{ux4e8cux4e16ux754cux6a21ux578bux7684ux5b9aux4e49}}
+
+如果说LLM的核心是``Next token prediction''，那么世界模型的核心就是``Next state prediction''。世界模型定义为给定当前状态和动作，预测下一个（实际上往往可能是未来若干个，这里简化定义）状态的系统：
+
+P(st+1\textbar st,at)
+
+当然，除了预测能力之外，广义的世界模型还包括重建能力，如根据纯文字描述生成视频第一帧，然后再预测等。
+
+世界模型作为对世界的建模，应当能处理多模态（不仅限于视觉，也包括传感器数据、光谱数据等各种多模态数据）输入，生成显式或隐式的世界状态表征，并有效预测在给定动作下的下一状态。这里的``动作''在游戏、具身智能等领域往往指用户或机器人的动作，但其实在其他场景中也可是其他类型的干预，如``改一个基因会怎样''``换一个剂量会怎样''。这需要新的模型架构、新的训练任务（而不仅仅是Next token prediction或RLVR）以及海量可扩展的训练数据。
+
+\hypertarget{ux4e09ux7269ux7406ux4e16ux754caiux7cfbux7edfux7684ux5168ux80fdux529bux94fe}{%
+\subsection{三、物理世界AI系统的全能力链}\label{ux4e09ux7269ux7406ux4e16ux754caiux7cfbux7edfux7684ux5168ux80fdux529bux94fe}}
+
+真正理解物理世界的AI系统，不是只会看图、解题或生成视频，而是要沿着一条连续能力链发展：Perception -\textgreater{} Reasoning \& Prediction -\textgreater{} Interaction，即``看到了什么、这背后为什么会这样、接下来会发生什么、应该如何行动并用反馈修正自己''。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Perception
+\end{enumerate}
+
+从图像、视频、点云、传感器数据等多模态信息提供的不完整片段里，提取出物理状态信息，并能够以此重建完整的物理世界结构。物理感知不是语义识别，而是恢复隐藏在观测背后的latent physical state，真正重要的物理变量很多并不直接出现在像素里。这不仅需要识别几何对象，还要理解物体之间的空间位置关系，并能推断物体的内在物理属性（比如质量、密度、材质、刚度），以服务于后续推理和预测。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  Reasoning
+\end{enumerate}
+
+对于一个能用于长链条推理、新场景和科学研究的物理世界AI系统，需要能调用在先验中学习到的物理、化学知识，进行因果推理、解释和分析。否则，模型的预测就只能停留在模式匹配，在需要依赖长链推理的复杂情形下往往会生成不符合物理规律的解。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  Prediction
+\end{enumerate}
+
+这也就是狭义的``世界模型''定义，即建立对当前状态下环境的内部表征，结合当前状态和动作，预测未来的状态，创造遵守物理定律、空间一致的世界，以支持规划和决策。
+
+值得注意的是，世界模型的``预测''并不完全等同于图像、视频生成（虽然后者也是其中的一种技术路线）。基于像素的世界模型并不一定能够真正捕捉世界的因果结构，反而可能在生成一些不重要的细节上浪费算力。人类在处理视觉信息时往往并不是完整解析所有像素，而是以自上而下、任务驱动的方式进行处理，并依赖于对象层级的抽象表示，一些技术路线也在探索生成对世界的抽象，而非直接生成视觉世界的路径，类似于编程时不直接生成机器状态而是生成代码（但世界模型目前并没有像代码这样统一的、能由人类直接表达和修改的符号系统）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  Interaction
+\end{enumerate}
+
+人类无法仅靠视觉学习世界，物理世界的AI系统也是如此，我们需要知道施加干预at会带来怎样的状态转移。
+
+虽然互联网上存在海量视频数据，但``行动at本身会带来怎样的结果''的数据却非常稀缺，而且世界模型需要回答``如果换个动作会怎样''，但视频数据通常只记录``当时发生了什么''，不记录``没发生的那些可能性''，所以模型容易会``回放未来''，不一定会``推演备选未来''。
+
+生物医学领域也是如此，``如果我动这个基因，会发生什么''的碎片化数据分散在海量文献中，整合难度大，且面临干预语义不统一（受到上下文限定影响且可能存在部分未知因素，难外推）、数据噪声大、跨尺度和跨域的标签不对齐（体外结果≠动物实验结果≠人体实验结果）、负结果和失败机制大量缺失等问题。
+
+因而，物理世界的AI系统需要有embodied feedback，让模型不仅``看懂''世界，还能懂得摩擦、硬度、浓度等理化性质。真正的物理理解常来自intervention：``如果我推一下，会不会倒？''``如果我加热，会不会变色？''没有动作和干预，模型更像在学观测统计，而不是因果结构，容易生成``视觉上合理、物理上错误''的预测，如物体没有支撑力、碰撞没有动量传递等。
+
+另一方面，如果只用offline的数据训练物理世界的AI系统，它总会在部署中遇到长尾情形，进而在OOD区域发生误判（如以为可以用钻石做木凳等，因为训练数据没有就可能瞎猜）。只有智能体能与物理世界交互，并以此修正自身维护的世界模型，才能训练真正强大的物理AI系统。
+
+而进一步来说，世界模型最终也要和具身智能构成闭环。不仅仅是人形机器人，未来还可能有输送药物的纳米机器人、穿行狭窄空间的软体机器人、以及为深海或外太空而造的机器等。无论形态如何，未来物理世界的AI系统都必须将环境与机器人自身的感知、运动一体化建模。这些机器人的训练数据也高度依赖于世界模型。
+
+\hypertarget{ux56dbux4efbux52a1ux8bbeux8ba1}{%
+\subsection{四、任务设计}\label{ux56dbux4efbux52a1ux8bbeux8ba1}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  世界重建类
+\end{enumerate}
+
+世界重建强调从局部、不完整的观测片段中，理解并重建底层真实世界的完整结构，如：
+
+方块三视图投影（Cube 3-view Projection）：提供一个相连方块堆的等距视角（斜视图）和两个正交视图（如正视图、右视图），要求模型预测并描述从另一个完全未见过的视角（如后视图）看到的方块数量。解决该任务需要模型先在内部重建完整的 3D 结构，然后再进行心理旋转或投影，这与人类视觉心智表征过程高度一致。
+
+真实世界空间推理（Real-world Spatial Reasoning）：给定一个真实房间或场景的多个不同视角图像，询问摄像机、物体或区域之间的相对位置关系。例如``拍第二张照片时黑门在我的哪个方向''。成功回答需要模型从有限的 2D 视角中拼凑并构建出连贯的 3D 空间心智模型。
+当然，也有部分路线认为完整重建并非世界模型的目标。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  世界预测类
+\end{enumerate}
+
+世界预测强调模拟世界动态随时间或动作演变的能力，即预测事物下一步会变成什么样：
+
+折纸（Paper Folding）：给定一系列纸张折叠和打孔步骤，要求预测纸张完全展开后的孔洞分布情况。这要求模型在内部模拟纸张逐步展开的物理过程，高度依赖基于视觉经验的几何对称性和空间变换先验知识。
+
+多步操作（Multi-hop Manipulation）：给出一个包含不同形状、颜色物体的初始场景，并提供一系列指令（如添加、移除、交换颜色等）。最终询问经过这些操作后的空间布局属性，例如某物体左边是什么。该任务考验模型对物体状态的持续跟踪以及动态空间理解能力。
+
+小球追踪（Ball Tracking）：要求模型推断一个匀速运动的小球碰到实心墙壁并发生理想镜面反射后的轨迹，并预测它最先进入顶部哪个编号的洞中。这直接评估模型对基础物理动态过程的模拟预测能力。
+
+迷宫（Maze）与推箱子（Sokoban）：这两项是经典网格世界任务，要求模型理解当前状态并模拟从起点到终点，或将箱子推到目标点的连续动作序列。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-168}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-168}}
+
+\begin{itemize}
+\tightlist
+\item
+  Ha, D., \& Schmidhuber, J. (2018). \href{https://arxiv.org/abs/1803.10122}{World Models}. arXiv:1803.10122.
+\item
+  LeCun, Y. (2022). \href{https://openreview.net/forum?id=BZ5a1r-kVsf}{A Path Towards Autonomous Machine Intelligence}. OpenReview.
+\item
+  Hafner, D., Lillicrap, T., Ba, J., \& Norouzi, M. (2020). \href{https://arxiv.org/abs/1912.01603}{Dream to Control: Learning Behaviors by Latent Imagination}. ICLR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux4e16ux754cux6a21ux578bux7684ux4e3bux8981ux6280ux672fux8defux7ebf}{%
+\section{世界模型的主要技术路线}\label{ux4e16ux754cux6a21ux578bux7684ux4e3bux8981ux6280ux672fux8defux7ebf}}
+
+\hypertarget{ux4e00ux751fux6210ux5f0fux4e16ux754cux6a21ux578bux591aux6a21ux6001ux751fux6210}{%
+\subsection{一、生成式世界模型（多模态生成）}\label{ux4e00ux751fux6210ux5f0fux4e16ux754cux6a21ux578bux591aux6a21ux6001ux751fux6210}}
+
+生成式世界模型即通过生成视频画面等方式，让模型自行从视频等数据中学习。需要注意的是，由于视频像素维度很高，但根据流形假设，有效的数据实际上分布在较低的维度上，故一般会先将输入压缩成低维向量处理，输出时再还原为高维。
+
+这看起来和基于隐变量的世界模型相似，但二者有根本的不同，体现在训练目标，即损失函数上：生成式世界模型预训练时以生成画面等为目标，损失函数以最终生成的高维视频计算；基于隐变量的世界模型预训练时获得准确的隐变量为目标，损失函数以隐变量计算。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  自回归模型
+\end{enumerate}
+
+自回归模型继承LLM中Next token prediction的思路，把世界表示成一串token，然后像LLM预测下一个词一样，预测下一个视觉token/动作token/状态token。
+
+具体例子：模型把视频压成token序列，然后一步一步预测：``下一小块画面/下一时刻会怎样；手爪靠近后，杯子边缘token会怎么变。''
+
+优点：与LLM/Transformer兼容，可以把文本、动作、视频统一到一个框架，具有Scaling Law潜力。
+
+缺点：生成视频往往聚焦于视觉，不代表完全理解背后的物理属性和规律；生成高维视觉时通常较慢，误差容易逐步累积。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  扩散模型
+\end{enumerate}
+
+扩散模型不是一步步续写token，而是从噪声开始，逐步``去噪''出未来视频或未来状态。这个过程中，输出不断由模糊变清晰，信息量逐步变大，也符合人对事物的认识或想象从大致轮廓到具体细节的过程。
+
+具体例子：给定当前画面和动作``伸手抓杯子''，它从一团噪声开始，慢慢生成几秒后的未来视频：手接近、杯子被抓起、阴影变化、背景跟着变。
+
+优点：也可以用Transformer把文本、动作、视频统一到一个框架，以进行Scaling Law。
+
+缺点：在高维情况下计算代价昂贵，且不一定满足因果遵循；和自回归生成一样，往往聚焦于视觉，不代表完全理解背后的物理属性和规律。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  代表成果（含自回归、扩散）
+\end{enumerate}
+
+Sora系列（OpenAI）、Genie系列（Google DeepMind）、Seedance系列（Bytedance Seed）、Veo系列（Google DeepMind）、DIAMOND（Microsoft Research）、Lingbot-World（蚂蚁灵波）、Lingbot-VA（蚂蚁灵波）、Cosmos（NVIDIA）、UnifoLM-WMA（宇树科技）。
+
+\hypertarget{ux4e8cux5efaux6a21ux89c6ux89d2ux4e0eux5bf9ux8c61ux7684ux4e16ux754cux6a21ux578b}{%
+\subsection{二、建模视角与对象的世界模型}\label{ux4e8cux5efaux6a21ux89c6ux89d2ux4e0eux5bf9ux8c61ux7684ux4e16ux754cux6a21ux578b}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  建模视角的世界模型
+\end{enumerate}
+
+这一路线把每一帧二维图像都看成对同一个三维世界的不同观察，根据用户输入的图像及其视角，隐式地维护一个多视角的三维世界模型。通过用户的视角输出对应的二维表示。
+
+具体例子：模型根据用户输入的杯子正面、上面的图片，从而建构起杯子的世界模型，后续输出的预测中正面、上面也始终能保证三维同一性，用户转到侧面时，模型也能根据侧面和正面、上面的关系，整合出杯子的侧面图。
+
+代表成果：RTFM（World Labs）、IC-World。
+
+优点：建模三维空间和人或动物的双/多眼视角、机器人多传感器一致性等相符，可能是空间理解的关键和具身智能的重要技术基础。
+
+缺点：需要处理视角，正确判断用户的视角变换关系，但训练的视频数据并不自带视角，导致模型难以在测试时建立对多视角三维同一性的认知；如果用硬编码算法给训练数据加视角估计信息，会存在误差，随着场景变复杂可能难以维持性能，难以从数据中Scaling。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  建模对象的世界模型
+\end{enumerate}
+
+这一路线拆分提取并显式建模空间中的各个对象（及其属性）、它们之间的关系，不是把世界看成一整张图，而是看成：杯子、桌子、机械臂，它们的位置、质量、接触关系、摩擦等。模型内设有一定数量的``槽''，对象的信息竞争性地进入这些槽，以在后续生成时处理重要的的对象的信息。
+
+具体例子：模型内部的状态：``杯子中心坐标是~(x, y, z)，桌面是平面，夹爪与杯壁接触，摩擦系数足够，所以能稳定提起。''
+
+代表成果：C-SWM、SlotFormer、Marble（World Labs）。
+
+优点：适合空间关系、接触、遮挡、组合泛化，可解释性强，干预简单（如添加、移动物体等），更接近真正的物理推理。
+
+缺点：需要处理复杂的视觉信息，把世界拆成正确结构，这本身容易出错，且这步如果出错就会导致后续预测出错。
+
+\hypertarget{ux4e09ux57faux4e8eux9690ux53d8ux91cfux652fux6301ux4e0bux6e38ux4efbux52a1ux7684ux4e16ux754cux6a21ux578b}{%
+\subsection{三、基于隐变量支持下游任务的世界模型}\label{ux4e09ux57faux4e8eux9690ux53d8ux91cfux652fux6301ux4e0bux6e38ux4efbux52a1ux7684ux4e16ux754cux6a21ux578b}}
+
+这一路线的核心思想是：物理世界充满高维冗余的像素噪声，必须先将观测降维压缩到紧凑的隐变量。
+
+步骤 1（表征）：编码器将观测映射为隐状态：
+
+\[
+z_t=E(o_t)
+\]
+
+步骤 2（转移）：动力学模型在隐空间预测下一步：
+
+\[
+z_{t+1}\sim p(z_{t+1}\mid z_t,a_t)
+\]
+
+再将下一时刻观测o\_t+1压缩到下一时刻实际隐状态，根据预测和实际隐状态在隐空间内的差距训练，学习p(z\_t+1\textbar z\_t, a\_t)以``想象''未来，最后通过解码器重建观测或直接用于训练策略/价值函数，借助下游任务的梯度训练隐变量。
+
+具体例子：先把摄像头画面抽象成隐藏状态，比如``杯子大概在哪、手爪大概在哪、当前是否稳定''。然后学：做了动作a之后，隐藏状态会怎么变。机器人不会一帧帧``画出未来视频''，而是在脑子里快速模拟：``如果手往前5厘米，隐藏状态会变成什么；再向下2厘米，会不会碰到杯子；夹紧后奖励会不会变高。''这就像一个``只在脑内运行的小游戏引擎''，但这个引擎运行在latent里，不渲染画面，不关心画面是否逼真。
+
+代表成果：Dreamer系列（Google DeepMind）、VideoWorld系列（Bytedance Seed）等按时序每次生成下一时刻的隐变量，它们后期的版本也和生成式世界模型路线相结合。
+
+优点：由于在低维隐空间进行想象，更关注真正可预测、对行动有用的部分，样本效率高，省算力，对理解和规划常常更合适。
+
+缺点：不直接输出仿真或可视化界面，在面对开放世界时、高保真视觉生成中，隐空间的容量可能会成为瓶颈。
+
+\hypertarget{ux56dbux5728ux62bdux8c61ux8868ux793aux7a7aux95f4ux4e2dux9884ux6d4bux7684ux4e16ux754cux6a21ux578b}{%
+\subsection{四、在抽象表示空间中预测的世界模型}\label{ux56dbux5728ux62bdux8c61ux8868ux793aux7a7aux95f4ux4e2dux9884ux6d4bux7684ux4e16ux754cux6a21ux578b}}
+
+无论是在日常生活中还是自然科学中，在每一个像素预测是不必要的。例如，在物体运动预测中，只需要抽象成质点、刚体等，没有必要在像素或者原子层面分析。基于这种思想，我们和上一条路线一样，将观测映射为隐状态，但不再用下游任务驱动，而是让模型直接通过自监督预测自主学习隐状态的表征，仅用正则化损失避免表征坍缩。目前的一种方法是提取观测中的所有隐状态后随机在时空上进行掩码，训练模型通过预测来补全掩码处的隐状态，最小化预测和实际隐状态在隐空间内的差距，让模型学会时空和物理表征。
+
+具体例子：不关心杯子反光的每个像素，而关心``杯子的位置、手爪的姿态''等。给模型看前几帧和动作，它会类似于物理学中的分析一样预测``未来某块区域的状态表示会变成`手爪靠近杯口、杯子仍竖直在桌面上、可抓取概率高'''这样的表示，而不是把未来每个像素都画出来。就像人闭眼想象时，不会在脑内渲染所有反光，但知道``杯子接下来会被拿起来''。
+
+代表成果：V-JEPA系列（Meta FAIR）、LeWorldModel（AMI Labs）。
+
+优点：与自然科学各个领域中在不同尺度的抽象中推理（而非在像素中推理）天然契合，可以自然地把视觉、触觉、传感器数据等一起编码，最符合科学推理的思考方式；不需要预测像素，节省算力。
+
+缺点：抽象表示空间对人类不可见，难以直接发现是否存在问题；本质是Encoder，下游接任务需要微调。
+
+\hypertarget{ux4e94ux4ee5ux4e0aux6280ux672fux8defux7ebfux5bf9ux89c6ux89c9ux4ee5ux5916ux7684ux6a21ux6001ux7684ux652fux6301ux60c5ux51b5}{%
+\subsection{五、以上技术路线对视觉以外的模态的支持情况}\label{ux4e94ux4ee5ux4e0aux6280ux672fux8defux7ebfux5bf9ux89c6ux89c9ux4ee5ux5916ux7684ux6a21ux6001ux7684ux652fux6301ux60c5ux51b5}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  生成式世界模型：可以把视频token、动作token、传感器token串起来，不过实时控制和连续物理量处理未必最自然，高速传感器流很长，token化成本可能高。
+\item
+  建模三维的世界模型：把其他模态信息一并注入上下文进行预测。
+\item
+  建模对象的世界模型：可以把非视觉信息接成物理变量，如机器人的对象位置+接触关系+摩擦估计+触觉，自动实验室的分子/材料状态+温度压力流量+反应阶段+仪器读数，不只是把多模态拼起来，而是试图把它们放进同一个结构化状态里。
+\item
+  基于隐变量支持下游任务的世界模型：把视觉、触觉、关节状态、力传感器等一起编码到隐变量里，让模型预测``未来高层状态''，而不是未来原始信号。
+\item
+  在抽象表示空间中预测的世界模型：同上将各种模态一起编码到隐变量里，即可在抽象表示空间中进行预测。
+\end{enumerate}
+
+\hypertarget{ux516dux4ee5ux4e0aux65b9ux6848ux7684ux5171ux540cux96beux70b9}{%
+\subsection{六、以上方案的共同难点}\label{ux516dux4ee5ux4e0aux65b9ux6848ux7684ux5171ux540cux96beux70b9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  干预动作标签：世界模型的定义是p(s\_t+1\textbar s\_t,a\_t)，但现实世界中几乎没有任何数据显式地带有干预动作标签a\_t。例如，利用视频数据学习时，我们建模的更像是p(s\_t+1\textbar s\_1,\ldots,s\_t)（如果把s\_t定义为整个上下文，则是p(s\_t+1\textbar s\_t)），而不是p(s\_t+1\textbar s\_t,a\_t)，模型无法直接学习干预动作a\_t带来的影响。人类（以及经典RL中的智能体）是通过直接与环境互动学习p(s\_t+1\textbar s\_t,a\_t)的，但这样的数据极其昂贵且依赖具身智能的发展。
+\item
+  其他模态的数据缺乏：视觉模态的数据是互联网上的大量视频，但触觉、传感器、科学等的数据则往往在企业或实验室的私有数据库中，无法直接访问，这也是多模态通用世界模型训练中的一大困难和当前许多世界模型局限于视觉的原因。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-169}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-169}}
+
+\begin{itemize}
+\tightlist
+\item
+  Hafner, D., Pasukonis, J., Ba, J., \& Lillicrap, T. (2023). \href{https://arxiv.org/abs/2301.04104}{Mastering Diverse Domains through World Models}. arXiv:2301.04104.
+\item
+  Assran, M., Duval, Q., Misra, I., et al.~(2023). \href{https://arxiv.org/abs/2301.08243}{Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture}. CVPR.
+\item
+  Bruce, J., Dennis, M., Edwards, A., et al.~(2024). \href{https://arxiv.org/abs/2402.15391}{Genie: Generative Interactive Environments}. ICML.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux4e16ux754cux6a21ux578bux7684ux8badux7ec3ux6570ux636eux4e0eux6cdbux5316ux6027}{%
+\section{世界模型的训练数据与泛化性}\label{ux4e16ux754cux6a21ux578bux7684ux8badux7ec3ux6570ux636eux4e0eux6cdbux5316ux6027}}
+
+\hypertarget{ux4e00ux4e16ux754cux6a21ux578bux7684ux5173ux952eux96beux70b9}{%
+\subsection{一、世界模型的关键难点}\label{ux4e00ux4e16ux754cux6a21ux578bux7684ux5173ux952eux96beux70b9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  数据：互联网上的视频存在限制于视觉以及缺乏干预的问题；其他高质量数据稀缺。
+\item
+  训练方式：需要能不断扩展的训练方式及其目标函数，使模型能在世界数据中通过自监督学习理解世界的规律，以及通过强化学习找到现实世界任务中的最优策略。
+\end{enumerate}
+
+\hypertarget{ux4e8cux8badux7ec3ux6570ux636e}{%
+\subsection{二、训练数据}\label{ux4e8cux8badux7ec3ux6570ux636e}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  互联网视频数据：规模大、可扩展，但限制在视觉，且没有显式的干预动作a\_t，尽管可以从视频中推断动作，但这本质上是一种标签，在边缘案例上会严重挣扎。而且，即使推断得好的动作也只是某人实际所做的近似，有些东西在视频中根本看不到，比如从驾驶舱着陆时移动方向舵，如果不做就会坠机。
+\item
+  游戏数据：有状态和动作的完整数据，有观察-预测-行动的循环，是因果结构系统一般如何工作的一种抽象。理论上一旦世界模型通过多样的游戏集看到了N个世界的变体只需要少量微调就能理解第N+1个对应真实世界的变体的动态。但这样训练和现实世界客观上存在gap，且还是没有解决只有视觉的问题。
+\item
+  具身数据：有现实世界中状态和动作的完整数据，但极其昂贵。有视觉之外的传感器数据，但这些数据未必能跨本体泛化。
+\item
+  工业、科学等领域数据：对世界模型在这些领域的运用非常重要，但互联网上公开数据稀缺。
+\end{enumerate}
+
+\hypertarget{ux4e09ux8fc1ux79fbux4e0eux6cdbux5316ux6027}{%
+\subsection{三、迁移与泛化性}\label{ux4e09ux8fc1ux79fbux4e0eux6cdbux5316ux6027}}
+
+\hypertarget{ux4e00ux4e09ux79cdux5173ux952eux7684ux8fc1ux79fb}{%
+\subsubsection{（一）三种关键的迁移}\label{ux4e00ux4e09ux79cdux5173ux952eux7684ux8fc1ux79fb}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  输入模态迁移：策略在物理系统的自由度之间泛化得如何？对于一个具有20到60个自由度的人形机器人来说，手指运动不独立于手臂，从游戏手柄训练，能否期望它干净地迁移到20自由度的人形手？
+\item
+  传感器迁移：如果工作负载需要专门的物理传感器（触觉反馈、本体感受、深度），需要多少传感器特定数据才能让模型可靠地推理？
+\item
+  环境迁移：当环境变得更复杂、更随机时，表现如何衰退？在一个有千人的体育场中预测正确动作，比在空旷场地上困难得多，复杂度不是线性扩展的。
+\end{enumerate}
+
+\hypertarget{ux4e8cux6cdbux5316ux6027ux7684ux5c55ux671b}{%
+\subsubsection{（二）泛化性的展望}\label{ux4e8cux6cdbux5316ux6027ux7684ux5c55ux671b}}
+
+世界模型学习建模现实的因果关系，即特定动作导致下的状态转移规律。如果这种因果关系在足够基本的层面被理解，世界模型就应该能泛化到新场景。
+
+如果我们的世界模型能建模三维性、物理特征和时间及其交互，那么就可能解锁超人类的宏观和微观尺度上操纵这些领域的能力。今天没有人能够模拟一个生物细胞，更不用说由大量细胞组成的人体。但我们不需要映射现实的所有细节。我们只需要观察经过特定抽象后，那些细节如何体现在动作中，并用那些动作来预测接下来会发生什么。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-170}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-170}}
+
+\begin{itemize}
+\tightlist
+\item
+  O'Neill, A., Rehman, A., Gupta, A., et al.~(2024). \href{https://arxiv.org/abs/2310.08864}{Open X-Embodiment: Robotic Learning Datasets and RT-X Models}. ICRA.
+\item
+  Grauman, K., Westbury, A., Byrne, E., et al.~(2022). \href{https://arxiv.org/abs/2110.07058}{Ego4D: Around the World in 3,000 Hours of Egocentric Video}. CVPR.
+\end{itemize}
+
+\clearpage

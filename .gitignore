@@ -24,3 +24,22 @@ desktop.ini
 .env.*
 *.pem
 *.key
+
+# LaTeX 编译产物
+latex-project/build/
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.idx
+*.ilg
+*.ind
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc

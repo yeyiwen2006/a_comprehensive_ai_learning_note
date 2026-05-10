@@ -1,0 +1,520 @@
+\hypertarget{ux5728ux62bdux8c61ux8868ux793aux7a7aux95f4ux4e2dux9884ux6d4bux7684ux4e16ux754cux6a21ux578b}{%
+\chapter{在抽象表示空间中预测的世界模型}\label{ux5728ux62bdux8c61ux8868ux793aux7a7aux95f4ux4e2dux9884ux6d4bux7684ux4e16ux754cux6a21ux578b}}
+
+\hypertarget{v-jepaux8bbaux6587}{%
+\section{V-JEPA（论文）}\label{v-jepaux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-26}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-26}}
+
+在 V-JEPA 之前，主流的视频无监督学习通常依赖于像素级重建（Pixel Reconstruction），例如掩码自编码器 VideoMAE。然而，在像素空间进行预测存在明显劣势：模型必须分配大量计算能力和模型容量来捕捉视觉输入中那些低层次、甚至是无关紧要的细节。
+
+V-JEPA 的核心思想是特征空间预测（Feature Prediction）：
+
+\begin{itemize}
+\tightlist
+\item
+  该模型完全摒弃了像素重建，不再预测原始像素，而是预测被遮挡区域在语义特征空间中的表示。
+\item
+  通过在隐性表示空间（Latent Space）中进行预测，模型能够灵活地消除视频中不可预测或与语义无关的像素级细节，从而学习到高度通用的视觉特征。
+\end{itemize}
+
+其他基于隐变量的方法更像Decoder，按时序生成下一时刻的隐变量；V-JEPA更像Encoder，在时空上进行掩码预测，且没有重建损失（即由隐变量生成画面或间接参与生成画面）。
+
+\hypertarget{ux4e8cux6838ux5fc3ux67b6ux6784ux4e0eux635fux5931ux51fdux6570}{%
+\subsection{二、核心架构与损失函数}\label{ux4e8cux6838ux5fc3ux67b6ux6784ux4e0eux635fux5931ux51fdux6570}}
+
+V-JEPA 的核心架构由三个部分组成：编码器 \(E_\theta(\cdot)\)、预测器 \(P_\theta(\cdot)\) 以及目标编码器 \(E_{\theta'}(\cdot)\)。目标是让从视频某一部分 \(x\) 计算出的表示，能够预测视频另一部分 \(y\) 的表示。
+
+为了防止模型输出常数向量从而陷入``表示坍塌''（Representation Collapse），V-JEPA 借鉴了非对比学习策略，采用了带有停止梯度（Stop-gradient）的指数移动平均（EMA）架构。
+
+模型的优化目标是最小化预测特征与目标特征之间的 \(L_1\) 距离：
+
+\[
+\begin{aligned}
+\mathcal{L}_{\mathrm{VJEPA}}
+&=
+\left\|
+P_\theta(E_\theta(x),\Delta_y)
+\, - \, \mathrm{sg}(E_{\theta'}(y))
+\right\|_1
+\end{aligned}
+\]
+
+其中，\(\mathrm{sg}(\cdot)\) 表示停止梯度操作，\(E_{\theta'}(\cdot)\) 是 \(E_\theta(\cdot)\) 权重的指数移动平均网络，\(\Delta_y\) 是提供给预测器的位置条件变量。
+
+解释：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  用 \(L_1\) 范数是因为受极端值影响小，实验发现更稳定。其仅在 \(0\) 处不可导（类似 ReLU）。
+\item
+  由于没有重建损失，为了防止``模式崩塌''，\(y\) 的 encoder 更新方法类似于强化学习的``目标网络''，即从 \(x\) 的 encoder 网络软更新：
+\end{enumerate}
+
+EMA 更新（\(y\)-encoder）：\(y\)-encoder 的权重 \(\theta'_t\) 不使用优化器更新，而是使用指数移动平均公式缓慢更新：
+
+\[
+\theta'_t=\tau\theta'_{t-1}+(1-\tau)\theta_t
+\]
+
+其中 \(\tau\) 是动量参数，在 V-JEPA 中从 \(0.998\) 逐渐增加到 \(1.0\)。也就是说，\(y\)-encoder 始终是 \(x\)-encoder 历史状态的一个平滑、滞后的影子。
+
+为什么这样能防止模式崩塌：
+
+假设我们固定住编码器，只训练预测器 \(P_\theta\)。模型的损失函数是 \(L_1\) 范数（绝对误差）。在统计学中，使得绝对误差期望最小的预测值，正是目标分布的中位数。
+
+当预测器已经训练得非常完美（即 \(P=P^{*}\)）时，我们将它代回损失函数，这时候整个损失函数就变成了计算目标 \(Y\) 的条件中位绝对偏差（Median Absolute Deviation，简称 MAD）：
+
+\[
+\begin{aligned}
+\mathrm{MAD}(Y\mid E_\theta(x))
+&=
+\mathbb{E}
+\left[
+\left|
+Y-\mathrm{median}(Y\mid E_\theta(x))
+\right|
+\right]
+\end{aligned}
+\]
+
+此时，编码器 \(E_\theta\) 的优化方向（梯度）就是去最小化这个 MAD。
+
+直观解释：
+
+\begin{itemize}
+\tightlist
+\item
+  如果 \(E_\theta(x)\) 抽取了``什么都没学到、输出常数''，那么它就无法提供关于目标 \(Y\) 的任何线索。此时 \(Y\) 在给定 \(E_\theta(x)\) 条件下的分布会非常分散，其 MAD 值会非常大。
+\item
+  为了最小化 MAD，编码器 \(E_\theta(x)\) 必须从输入视频中抽取有效信息，使得它能够高度确定地推出 \(Y\) 的状态。当 \(E_\theta(x)\) 包含的信息越丰富，目标 \(Y\) 的不确定性就越小，分布越集中，MAD 也越小。
+\item
+  虽然最小化 MAD 能促使编码器学习，但如果目标 \(Y\)（由 \(y\)-encoder 生成）和预测器更新得一样快，它们可能会``合谋''一起变成常数来让 MAD 变为 \(0\)。
+\item
+  这就是 EMA 的原因：\(y\)-encoder 的权重不是通过梯度下降更新的，而是 \(x\)-encoder 权重的历史平均版本。这使得 \(y\)-encoder 的变化非常缓慢。
+\end{itemize}
+
+工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  预测器学得很快，迅速逼近最优解 \(P^{*}\)。
+\item
+  因为目标 \(Y\) 变化很慢，它不会配合 \(x\)-encoder 一起坍塌。
+\item
+  迫于快速进化的预测器和稳定缓慢的目标，\(x\)-encoder 只能老老实实地去学习如何提取丰富的信息来降低 MAD，从而从根本上切断了坍塌的可能。
+\end{enumerate}
+
+这意味着通过软更新的方式把在线网络的参数复制给目标网络，可以让目标网络的变化总是落后于 \(E_\theta(x)\)，且目标网络只能被动随着在线网络变化而变化，就像在线网络在追一个``移动的靶子''，避免了双方共同奔向常数的捷径。
+
+\hypertarget{ux4e09ux8badux7ec3ux65b9ux6cd5-1}{%
+\subsection{三、训练方法}\label{ux4e09ux8badux7ec3ux65b9ux6cd5-1}}
+
+\hypertarget{ux4e00ux63a9ux7801tokenux9884ux6d4b}{%
+\subsubsection{（一）掩码token预测}\label{ux4e00ux63a9ux7801tokenux9884ux6d4b}}
+
+\begin{itemize}
+\item
+  模型首先从视频中抽取一个包含 \(16\) 帧的短视频片段（时间步幅为 \(4\)），并将其空间分辨率调整为 \(224\times224\)，张量形状为 \(16\times224\times224\times3\)。
+\item
+  使用 3D 卷积层（过滤器大小 \(2\times16\times16\)）对视频进行切块，将其展平为一维的词元（Token）序列，序列长度为 \(1568\)。
+\item
+  将绝对 3D 正弦-余弦位置嵌入（Position Embeddings）添加到该特征图中。
+\item
+  采用多块采样策略：提取短程掩码（覆盖 \(15\%\) 面积的 \(8\) 个随机块）和长程掩码（覆盖 \(70\%\) 面积的 \(2\) 个随机块）。平均掩码比例高达约 \(90\%\)。
+\item
+  构建一组可学习的``掩码 Token''，这些 Token 包含了缺失区域的三维时空位置信息。
+\item
+  预测器网络（一个较窄的 Transformer）接收上下文表示和掩码 Token，并在隐空间中直接输出对缺失区域特征的预测值 \(\hat{s}_y\)。
+\item
+  在预测特征 \(\hat{s}_y\) 和真实特征 \(s_y\) 之间计算 \(L_1\) 距离损失。
+  为什么不严格按时序因果：
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{物理世界的非严格因果性}：在视觉世界中，我们不仅可以通过``过去''预测``未来''，也可以通过``未来''和``周围环境''推断``过去''或``被遮挡的部分''。V-JEPA 的多块掩码策略（Multi-Block Masking）会在时空中随机挖掉一大块（高达 \(90\%\)），模型必须学会利用空间上下文和时间前后的线索来填补隐空间中的空白。
+\item
+  \textbf{因果掩码的消融实验结果}：论文做过对比实验。他们尝试了一种``因果掩码''（Causal Multi-block）策略：只给模型看视频前几帧，让它预测后面几帧。结果发现，这种严格遵循因果律的训练方式，其下游任务表现反而下降了。
+\item
+  \textbf{结论}：V-JEPA 的目标是提取通用的视觉表示（Motion and Appearance），而不是像视频生成模型那样生成符合因果约束的下一帧图像。随机的时空掩码会强迫模型学习到比纯因果预测更稳健的物理规律，例如物体的空间一致性、运动的连续性。
+\end{enumerate}
+
+\hypertarget{ux4e8cux975eux63a9ux7801tokenux7684ux635fux5931ux51fdux6570}{%
+\subsubsection{（二）非掩码token的损失函数}\label{ux4e8cux975eux63a9ux7801tokenux7684ux635fux5931ux51fdux6570}}
+
+在V-JEPA 2.1中，为了更充分地利用数据以及让模型更好地理解连续性，对非掩码token也引入了损失，要求预测这些未被遮挡的特征：
+
+但这里存在一个致命的逻辑漏洞：对于可见的上下文块，模型其实已经``看到了''它的输入特征。如果直接要求模型去预测这些可见块，网络很容易找到一个``捷径''（Trivial Solution）：直接把输入特征原封不动地复制（Copy）到输出端。一旦模型开始``抄作业''，它就不会再去费力学习真正有用的空间结构和特征了。
+
+为了解决这个问题，论文设计了动态加权公式：
+
+\[
+\lambda_i = \frac{\lambda}{\sqrt{d_{\min}(i, M)}}
+\]
+
+\begin{itemize}
+\item
+  \(d_{\min}(i, M)\)：表示当前可见的上下文块（Token）\(i\) 距离最近的一个被遮挡块（Masked Token）的时空距离（以块为单位）。
+\item
+  \(\sqrt{d_{\min}(i, M)}\)：对这个距离开平方根，作为分母。
+\item
+  \textbf{整体逻辑}：距离掩码区域越近的可见块，其计算损失时的权重 \(\lambda_i\) 越大；距离掩码区域越远的可见块，权重越小。
+  这样设计的好处：
+\item
+  \textbf{强制学习局部连续性（Local Continuity）}：通过给靠近遮挡边缘的可见块赋予更高权重，模型被强迫去关注可见区域与被遮挡区域是如何在空间和时间上平滑过渡的。它不能再简单地``复制''自己的特征，而是必须结合邻居的状态来推断。
+\item
+  \textbf{平衡``全局理解''与``局部细节''}：如果所有可见块权重一样大（哪怕是一个固定的很小的值），都会导致模型在动作识别（如 SSv2 数据集）等全局语义任务上性能大幅下降。这种动态距离衰减机制，既让模型学会了精细的边界分割（Segmentation），又保住了动作识别等全局任务的能力，实现了一个绝佳的平衡（Trade-off）。
+\end{itemize}
+
+\hypertarget{ux4e09ux6df1ux5ea6ux81eaux76d1ux7763}{%
+\subsubsection{（三）深度自监督}\label{ux4e09ux6df1ux5ea6ux81eaux76d1ux7763}}
+
+在传统的视觉 Transformer（ViT）中，越靠近底层的网络层提取的是边缘、纹理等``局部细节''，越靠近顶层的网络层提取的是物体类别、动作意图等``全局概念''。这通常会导致顶层特征在经历层层传递后，丢失大量细粒度的空间信息。
+
+V-JEPA 2.1 的深度自监督彻底改变了这一点。
+1. \textbf{具体是怎么操作的？}
+- \textbf{特征提取与融合}：x-编码器处理可见块时，不仅仅输出最后一层的特征，还会把其中 \(3\) 个中间层的特征提取出来，与最后一层的特征在通道维度上拼接在一起。
+- \textbf{降维与输入}：拼接后的庞大特征会通过一个轻量级的多层感知机（MLP）进行降维融合，然后与代表遮挡位置的掩码标记（Mask Tokens）拼接，一起送入预测器（Predictor）。
+- \textbf{分层预测与计算损失}：预测器不再只输出一个最终结果，而是同时输出 \(4\) 个层级的预测结果（对应刚才提取的 \(4\) 个编码器层级）。模型会分别把这 \(4\) 个预测结果，与目标网络（y-编码器）对应 \(4\) 个层级的输出进行对比，在每一个层级上都计算一遍预测损失和上下文损失。
+2. \textbf{这样做有什么好处？}
+- \textbf{通过顶层保留底层细节}：因为预测器在最终输出时不仅要预测高级语义，还要``倒推''并准确预测出网络中间层那些包含丰富空间几何信息的局部特征。这种监督信号会一直反向传播，强制局部细节信息从底层一直流向最终层。
+- \textbf{下游任务使用极其方便（无需多层拼接）}：以前在做语义分割或深度估计时，为了获取足够的细节，研究人员通常需要手动把模型不同深度的层特征``拼接''起来使用。V-JEPA 2.1 经过深度自监督训练后，只用它的最后一层特征（Last-Layer），就能达到极高的密集预测性能，几乎去除了对多层融合的依赖，大大简化了下游任务的部署。
+- \textbf{强势回血全局性能}：论文发现，单纯引入上下文损失会损害全局分类任务的准确率，但一旦加上深度自监督，不仅密集任务（如分割、深度）性能进一步飙升，原本流失的全局理解能力（如动作分类）也被成功挽救回来。
+
+\hypertarget{ux56dbux4e0ellmux7684ux7ed3ux5408}{%
+\subsection{四、与LLM的结合}\label{ux56dbux4e0ellmux7684ux7ed3ux5408}}
+
+预训练完成后，我们得到了一个不懂人类语言，但对物理世界、物体外观和运动规律有着极深理解的模型。在V-JEPA 2和LLM之间加入一个投影器（Projector，通常是多层感知机MLP），把V-JEPA 2提取出的纯视觉特征（视觉Token），``翻译''并映射到大语言模型能够理解的输入空间（文本嵌入空间）中。然后用大规模的``图像/视频-文本''问答对齐数据来训练这个整体系统，就可以让其逐步学会了如何理解由V-JEPA 2传递过来的视觉信息，并能通过LLM的处理用自然语言回答关于视频内容的问题，实现初步的空间推理。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-192}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-192}}
+
+\begin{itemize}
+\tightlist
+\item
+  Bardes, A., Garrido, Q., Ponce, J., et al.~(2024). \href{https://arxiv.org/abs/2404.08471}{V-JEPA: Revisiting Feature Prediction for Learning Visual Representations from Video}. arXiv:2404.08471.
+\item
+  Assran, M., Duval, Q., Misra, I., et al.~(2023). \href{https://arxiv.org/abs/2301.08243}{Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture}. CVPR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux9690ux53d8ux91cfux7684ux65f6ux95f4ux76f4ux9053ux5316ux8bbaux6587}{%
+\section{隐变量的时间直道化（论文）}\label{ux9690ux53d8ux91cfux7684ux65f6ux95f4ux76f4ux9053ux5316ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-13}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-13}}
+
+传统预训练视觉编码器（如基于重构或对比学习的模型）虽然能提取丰富的语义特征，但它们并非为``规划''量身定制。这些模型生成的潜在空间轨迹（Latent Trajectories）通常是高度弯曲的。在高度弯曲的空间中进行规划时，两点之间的欧几里得距离（Euclidean distance）无法真实反映它们之间的到达难度（Geodesic distance，即实际的物理转移和动作成本）。这会导致基于梯度的规划器极易陷入局部最优，从而大幅降低决策和控制的效率。
+
+\textbf{感知直道化假说（Perceptual Straightening Hypothesis）}：该研究的灵感来源于人类视觉神经科学中的``感知直道化''假说。研究表明，人类视觉系统在处理自然界中复杂的动态视频流时，为了更好地预测物体的运动，倾向于在内部将其转化为更平直的表征轨迹。受此启发，作者提出在人工智能的世界模型中引入``时间直道化''（Temporal Straightening），强制要求编码器学习到的潜在状态转移轨迹在局部尽可能保持直线。
+\#\#\# 二、核心算法
+
+直道化的核心是要求潜空间中的运动轨迹尽可能接近匀速直线运动。公式上，这体现为相邻两个时间步的``位移向量''应该尽可能一致：
+
+\[
+\Delta z_t = z_t - z_{t-1}
+\]
+
+\[
+\Delta z_{t+1} = z_{t+1} - z_t
+\]
+
+故可以在预测下一状态的隐变量z\_t+1时，除了预测损失外，还额外引入一个基于曲率的损失函数作为正则化项。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  基于MSE Loss
+\end{enumerate}
+
+\[
+\mathcal{L}_{curv} = \mathbb{E}_t\left[\left\| (z_{t+1}-z_t) - (z_t-z_{t-1}) \right\|^2\right]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  基于余弦相似度的损失
+\end{enumerate}
+
+\[
+\mathrm{Curvature}(z_{t-1}, z_t, z_{t+1}) = 1 - \frac{\Delta z_t \cdot \Delta z_{t+1}}{\|\Delta z_t\|\,\|\Delta z_{t+1}\|}
+\]
+
+\hypertarget{ux53c2ux8003ux6587ux732e-193}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-193}}
+
+\begin{itemize}
+\tightlist
+\item
+  Wang, Y., Bounou, O., Zhou, G., Balestriero, R., Rudner, T. G. J., LeCun, Y., \& Ren, M. (2026). \href{https://arxiv.org/abs/2603.12231}{Temporal Straightening for Latent Planning}. arXiv:2603.12231.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{leworldmodelux8bbaux6587}{%
+\section{LeWorldModel（论文）}\label{leworldmodelux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-14}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-14}}
+
+世界模型（World Models）旨在通过学习环境的动态演变规律，使智能体能够在``想象''中预测未来并进行规划。联合嵌入预测架构（JEPA）是近年来非常受关注的一种世界模型框架，它不直接像素空间重建图像，而是将观测数据压缩到一个紧凑的、低维的潜在空间（Latent Space）中，并在该空间内预测未来的表征。
+
+然而，现有的端到端 JEPA 方法面临一个致命痛点：\textbf{表征坍塌（Representation Collapse）}。为了最小化预测误差，编码器可能会走捷径，将所有不同的输入图像都映射为同一个恒定的常数向量，导致学到的表征失去任何有用的环境信息。为防止坍塌，以往的方法通常采用极其复杂的七项损失函数（例如 PLDM），或者直接冻结一个在大规模数据上预训练好的编码器（例如 DINO-WM），这要么使得训练变得极度不稳定，要么极大地限制了模型在特定任务上的表达能力。
+Yann LeCun等提出了LeWorldModel，通过极为简洁的方法有效解决了表征坍塌问题，并在小参数模型上获得了较好的效果。
+
+\hypertarget{ux4e8cux6a21ux578bux67b6ux6784-4}{%
+\subsection{二、模型架构}\label{ux4e8cux6a21ux578bux67b6ux6784-4}}
+
+LeWM 的架构由两个主要组件构成：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{编码器（Encoder）}：采用 Vision Transformer（ViT）架构。它负责将当前时刻的原始像素观测 \(o_t\) 映射为紧凑的低维潜在表征 \(z_t\)。
+\item
+  \textbf{预测器（Predictor）}：采用标准的 Transformer 架构。它通过自回归的方式，结合当前的潜在状态 \(z_t\) 和智能体采取的动作 \(a_t\)，预测下一时刻的潜在表征 \(\hat{z}_{t+1}\)。为了使动作信号生效，动作向量会通过自适应层归一化（AdaLN）注入到预测器的每一层中。
+  \#\#\# 三、损失函数
+\end{itemize}
+
+\[
+\mathcal{L}_{LeWM} \triangleq \mathcal{L}_{pred} + \lambda\,SIGReg(Z)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{预测损失（Prediction Loss）}：采用均方误差（MSE），计算预测器输出的下一时刻表征 \(\hat{z}_{t+1}\) 与编码器实际生成的下一时刻真实表征 \(z_{t+1}\) 之间的差异：
+\end{itemize}
+
+\[
+\mathcal{L}_{pred} \triangleq \left\|\hat{z}_{t+1}-z_{t+1}\right\|_2^2
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{SIGReg 正则化（Sketched-Isotropic-Gaussian Regularizer）}：这是 LeWM 避免表征坍塌的核心创新。SIGReg 强制整个批次（Batch）的潜在表征矩阵 \(Z\) 服从各向同性的高斯分布，从而保证特征在空间中的多样性。由于直接在高维空间测试正态分布极其困难，SIGReg 巧妙地利用了 Cramér-Wold 定理。它随机生成 \(M\) 个单位方向向量 \(u^{(m)}\)，将高维特征投影到一维空间 \(h^{(m)} = Zu^{(m)}\)，然后在每个一维投影上独立应用 Epps-Pulley 正态性检验 \(T(\cdot)\)。
+\end{itemize}
+
+\[
+SIGReg(Z) \triangleq \frac{1}{M}\sum_{m=1}^{M} T(h^{(m)})
+\]
+
+通过这种方式，只有超参数 \(\lambda\)（正则化权重）需要人工调节。相比之前的方法（例如 PLDM 需要调节 \(6\) 个超参数），这大幅降低了调参复杂度，使得模型可以进行非常高效的对数时间超参数搜索。
+SIGReg正则化的原理：
+
+SIGReg 巧妙地绕过了高维计算，其核心理论依据是统计学中的 \textbf{Cramér-Wold 定理}。该定理指出：如果一个高维随机向量在所有可能的一维方向上的投影分布，都与目标高斯分布在对应方向上的投影分布相匹配，那么这两个高维分布就是完全等价的。
+
+虽然目标是多维各向同性高斯分布，它在任何一维方向上的投影都应该是一个标准的一维高斯分布 \(\mathcal{N}(0,1)\)。因此，SIGReg 将复杂的``高维分布匹配''转化为了大量简单的``一维分布匹配''。
+假设在一个 Batch 中，我们收集到的潜在表征张量为 \(Z \in \mathbb{R}^{N\times B\times d}\)（其中 \(N\) 是历史长度，\(B\) 是批次大小，\(d\) 是嵌入维度）。SIGReg 的工作流如下：
+
+\textbf{Step 1：随机方向投影（Sketching）}
+
+在 \(d\) 维超球面上，均匀采样 \(M\) 个随机的单位方向向量 \(u^{(m)} \in \mathbb{S}^{d-1}\)。将高维表征 \(Z\) 投影到这些一维方向上，得到 \(M\) 组一维标量集合。
+
+\[
+h^{(m)} \triangleq Zu^{(m)}
+\]
+
+这里，每个 \(h^{(m)}\) 包含了当前批次所有样本在方向 \(u^{(m)}\) 上的投影值。
+
+\textbf{Step 2：一维正态性检验（Epps-Pulley Test）}
+
+对于这 \(M\) 个一维投影，逐一使用 Epps-Pulley 检验来衡量其与标准高斯分布 \(\mathcal{N}(0,1)\) 的差异。Epps-Pulley 检验是一种基于经验特征函数（Empirical Characteristic Function, ECF）的高效统计检验方法。
+
+对于第 \(m\) 个投影方向，其测试统计量 \(T^{(m)}\) 定义为经验特征函数 \(\phi_N\) 与标准高斯特征函数 \(\phi_0\) 之间平方差的加权积分。
+
+\[
+T^{(m)} = \int_{-\infty}^{\infty} \omega(t)\left|\phi_N(t;h^{(m)}) - \phi_0(t)\right|^2 dt
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(\phi_N(t;h)=\frac{1}{N}\sum_{n=1}^{N} e^{ith_n}\) 是投影数据的一维经验特征函数。
+\item
+  \(\phi_0(t)\) 是目标分布（标准高斯分布）的特征函数。
+\item
+  \(\omega(t)\) 是一个权重函数。
+\end{itemize}
+
+\textbf{Step 3：聚合统计量（Aggregation）}
+
+将所有 \(M\) 个方向上的 Epps-Pulley 统计量求均值，作为最终的 SIGReg 损失值。
+
+\[
+SIGReg(Z) \triangleq \frac{1}{M}\sum_{m=1}^{M}T(h^{(m)})
+\]
+
+当 \(SIGReg(Z)\to 0\) 时，意味着特征在所有随机方向上都服从一维标准正态分布。根据 Cramér-Wold 定理，此时高维特征矩阵 \(Z\) 就完美服从了各向同性高斯分布。
+SIGReg不会成为计算瓶颈的原因：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{极简的矩阵运算}：Step 1 中的高维到一维投影，在代码实现中仅仅是一个简单的矩阵乘法（\(Z\times U\)）。GPU 处理这类密集的线性代数运算速度极快。
+\item
+  \textbf{数值积分成本极低}：在 Step 2 中计算积分时，算法并没有求解析解，而是采用了一种求积方案（如梯形法则），仅仅在 \([0.2,4]\) 区间内均匀选取 \(T\) 个离散节点（Integration Knots）进行求和。论文的消融实验（Ablation Studies）显示，即使将积分节点数降到非常小（例如 \(17\)），也完全不影响最终控制任务的性能。
+\item
+  \textbf{对投影数量 \(M\) 不敏感}：虽然理论上 \(M\to\infty\) 才能完美等价，但实验表明，该方法对投影方向的数量具有极强的鲁棒性。即使大幅减少 \(M\)（论文默认使用 \(M=1024\)），模型性能依然保持稳定。
+\item
+  \textbf{无冗余超参数调整}：相比于 PLDM 那种包含 \(6\) 项以上损失、调参复杂度为 \(O(n^6)\) 的模型，SIGReg 的内部参数（如节点数、方向数）几乎不需要调优，唯一需要调整的超参数只有控制正则化项总体占比的权重 \(\lambda\)（且可通过对数时间的二分查找快速确定）。
+  \#\#\# 四、工作流
+\end{enumerate}
+
+\hypertarget{ux4e00ux8badux7ec3ux9636ux6bb5}{%
+\subsubsection{（一）训练阶段}\label{ux4e00ux8badux7ec3ux9636ux6bb5}}
+
+LeWM 的端到端训练完全不需要停止梯度（Stop-gradient）等额外的稳定化启发式技巧：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  输入一段含有 \(T\) 个时间步的原始像素序列和对应的动作序列。
+\item
+  编码器将像素序列逐帧编码，生成真实的潜在表征序列。
+\item
+  预测器接收表征和动作序列，结合时间因果掩码（避免看到未来的信息），自回归地生成未来的预测表征序列。
+\item
+  计算预测表征与真实下一时刻表征之间的 MSE 预测损失。
+\item
+  对真实表征序列的转置应用 SIGReg 正则化，计算分布匹配损失。
+\item
+  将两项损失按权重加和，一次性反向传播，联合优化编码器和预测器的所有参数。
+  \#\#\#\# （二）推理阶段用于模型预测控制时
+\end{enumerate}
+
+在推理阶段，LeWM 结合交叉熵方法（CEM，Cross-Entropy Method）在潜在空间中进行模型预测控制（MPC）：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  编码器分别提取初始观测状态的表征 \(z_1\) 和目标观测状态的表征 \(z_g\)。
+\item
+  初始化采样分布参数，从中采样 \(N\) 组候选动作序列。
+\item
+  在预测器中输入这些动作序列，一步步预测未来的潜在状态，直到规划视野的最后一步生成 \(\hat{z}_H\)。
+\item
+  计算最终预测状态 \(\hat{z}_H\) 与目标状态 \(z_g\) 之间的欧氏距离，作为该动作序列的成本（Cost）。
+\item
+  选出成本最低的 \(K\) 个``精英''动作序列，用它们的均值和方差来更新下一次的采样分布。
+\item
+  重复以上预测和优化循环，直至收敛，最终输出最佳动作计划。为了避免长时间序列的预测误差累积，通常只执行前几个计划动作，然后获取新观测并重新规划。
+  \#\#\# 五、工作亮点
+\item
+  \textbf{极简且稳定的损失函数（抛弃传统``hacks''）}：以往的 JEPA 模型为了避免特征表示坍塌（Representation Collapse），高度依赖复杂的工程技巧，如指数移动平均（EMA）、停止梯度（Stop-Gradient）、预测冻结编码器或七八项复杂的正则化损失。LeWM 彻底抛弃了这些，整个训练仅使用两项损失，将需要调节的损失超参数从现有方案的 \(6\) 个锐减到仅剩 \(1\) 个。
+\item
+  \textbf{彻底解决``表示坍塌''问题}：引入了独创的 SIGReg 正则化。它利用随机投影和一维正态性检验，强制潜在嵌入服从高斯分布。这种机制从理论根源上保证了特征的多样性，防止模型``走捷径''将所有图像映射为同一个向量。
+\item
+  \textbf{极致的轻量化与极低的算力门槛}：整个模型极其小巧，参数量仅约 \(15M\)（编码器 \(5M\)，预测器 \(10M\)），研究者完全可以在单张 GPU 上在数小时内完成训练，极大降低了基于像素的世界模型研究门槛。
+\item
+  \textbf{高达 48 倍的规划加速}：与基于大语言模型（Foundation-model-based）的世界模型相比，LeWM 所有的动态预测完全在一个高度压缩的潜在空间中进行，无需对图像级别像素预测。这种高速浓缩的表示使其在执行下游控制任务的规划时，速度提升了 \(48\) 倍。
+\item
+  \textbf{涌现的直观物理规律（Intuitive Physics）}：尽管在训练时模型只是盲目地预测下一帧的隐变量，没有施加任何物理规律或三维空间的监督信号，但探测结果表明，其潜在空间自然编码了有意义的物理结构。通过``期望值违反检验''（Surprise Evaluation）证明，该模型能可靠地检测出违背物理常识的事件（例如物体穿墙或突然消失）。
+  此外，在不引入隐空间直道化损失的情况下，直道化程度较以前的V-JEPA显著提升。
+\end{enumerate}
+
+值得注意的是，论文在消融实验中发现，引入重建损失反而引起了性能的下降。
+
+\hypertarget{ux516dux4ecdux5b58ux5728ux7684ux5c40ux9650ux6027}{%
+\subsection{六、仍存在的局限性}\label{ux516dux4ecdux5b58ux5728ux7684ux5c40ux9650ux6027}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  依赖动作数据
+\end{enumerate}
+
+LeWM的预测器不是只看视频帧，而是显式建模：
+
+\[
+\hat{z}_{t+1} = f_\theta(z_t, a_t)
+\]
+
+所以它不是一个纯粹从无动作视频中学习的video prediction model。论文最后的局限性也明确提到：当前end-to-end latent world models依赖action labels来预测未来状态，未来方向可以用inverse dynamics学习未来动作表征，减少对显式动作标注的依赖。但要注意，``action labels''不一定是人工标注。机器人或仿真控制任务里，动作通常来自控制器日志，比如关节速度、末端执行器控制量、环境action command，这比人工标注便宜得多。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  难以捕捉细粒度旋转与姿态信息
+\end{enumerate}
+
+LeWM的紧凑latent能捕捉主要动力学和位置结构，但对3D场景中的细粒度旋转、姿态、末端执行器朝向等变量编码不足；这在OGBench-Cube的rollout和probing中体现明显。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  规划视野受限
+\end{enumerate}
+
+随着自回归预测步数增加，预测误差逐渐累积，长程规划质量下降。论文也因此采用MPC：不是一次性规划很长时间，而是只执行前几个动作，然后根据新观测重新规划。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  高度依赖数据覆盖率
+\end{enumerate}
+
+LeWM是offline、reward-free的方法，训练依赖固定数据集中的 observation-action trajectories。论文提到，这些轨迹不要求是最优策略产生的，但需要充分覆盖环境动力学。局限性部分也说，它仍依赖具有sufficient interaction coverage的离线数据，而这种数据在实际应用中可能昂贵或难收集。
+
+这点尤其重要：LeWM 的 planning 成功并不意味着它可以在训练分布外任意泛化。如果离线数据没有覆盖某些状态、接触模式、物体姿态、动作后果，世界模型就很难可靠预测，规划也容易失败。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  SIGReg在极简环境中的正则化匹配挑战
+\end{enumerate}
+
+LeWM在Push-T和Reacher上表现很好，但在简单的Two-Room环境中不如PLDM和DINO-WM。论文给出的可能解释是：Two-Room数据多样性低、内在维度低，而SIGReg会鼓励embedding匹配高维各向同性高斯分布，这可能让表示结构变差，进而影响规划。
+
+不过，论文附录又补充了一个nuance。简单环境Two-Room中，LeWM虽然下游规划差一些，但probing指标上并不一定差，这说明简单环境的planning gap不一定完全来自``潜在表征信息不足''，也可能与动力学建模或规划过程有关。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-194}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-194}}
+
+\begin{itemize}
+\tightlist
+\item
+  Maes, H., Le Lidec, Q., Scieur, D., LeCun, Y., \& Balestriero, R. (2026). \href{https://arxiv.org/abs/2603.19312}{LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels}. arXiv:2603.19312.
+\item
+  Assran, M., Duval, Q., Misra, I., et al.~(2023). \href{https://arxiv.org/abs/2301.08243}{Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture}. CVPR.
+\end{itemize}
+
+\clearpage

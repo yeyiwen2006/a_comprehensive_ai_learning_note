@@ -1,0 +1,180 @@
+\hypertarget{ux5206ux7c7bux4efbux52a1}{%
+\chapter{分类任务}\label{ux5206ux7c7bux4efbux52a1}}
+
+\hypertarget{ux5bf9ux6bd4ux5b66ux4e60}{%
+\section{对比学习}\label{ux5bf9ux6bd4ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux5bf9ux6bd4ux5b66ux4e60}{%
+\subsection{一、对比学习}\label{ux4e00ux5bf9ux6bd4ux5b66ux4e60}}
+
+学习一个特征空间，在其中相似的数据点（称为~``正样本对''）应该靠得很近，不相似的数据点（称为~``负样本对''）应该离得很远。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  样本对的构建
+\end{enumerate}
+
+通过对同一个数据点。施加不同的数据增强，创造看起来不同但语义完全一致的正样本对。例如，对原图片进行随机裁剪、随机颜色扰动、高斯模糊、旋转、翻转，对原语段进行摘要等。不同来源的样本则视为负样本对。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  损失函数
+\end{enumerate}
+
+我们把特征空间中向量的余弦值作为相似度，对于一个样本，计算它和源于自身的样本之间（正样本对）的相似度，以及与其他样本（负样本对）之间的所有相似度，用Softmax函数得到一个分数，我们希望这个分数越大越好。
+
+假设我们有一个查询 \(q\)（Query）和一个相关的文档 \(d^+\)（Positive Document），以及 \(N\) 个不相关的文档 \(d^-\)（Negative Documents）。
+
+我们使用 InfoNCE Loss（Information Noise Contrastive Estimation）作为损失函数。这是目前训练 Embedding 最主流的公式：
+
+\[
+\mathcal{L} = -\log \frac{\exp(\mathrm{sim}(q,d^+)/\tau)}{\sum_{i=0}^{N}\exp(\mathrm{sim}(q,d_i)/\tau)}
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(\mathrm{sim}(u,v)\) 是两个向量的余弦相似度：\(\mathrm{sim}(u,v)=\frac{u^Tv}{\lVert u\rVert\lVert v\rVert}\)。
+\item
+  \(d^+\) 是正样本。
+\item
+  \(d_i\) 包含 \(1\) 个正样本和 \(N\) 个负样本。
+\item
+  \(\tau\) 是温度系数（Temperature），用于控制模型对困难样本的敏感度。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-30}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-30}}
+
+\begin{itemize}
+\tightlist
+\item
+  Oord, A. van den, Li, Y., \& Vinyals, O. (2018). \href{https://arxiv.org/abs/1807.03748}{Representation Learning with Contrastive Predictive Coding}. arXiv:1807.03748.
+\item
+  Chen, T., Kornblith, S., Norouzi, M., \& Hinton, G. (2020). \href{https://proceedings.mlr.press/v119/chen20j.html}{A Simple Framework for Contrastive Learning of Visual Representations}. ICML 2020.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux5206ux7c7bux4efbux52a1ux7684ux8bc4ux4f30ux6807ux51c6}{%
+\section{分类任务的评估标准}\label{ux5206ux7c7bux4efbux52a1ux7684ux8bc4ux4f30ux6807ux51c6}}
+
+\hypertarget{ux4e00ux4e3aux4ec0ux4e48ux6211ux4eecux9700ux8981ux591aux79cdux8bc4ux4f30ux6807ux51c6}{%
+\subsection{一、为什么我们需要多种评估标准？}\label{ux4e00ux4e3aux4ec0ux4e48ux6211ux4eecux9700ux8981ux591aux79cdux8bc4ux4f30ux6807ux51c6}}
+
+在训练时，模型以交叉熵损失和Softmax回归来进行梯度下降，调整参数。训练完成后，模型的参数固定了。这时我们需要一份``人类能看懂的''成绩单，来判断这个模型在实际应用中到底好不好。交叉熵损失值（比如 0.43）对人类来说不够直观。我们更想知道：``在我的实际任务中，这个模型会犯哪种错误？我能多信任它？''
+
+单一的``准确率''指标是不够的。比如，假设我们有一个``NAD+结合蛋白''的分类器，样本中有0.05\%是NAD+结合蛋白。如果一个模型偷懒，把所有蛋白质都预测为``非 NAD+ 结合蛋白''，它的准确率高达 99.95\%（因为0.05\%猜错，99.95\%猜对），但它毫无用处，因为它找不到一个我们想要的蛋白质。
+
+\hypertarget{ux4e8cux6838ux5fc3ux6982ux5ff5}{%
+\subsection{二、核心概念}\label{ux4e8cux6838ux5fc3ux6982ux5ff5}}
+
+\hypertarget{ux7cbeux786eux7387-precision}{%
+\subsubsection{1. 精确率 (Precision)}\label{ux7cbeux786eux7387-precision}}
+
+含义：在所有被模型预测为``是''（正样本）的结果中，真正是``是''的比例。
+
+公式：
+
+\[
+\mathrm{Precision}=\frac{TP}{TP+FP}
+\]
+
+True Positive(TP)：真的``是''，模型也预测为``是''。
+
+False Positive(FP)：假的``是''（即``否''），但模型错误地预测为``是''。
+
+目标：降低``假阳性''，不能把假样本预测为真，``宁缺毋滥''。在垃圾邮件检测中，高精确率意味着模型标记为``垃圾邮件''的邮件中，真的垃圾邮件比例很高（即很少误伤正常邮件）。
+
+\hypertarget{ux53ecux56deux7387-recall}{%
+\subsubsection{2. 召回率 (Recall)}\label{ux53ecux56deux7387-recall}}
+
+含义：在所有真正是``是''（正样本）的样本中，被模型成功预测为``是''的比例。
+
+公式：
+
+\[
+\mathrm{Recall}=\frac{TP}{TP+FN}
+\]
+
+False Negative(FN)：真的``是''，但模型错误地预测为``否''（即漏掉了）。
+
+目标：降低被漏掉的概率，``宁可错杀一千，不可放过一个''，如在传染病筛查中，高召回率意味着在所有真正的患者中，绝大多数都被模型成功地识别出来了（即很少漏诊），把该找的都找到。
+
+\hypertarget{ux7cbeux786eux7387ux548cux53ecux56deux7387ux7684ux6743ux8861}{%
+\subsubsection{3. ``精确率''和``召回率''的权衡}\label{ux7cbeux786eux7387ux548cux53ecux56deux7387ux7684ux6743ux8861}}
+
+事实上，这两个指标通常是相互矛盾的。模型的输出不是简单的``是''或``否''，而是一个概率分数（例如 0\% 到 100\%）。我们需要设置一个``决策阈值(Decision Threshold)''（比如 50\%），模型的分数超过这个阈值才被判为``是''。如果我们把阈值调得很高（例如 99\%），模型会变得非常``谨慎''，精确率会很高，但FN会很高，召回率会很低。如果我们把阈值调得很低（例如 10\%），模型会变得非常``宽松''，只要有一点可能就预测为``是''，召回率会很高。但FP会很高（大量``否''被误判为``是''），因此精确率会很低。
+
+\hypertarget{p-r-ux66f2ux7ebf}{%
+\subsubsection{4. P-R 曲线}\label{p-r-ux66f2ux7ebf}}
+
+从高到低``滑动''决策阈值，并记录下每一个阈值对应的（召回率, 精确率）坐标点，最后将这些点连接起来形成的。
+
+X 轴：召回率 (Recall)
+
+Y 轴：精确率 (Precision)
+
+将阈值设为 100\%，此时模型什么都不敢预测为``是''，召回率为 0。逐渐降低阈值（比如 99\%, 98\%\ldots），每降低一点，模型会预测出更多的``是''，召回率会单调增加（或不变），在这个过程中，精确率通常会波动下降，将所有（召回率, 精确率）的点在图上描出并连接，就得到了 P-R 曲线。
+
+P-R 曲线是一种强大的模型评估工具，尤其是在数据不平衡（例如，99\% 是负样本，1\% 是正样本）的情况下：
+
+理想模型：一条完美的曲线会直冲右上角（1, 1），即在 100\% 召回率时（找到了所有正样本），依然保持 100\% 精确率（一个都没错判）。
+
+优秀模型： 曲线会尽可能地贴近右上角。
+
+糟糕模型： 曲线会非常靠近左下角。
+
+\hypertarget{ux4e09ux57faux4e8eux4e0aux8ff0ux6982ux5ff5ux7684ux5e38ux7528ux8bc4ux4f30ux6307ux6807}{%
+\subsection{三、基于上述概念的常用评估指标}\label{ux4e09ux57faux4e8eux4e0aux8ff0ux6982ux5ff5ux7684ux5e38ux7528ux8bc4ux4f30ux6307ux6807}}
+
+\hypertarget{aupr-area-under-precision-recall-curve}{%
+\subsubsection{1. AUPR (Area Under Precision-Recall Curve)}\label{aupr-area-under-precision-recall-curve}}
+
+对于一对正确配对方式，求出模型在这对配对下的Precision和Recall ，计算P-R 曲线下方的面积。这个面积越大（越接近 1.0），说明模型在各种阈值下的综合表现越好，模型性能越强。
+
+在有很多样本互相配对、可能有多种配对方式（如蛋白质和功能``一对多''配对）时，对于每一种配对都会有一个AUPR值，往往取所有配对方式的AUPR值的平均。
+
+AUPR的平均值（有时直接写作AUPR值）衡量模型对所有配对决策的全局平均性能，是``以配对为中心''的评估。它不关心单个被配对的东西，而是将任务看作是对数百万个``（A, B）是否匹配？''的决策进行评估。
+
+例如，在蛋白质和功能的配对任务中，它将所有蛋白质的所有可能功能预测``摊平''在一起，然后计算一个总的精确率-召回率曲线下面积。它回答的问题是：``在模型做出的所有功能分配决策中，其整体表现如何？''在这种计算方式下，那些常见的（即在很多蛋白质上都出现的）功能会对AUPR总分产生更大的影响。
+
+\hypertarget{f-max-maximum-f-score}{%
+\subsubsection{2. F-max (Maximum F-score)}\label{f-max-maximum-f-score}}
+
+\(F_{\max}\) 是``以配对对象为中心''的。
+
+以蛋白质和功能的配对为例。对于每一对配对，模型的输出是 0 到 1 之间的概率，需要一个``阈值''（比如 0.5）来决定是否分配该功能。
+
+（1）第一步：先评估模型在每一个蛋白质上，对于给定阈值 \(t\)，即精确率（Precision）和召回率（Recall）的调和平均数 \(F\)-measure（\(F\)-score）。
+
+思考：为什么用调和平均？因为调和平均数能够更严厉地惩罚``极端短板''。只有当精确率和召回率都高时，调和平均数才会给出一个高分。如果两者中任何一个表现很差，调和平均数会给出一个远低于算术平均数的分数。在分类任务中（尤其是像蛋白质功能标注这样的不平衡任务），我们非常不希望模型``偏科''，假设一个模型 A 在某个阈值 \(t\) 下，精确率 \(P=1.0\)（``宁缺毋滥''，预测的全都对），召回率 \(R=0.01\)（``漏掉了''\(99\%\) 的目标），这个模型在实际中几乎是无用的，因为它什么都找不到。
+
+（2）第二步：取所有蛋白质的平均 \(F\)-score 值，它是一个关于 \(t\) 的函数。尝试所有可能的阈值 \(t\)，找出那个能让平均 \(F\)-score 达到最高的 \(t\)，然后报告这个``最好情况''下的平均 \(F\)-score，即 \(F_{\max}\)。
+
+在这个任务中，\(F_{\max}\) 回答的问题是：``对于一个普通的蛋白质，我们的模型（在它表现最好的阈值下）能多准确地预测出它的功能列表？''这让我们可以知道在单个蛋白质（无论其功能罕见与否）上的平均表现。
+
+\hypertarget{ux4e8cux8005ux7684ux7ed3ux5408}{%
+\subsubsection{3. 二者的结合}\label{ux4e8cux8005ux7684ux7ed3ux5408}}
+
+一个好的模型需要在这两个方面都表现出色。例如，一个模型可能在 \(F_{\max}\) 上很高（对每个蛋白质都能平均猜对几个功能），但在 AUPR 上很低（因为它在所有常见功能上都犯了很多小错误），这样的模型就不够好。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-31}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-31}}
+
+\begin{itemize}
+\tightlist
+\item
+  Davis, J., \& Goadrich, M. (2006). \href{https://doi.org/10.1145/1143844.1143874}{The Relationship Between Precision-Recall and ROC Curves}. ICML 2006.
+\item
+  Radivojac, P., Clark, W. T., Oron, T. R., et al.~(2013). \href{https://www.nature.com/articles/nmeth.2340}{A large-scale evaluation of computational protein function prediction}. Nature Methods.
+\end{itemize}
+
+\clearpage

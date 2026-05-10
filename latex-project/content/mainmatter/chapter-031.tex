@@ -1,0 +1,691 @@
+\hypertarget{ux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux6a21ux578bux7684ux5f3aux5316ux5b66ux4e60}{%
+\chapter{扩散模型与流匹配模型的强化学习}\label{ux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux6a21ux578bux7684ux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux6a21ux578bux4e2dux5f3aux5316ux5b66ux4e60ux7684ux96beux70b9}{%
+\section{扩散模型与流匹配模型中强化学习的难点}\label{ux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux6a21ux578bux4e2dux5f3aux5316ux5b66ux4e60ux7684ux96beux70b9}}
+
+\hypertarget{ux4e00ux9a6cux5c14ux53efux592bux8fc7ux7a0bux7684ux53d8ux5316}{%
+\subsection{一、马尔可夫过程的变化}\label{ux4e00ux9a6cux5c14ux53efux592bux8fc7ux7a0bux7684ux53d8ux5316}}
+
+在扩散模型和流匹配模型下，马尔可夫过程的形式和纯自回归的LLM有所不同。以流匹配为例：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{状态 \(x_t\)}：当前时间步的连续图像或潜变量。
+\item
+  \textbf{动作 \(v_t\)}：模型输出的连续向量场（一个方向）。
+\item
+  \textbf{环境转移}：确定性的数值积分，例如欧拉法 \(x_{t+\Delta t} = x_t + v_t \Delta t\)。
+\item
+  \textbf{奖励}：只有积分到 \(t = 1\) 得到最终图像 \(x_1\) 后，才能获得美学评分或对齐评分 \(R(x_1)\)。
+  从x\_0到x\_1的过程，实质上是v\_t关于t从0到1积分，这里v\_t是一个连续函数，事实上一般是采样几十步，每次沿该时间步的速度走一小步。
+\end{enumerate}
+
+\hypertarget{ux4e8cux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux4e2drlux7684ux5171ux540cux56f0ux5883}{%
+\subsection{二、扩散模型与流匹配中RL的共同困境}\label{ux4e8cux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux4e2drlux7684ux5171ux540cux56f0ux5883}}
+
+无论是通过随机微分方程（SDE）去噪的扩散模型，还是通过常微分方程（ODE）积分的流匹配，它们在微调时都面临生成过程长、动作空间维度极高的宏观挑战。
+
+\textbf{1. 稀疏奖励下的长轨迹信度分配难题（Credit Assignment over Long Trajectories）}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{原理一致性}：DM 和 FM 生成一张最终图像 \(x_0\) 均需要数十步的逐步迭代。无论是预测噪声 \(\epsilon_\theta\)，还是向量场 \(v_\theta\)，这都是一个序列决策过程。
+\item
+  \textbf{困境所在}：RL 的奖励信号（如美学评分、人类偏好对齐评分 \(R(x_0)\)）极其稀疏，只能在生成过程结束、得到最终完整图像后才能获取。由于中间没有任何即时奖励（Dense Reward），一旦最终图像评分很低，RL 算法很难精确清楚到底是哪一步（比如是 \(t = 0.9\) 的大轮廓生成阶段，还是 \(t = 0.1\) 的细节纹理阶段）的神经网络输出出现了失误。
+\item
+  \textbf{后果}：传统的优势函数估计（如 GAE）在这种长链条的 ODE/SDE 求解器中难以向回精准传播奖励梯度，导致优化极其低效，甚至出现错误的信用归因。
+  尤其是价值网络训练极易崩溃，这也就是基于GRPO的算法更常用的原因。
+\end{itemize}
+
+\textbf{2. 超高维连续动作空间的探索危机（Exploration in High-Dimensional Continuous Space）}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{原理一致性}：在大语言模型（LLM）的 RLHF 中，动作空间是离散词表（通过调整 logits 的概率即可轻松探索）。而在 DM 和 FM 中，模型的``动作''是输出与图像分辨率同等大小的连续张量，例如 \(1024 \times 1024 \times 3\) 的潜变量。
+\item
+  \textbf{困境所在}：要在如此庞大的连续高维空间中进行有效的随机探索（Exploration），无异于大海捞针。如果在每一步预测的向量场或噪声上盲目叠加高斯探索噪声，极易导致整个微分方程的积分轨迹出现级联误差（Cascading Errors），使最终生成的图像彻底崩溃成无意义的噪点。
+\item
+  \textbf{后果}：为了保证生成轨迹不崩溃，研究者只能将探索噪声的方差设置得极小，但这又会导致模型缺乏探索能力，迅速陷入局部最优。这也是 DM+RL 极易引发模式崩溃（Mode Collapse）、丧失生成多样性的底层原因。
+\end{itemize}
+
+\hypertarget{ux4e09ux6d41ux5339ux914dux4e2drlux7684ux7279ux6b8aux96beux70b9}{%
+\subsection{三、流匹配中RL的特殊难点}\label{ux4e09ux6d41ux5339ux914dux4e2drlux7684ux7279ux6b8aux96beux70b9}}
+
+虽然 FM 在很多方面比 DM 更简洁高效，但在与 RL 结合上，它受限于自身的底层数学假设，面临着比扩散模型更棘手的独有理论困局。
+
+\textbf{1. 破坏最优传输的``直线特性''与流形脱离（Breaking Optimal Transport Straight Lines）}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{困境所在}：流匹配（尤其是目前主流的 OT-FM）在预训练时的最大卖点，是通过最优传输（Optimal Transport）强制对齐纯噪声 \(x_1\) 和真实图像 \(x_0\)，构造了一条极其简单的零曲率直线轨迹：
+\end{itemize}
+
+\[
+x_t = tx_1 + (1 - t)x_0
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{直线破裂}：预训练的 FM 是一个完美遵循这条直线的拟合器。当引入 RL 时，RL 策略梯度的唯一目标是``最大化最终图像的奖励''。为了迎合奖励，RL 会强行修改中间时间步的 \(v_t\)，这就不可避免地将 ODE 轨迹``拽离''原本的最优传输直线。
+\item
+  \textbf{后果}：扩散模型原本的轨迹就是弯曲的高曲率布朗运动，所以稍微拽偏一点尚能承受。但对于 FM 而言，一旦轨迹脱离直线，不仅会产生图中所说的``偏离流形、产生无意义图像''的现象，更致命的是，轨迹曲率的激增会导致 ODE 求解器的截断误差（Truncation Error）爆炸。原本 FM 只需要 \(4\) 步积分就能出图，被 RL 扭曲后，必须增加到几十甚至上百步才能维持图像质量，直接粉碎了 FM 最大的``少步数采样优势''。
+\end{itemize}
+
+\textbf{2. 确定性 ODE 带来的``似然度计算死锁''（Likelihood Degeneration）}
+当然需要注意的是，流匹配模型在给定输入的情况下输出是固定的，不代表其输出不存在概率分布：
+
+在流匹配中，我们常说的``去噪过程是固定的''，指的是给定一个具体的初始噪声 \(z\) 后，它演化到目标数据 \(x_1\) 的路径（Trajectory）是唯一且确定的（因为我们求解的是常微分方程 ODE，而非随机微分方程 SDE）。
+
+但是，模型具有分布，是因为我们的输入源头是一个分布。这在数学上被称为前推测度（Push-forward Measure）。想象你手里有一把沙子（标准高斯分布的噪声 \(z \sim \mathcal{N}(0, I)\)），你将沙子撒在一个特定风向（向量场 \(v_t(x)\)）的传送带上。虽然每一粒沙子被风吹动的轨迹是完全确定的，但因为一开始沙子落在各个位置的概率不同（高斯分布的密度不同），当它们最终被吹到终点时，就会自然聚拢成一个新的形状，即模型生成的数据分布 \(p_1(x)\)。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-164}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-164}}
+
+\begin{itemize}
+\tightlist
+\item
+  Black, K., Janner, M., Du, Y., Kostrikov, I., \& Levine, S. (2023). \href{https://arxiv.org/abs/2305.13301}{Training Diffusion Models with Reinforcement Learning}. arXiv:2305.13301.
+\item
+  Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., \& Le, M. (2023). \href{https://arxiv.org/abs/2210.02747}{Flow Matching for Generative Modeling}. ICLR.
+\item
+  Wallace, B., Gokul, A., Ermon, S., \& Naik, N. (2024). \href{https://arxiv.org/abs/2311.12908}{Diffusion Model Alignment Using Direct Preference Optimization}. CVPR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{offline-rlux8f6cux5316ux4e3aux52a0ux6743ux76d1ux7763ux5b66ux4e60ux8bbaux6587}{%
+\section{Offline RL转化为加权监督学习（论文）}\label{offline-rlux8f6cux5316ux4e3aux52a0ux6743ux76d1ux7763ux5b66ux4e60ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00rlvrux8f6cux5316ux4e3aux903cux8fd1ux6700ux4f18ux7b56ux7565ux7684ux52a0ux6743ux76d1ux7763ux5b66ux4e60}{%
+\subsection{一、RLVR转化为逼近最优策略的加权监督学习}\label{ux4e00rlvrux8f6cux5316ux4e3aux903cux8fd1ux6700ux4f18ux7b56ux7565ux7684ux52a0ux6743ux76d1ux7763ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-18}{%
+\subsubsection{（一）核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-18}}
+
+该方法的核心思想是 \textbf{``避开在线探索的难题，将 RL 转化为加权的监督学习''}。
+
+\begin{itemize}
+\tightlist
+\item
+  它首先定义了一个代理散度 \(D_{\mathrm{FM}}\)，试图让当前模型 \(\pi_\theta\) 在流匹配损失空间内逼近理论最优策略 \(\pi^{*}\)。
+\item
+  由于无法直接从 \(\pi^{*}\) 采样，它利用重要性采样（Importance Sampling），引入静态离线数据集 \(D\)，并赋予权重 \(w(o, a) \propto \exp(A / \beta)\)，即优势 \(A\) 越大的动作，权重越高。
+\item
+  点睛之笔在于最后的``极端设定''：通过让折扣因子 \(\gamma \to 1\) 并给予极端负奖励，优势函数被极化，权重 \(w(o, a)\) 变成了二值 \(\{0, 1\}\)。这在数学上等价于直接丢弃所有``失败''的轨迹，只保留``成功''的轨迹进行监督学习。
+\end{itemize}
+
+\hypertarget{ux4e8cux6570ux5b66ux8868ux8fbe-3}{%
+\subsubsection{（二）数学表达}\label{ux4e8cux6570ux5b66ux8868ux8fbe-3}}
+
+在标准的正则化强化学习框架下，我们的目标是在最大化奖励的同时，约束新策略 \(\pi_\theta\) 不要偏离参考策略 \(\pi_{\mathrm{ref}}\) 太远。其目标函数定义为：
+
+\[
+\begin{aligned}
+J(\theta)
+&= \mathbb{E}_{\tau \sim p_\theta}
+\left[
+R(\tau)
+- \beta \mathbb{E}_{o \sim p_\theta}
+\left[D(\pi_\theta(\cdot \mid o) \Vert \pi_{\mathrm{ref}}(\cdot \mid o))\right]
+\right]
+\end{aligned}
+\]
+
+根据数学推导，这个目标函数存在一个理论上的最优策略闭式解 \(\pi^{*}\)：
+
+\[
+\begin{aligned}
+\pi^{*}(a \mid o)
+&\propto
+\pi_{\mathrm{ref}}(a \mid o)
+\exp\left(\frac{A^{\pi_{\mathrm{ref}}}(o, a)}{\beta}\right)
+\end{aligned}
+\]
+
+这意味着，最优策略倾向于在参考策略的基础上，给予那些具有高优势函数（Advantage Function，\(A > 0\)）的动作更高的概率。
+
+因为这个理论最优策略 \(\pi^{*}\) 通常极其复杂，无法直接用一个有限参数的神经网络表示，所以我们需要进行策略投影（Policy Projection）：即找一个参数化的策略 \(\pi_\theta\)，让它尽可能地去拟合 \(\pi^{*}\)。
+
+在传统的优势加权回归（AWR）算法中，拟合的手段是最小化 \(\pi^{*}\) 和 \(\pi_\theta\) 之间的 KL 散度：
+
+\[
+\begin{aligned}
+\theta^{*}
+&= \arg\min_\theta
+\mathbb{E}_{o \sim D}
+\left[
+D_{\mathrm{KL}}(\pi^{*}(\cdot \mid o) \Vert \pi_\theta(\cdot \mid o))
+\right]
+\end{aligned}
+\]
+
+展开 KL 散度后，这等价于最大化加权对数似然（Weighted Log-likelihood）：
+
+\[
+\mathbb{E}\left[w(o, a)\log \pi_\theta(a \mid o)\right]
+\]
+
+\textbf{问题就在这里}：我们的 VLA 模型是用流匹配目标 \(\mathcal{L}_{\mathrm{FM}}\) 训练的，它根本算不出确切的 \(\log \pi_\theta(a \mid o)\)。这条传统路线走不通。
+替代散度法：
+
+\[
+\begin{aligned}
+D_{\mathrm{FM}}(\pi^{*}(\cdot \mid o), \pi_\theta(\cdot \mid o))
+&\triangleq
+\mathbb{E}_{a \sim \pi^{*}(\cdot \mid o)}
+\left[\mathcal{L}_{\mathrm{FM}}(\theta; o, a)\right]
+\end{aligned}
+\]
+
+通俗解释：这个公式的物理意义是，``假设我现在能从理论最优策略 \(\pi^{*}\) 中抽取出完美的动作样本 \(a\)，那么我就用模型自带的流匹配损失函数 \(\mathcal{L}_{\mathrm{FM}}\)，强迫我的神经网络 \(\pi_\theta\) 去学习、生成这些完美的动作。''
+
+这就巧妙地避开了计算概率分布的要求，直接在流匹配的损失空间里衡量两个策略的``距离''。
+
+有了新的散度 \(D_{\mathrm{FM}}\)，策略投影步骤就变成了：
+
+\[
+\begin{aligned}
+\theta^{*}
+&= \arg\min_\theta
+\mathbb{E}_{o \sim D}
+\mathbb{E}_{a \sim \pi^{*}(\cdot \mid o)}
+\left[
+\mathcal{L}_{\mathrm{FM}}(\theta; o, a)
+\right]
+\end{aligned}
+\]
+
+但我们在现实中显然无法真的从未知的理论最优策略 \(\pi^{*}\) 中采样。因此，论文采用了离线强化学习中标准的``重要性采样（Importance Sampling）''技巧：我们用手头收集到的固定数据集 \(D\) 中的样本来代替 \(\pi^{*}\) 中的样本，并给这些样本乘以一个权重 \(w(o, a)\)，权重正比于指数化的优势函数 \(\exp(A / \beta)\)。
+
+推导到这一步，目标函数变为了：
+
+\[
+\begin{aligned}
+\theta^{*}
+&\approx \arg\min_\theta
+\mathbb{E}_{(o,a) \sim D}
+\left[
+w(o, a)\,\mathcal{L}_{\mathrm{FM}}(\theta; o, a)
+\right]
+\end{aligned}
+\]
+
+最后，为了极致地简化和易于扩展，论文做了一个极端设定：将折扣因子 \(\gamma\) 设为接近 \(1\)，并给失败的轨迹分配极大的负奖励。这导致权重 \(w(o, a)\) 退化成了二值权重（成功的动作权重为 \(1\)，失败的为 \(0\)）。这就是论文中方程（4）最终用于策略微调的监督学习目标函数的由来。
+
+\hypertarget{ux4e8cdpo-for-diffusion}{%
+\subsection{二、DPO for Diffusion}\label{ux4e8cdpo-for-diffusion}}
+
+\hypertarget{ux4e00ux6570ux5b66ux8868ux8fbe}{%
+\subsubsection{（一）数学表达}\label{ux4e00ux6570ux5b66ux8868ux8fbe}}
+
+第一步：RLHF 目标的重参数化
+
+在标准的带 KL 惩罚的 RL 框架下，我们希望微调一个策略（扩散模型）\(p_\theta(x\mid c)\)，使其在给定条件 prompt \(c\) 时，生成的图像 \(x\) 能最大化隐含的奖励 \(r(x,c)\)，同时不能偏离预训练的参考模型 \(p_{\mathrm{ref}}(x\mid c)\) 太远：
+
+\[
+\begin{aligned}
+\max_\theta\ \mathbb{E}_{x\sim p_\theta}\left[r(x,c)\right]
+&\quad-\beta D_{\mathrm{KL}}\left(p_\theta(x\mid c)\Vert p_{\mathrm{ref}}(x\mid c)\right)
+\end{aligned}
+\]
+
+其中 \(\beta\) 是控制偏离程度的超参数。这个优化问题存在一个理论上的闭式最优解（Optimal Policy）：
+
+\[
+p^{*}(x\mid c)=\frac{1}{Z}p_{\mathrm{ref}}(x\mid c)\exp\left(\frac{1}{\beta}r(x,c)\right)
+\]
+
+其中 \(Z\) 是配分函数。DPO 的核心做法在于对上式进行移项，反解出奖励函数 \(r(x,c)\)：
+
+\[
+r(x,c)=\beta\log\frac{p^{*}(x\mid c)}{p_{\mathrm{ref}}(x\mid c)}+\beta\log Z
+\]
+
+第二步：代入 Bradley-Terry 偏好模型
+
+在偏好学习中，我们通常假设人类偏好服从 Bradley-Terry（BT）模型。即对于给定的 prompt \(c\)，人类认为图像 \(x_w\)（winner，获胜者）比 \(x_l\)（loser，失败者）更好的概率为：
+
+\[
+p(x_w\succ x_l\mid c)=\sigma\left(r(x_w,c)-r(x_l,c)\right)
+\]
+
+其中 \(\sigma\) 是 Sigmoid 函数。将第一步反解出的 \(r(x,c)\) 代入 BT 模型中，由于是计算差值，常数项 \(\beta\log Z\) 被消去：
+
+\[
+\begin{aligned}
+p(x_w\succ x_l\mid c)
+&=\sigma\left(
+\beta\log\frac{p_\theta(x_w\mid c)}{p_{\mathrm{ref}}(x_w\mid c)}
+-\beta\log\frac{p_\theta(x_l\mid c)}{p_{\mathrm{ref}}(x_l\mid c)}
+\right)
+\end{aligned}
+\]
+
+这就是大语言模型中标准 DPO 的目标函数。但扩散模型会遇到一个关键问题：扩散模型的精确对数似然 \(\log p_\theta(x\mid c)\) 在数学上很难计算。
+
+第三步：扩散模型的 ELBO 替换
+
+Diffusion-DPO 的最大贡献，就是用证据下界（ELBO，Evidence Lower Bound）来近似这个难以计算的对数似然。在扩散模型中，极大化对数似然等价于极小化去噪预测误差（MSE 损失）。令 \(\mathcal{L}_\theta(x,c,t)\) 为模型在时间步 \(t\) 的去噪损失（以预测噪声 \(\epsilon\) 为例）：
+
+\[
+\begin{aligned}
+\mathcal{L}_\theta(x,c,t)
+&=\left\lVert \epsilon_\theta(x_t,c,t)-\epsilon\right\rVert_2^2
+\end{aligned}
+\]
+
+因为似然与去噪损失成负相关，我们可以做如下近似：
+
+\[
+\begin{aligned}
+\log p_\theta(x\mid c)
+&\approx -\mathbb{E}_{t,\epsilon}\left[\mathcal{L}_\theta(x,c,t)\right]+C
+\end{aligned}
+\]
+
+因此，对数似然的比值可以替换为去噪损失的差值：
+
+\[
+\begin{aligned}
+\log\frac{p_\theta(x\mid c)}{p_{\mathrm{ref}}(x\mid c)}
+&\approx
+\mathbb{E}_{t,\epsilon}
+\left[
+\mathcal{L}_{\mathrm{ref}}(x,c,t)-\mathcal{L}_\theta(x,c,t)
+\right]
+\end{aligned}
+\]
+
+这个公式的物理直觉非常清晰：如果参考模型和当前模型在``好图'' \(x_w\) 上的损失差，大于它们在``坏图'' \(x_l\) 上的损失差，我们就施加奖励；反之则施加惩罚。
+
+在流匹配中同理：
+
+在流匹配中，对数似然依然难以精确计算，但我们可以用向量场拟合的 MSE 损失来替代扩散模型中的噪声预测损失。只需将公式中的 \(\mathcal{L}_\theta\) 替换为我们在 DMD 中讨论过的流匹配目标：
+
+\[
+\begin{aligned}
+\mathcal{L}^{\mathrm{FM}}_\theta(x,c,t)
+&=\left\lVert v_\theta(x_t,c,t)-(x_1-x_0)\right\rVert_2^2
+\end{aligned}
+\]
+
+只要将这个向量场误差代入 Diffusion-DPO 的框架中（近期文献中称为 Flow-DPO），就可以利用离线偏好对来直接微调流匹配模型，而不需要涉及在线 RL 求解 ODE 的复杂过程。
+
+\hypertarget{ux4e8cux5de5ux4f5cux6d41-5}{%
+\subsubsection{（二）工作流}\label{ux4e8cux5de5ux4f5cux6d41-5}}
+
+阶段 1：数据准备
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  构建或收集一个静态离线偏好数据集 \(\mathcal{D}\)。数据集中包含大量的元组 \((c,x_w,x_l)\)，即``文本提示词''、``人类或 AI 偏好的好图''、``人类或 AI 淘汰的坏图''。
+\item
+  准备预训练好的基础扩散模型作为参考模型 \(\theta_{\mathrm{ref}}\)，并将其权重冻结。
+\item
+  初始化一个架构完全相同的策略模型 \(\theta\)，即要训练的模型，通常从 \(\theta_{\mathrm{ref}}\) 初始化。
+\end{enumerate}
+
+阶段 2：训练循环（Batch 级别）
+
+对于每一个训练 step，执行以下操作：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  采样与加噪：从数据集中采样一个 batch 的 \((c,x_w,x_l)\)。随机采样时间步 \(t\sim\mathcal{U}(0,T)\)，并采样高斯噪声 \(\epsilon\sim\mathcal{N}(0,I)\)。
+\item
+  构建中间状态：利用前向扩散过程的公式，分别给好图和坏图加噪到时间步 \(t\)：
+\end{enumerate}
+
+\[
+\begin{aligned}
+x_{w,t} &= \sqrt{\bar{\alpha}_t}x_w+\sqrt{1-\bar{\alpha}_t}\epsilon,\\
+x_{l,t} &= \sqrt{\bar{\alpha}_t}x_l+\sqrt{1-\bar{\alpha}_t}\epsilon.
+\end{aligned}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  计算参考模型的误差（No Gradient）：将加噪后的好图、坏图连同 \(t\) 和 \(c\) 输入冻结的参考模型 \(\theta_{\mathrm{ref}}\)，计算它们预测噪声与真实噪声 \(\epsilon\) 的均方误差：\(\mathcal{L}_{\mathrm{ref}}(x_w)\) 和 \(\mathcal{L}_{\mathrm{ref}}(x_l)\)。
+\item
+  计算策略模型的误差（With Gradient）：将同样的数据输入正在训练的策略模型 \(\theta\)，计算其预测误差：\(\mathcal{L}_\theta(x_w)\) 和 \(\mathcal{L}_\theta(x_l)\)。
+\item
+  反向传播更新：将上述四个误差标量代入 \(\mathcal{L}_{\mathrm{DPO}\text{-}\mathrm{Diff}}(\theta)\) 公式中。通过深度学习框架（如 PyTorch）的自动求导机制计算关于 \(\theta\) 的梯度，并使用优化器（如 AdamW）更新模型权重。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-165}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-165}}
+
+\begin{itemize}
+\tightlist
+\item
+  Peters, J., \& Schaal, S. (2007). \href{https://dl.acm.org/doi/10.1145/1273496.1273590}{Reinforcement Learning by Reward-Weighted Regression for Operational Space Control}. ICML.
+\item
+  Peng, X. B., Kumar, A., Zhang, G., \& Levine, S. (2019). \href{https://arxiv.org/abs/1910.00177}{Advantage-Weighted Regression: Simple and Scalable Off-Policy Reinforcement Learning}. arXiv:1910.00177.
+\item
+  Nair, A., Dalal, M., Gupta, A., \& Levine, S. (2020). \href{https://arxiv.org/abs/2006.09359}{Accelerating Online Reinforcement Learning with Offline Datasets}. arXiv:2006.09359.
+\item
+  Wallace, B., Gokul, A., Ermon, S., \& Naik, N. (2024). \href{https://arxiv.org/abs/2311.12908}{Diffusion Model Alignment Using Direct Preference Optimization}. CVPR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6bcfux6b65ux5f15ux5165ux53efux5b66ux4e60ux566aux58f0ux7684online-rlux8bbaux6587}{%
+\section{每步引入可学习噪声的Online RL（论文）}\label{ux6bcfux6b65ux5f15ux5165ux53efux5b66ux4e60ux566aux58f0ux7684online-rlux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+Flow-Noise等方法在原有流匹配模型的基础上引入可学习的噪声网络，将去噪过程重塑为离散时间的MDP，从而可用传统RL算法，既解决了流匹配缺失随机性、无法计算动作概率似然的问题，又通过可学习、有方向的探索解决了高维空间盲目探索往往失败的问题。
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-19}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-19}}
+
+传统的流匹配是在连续时间内求解常微分方程（ODE），缺乏随机性，难以像 PPO 那样进行对数似然（log-likelihood）的计算和在线试错探索。Flow-Noise 的创新在于，它在原本确定性的去噪路径中，主动注入了一个可学习的噪声网络，将去噪过程强行重塑为一个离散时间的马尔可夫决策过程（Discrete-time MDP）。这使得模型在每一步生成时既有探索能力，又能获得精确的动作对数似然估算，从而适配传统的 Actor-Critic 在线 RL 算法。
+
+\hypertarget{ux4e8cux7b97ux6cd5ux539fux7406}{%
+\subsection{二、算法原理}\label{ux4e8cux7b97ux6cd5ux539fux7406}}
+
+它放弃了纯确定性的 ODE 采样，而是引入了一个可学习的噪声网络（Learnable Noise Network），将原本连续的去噪轨迹离散化为若干步（步长为 \(\delta\)），并在每一步中注入受控的随机性。
+
+在该内部去噪 MDP 中：
+
+\begin{itemize}
+\tightlist
+\item
+  状态空间（State）：在去噪时间步 \(\tau\)，内部状态定义为当前环境观测与当前隐变量的组合：
+\end{itemize}
+
+\[
+\bar{s}_t^\tau=(\mathbf{o}_t,\mathbf{A}_t^\tau)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  动作空间（Action）：内部的``动作''即为流模型生成的下一个离散时间步的隐状态（当 \(\tau<1\) 时）或最终在环境中执行的物理动作（当 \(\tau=1\) 时）：
+\end{itemize}
+
+\[
+\bar{a}_t^\tau=
+\begin{cases}
+\mathbf{A}_t^{\tau+\delta}, & \tau<1,\\
+\mathbf{A}_t^1, & \tau=1.
+\end{cases}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  随机转移与可学习噪声：从 \(\mathbf{A}_t^\tau\) 到 \(\mathbf{A}_t^{\tau+\delta}\) 的转移被建模为高斯分布：
+\end{itemize}
+
+\[
+\mathbf{A}_t^{\tau+\delta}=\mu_\tau+\sigma_\tau\delta\cdot\epsilon
+\]
+
+其中，\(\epsilon\sim\mathcal{N}(0,I)\) 是注入的标准高斯噪声，\(\mu_\tau\) 由流匹配网络 \(v_\theta\) 预测出的均值方向决定，\(\sigma_\tau\) 则是由可学习的噪声网络输出的标准差。
+
+可学习噪声网络的关键作用包括：
+
+\begin{itemize}
+\tightlist
+\item
+  自适应探索：在生成轨迹的安全区域（例如刚开始去噪、只有大轮廓时），网络会输出较大的方差以鼓励广泛探索；当进入对噪声极其敏感的高频细节生成区域时，会自动收敛输出极小的方差，甚至趋近于 0。
+\item
+  维度解耦：网络可以学习到在不重要的背景特征维度上加大探索，而在关键的语义维度上保持克制，从而避开高维空间中的级联崩溃。
+\end{itemize}
+
+由于每一步 \(\tau\rightarrow\tau+\delta\) 都服从已知的高斯分布，整个去噪轨迹的联合概率密度就可以被精确分解并计算。给定一条从 \(\tau=0\) 到 \(\tau=1\) 的离散去噪轨迹，其总动作对数似然为每一步转移概率对数的累加：
+
+\[
+\begin{aligned}
+\log \pi_\theta(\mathbf{a}_t \mid \mathbf{o}_t)
+&=
+\sum_{\tau=0}^{1-\delta}
+\log p_\theta(\mathbf{A}_t^{\tau+\delta}\mid \mathbf{A}_t^\tau,\mathbf{o}_t)
+\end{aligned}
+\]
+
+因为 \(p_\theta\) 是由参数化的高斯分布构成，上式变得完全可计算，从而可以直接用于 PPO 等基于策略梯度的 RL 算法的目标函数中。
+
+\hypertarget{ux4e09ux5de5ux4f5cux6d41-1}{%
+\subsection{三、工作流}\label{ux4e09ux5de5ux4f5cux6d41-1}}
+
+步骤 1：环境交互与初始化（外部循环起点）
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  智能体从仿真环境或现实世界获取当前时间步的观测状态，如摄像头图像、本体感受数据等。
+\item
+  在模型内部，初始化流匹配的起点，采样纯高斯噪声 \(\mathbf{A}_t^0\sim\mathcal{N}(0,I)\)。
+\end{enumerate}
+
+步骤 2：离散化去噪过程（内部 MDP 循环）
+
+开启一个从 \(\tau=0\) 到 \(\tau=1\)（步长为 \(\delta\)）的离散去噪循环。对于每一步 \(\tau\)：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  构建内部状态：组合观测与隐变量得到 \(\bar{s}_t^\tau\)。
+\item
+  网络推理：将 \(\bar{s}_t^\tau\) 输入 VLA 骨干网络（如 Transformer），预测出当前的速度场，进而计算出期望去噪方向。
+\item
+  噪声评估：辅助的可学习噪声网络根据当前状态输出标准差 \(\sigma_\tau\)。
+\item
+  采样与记录：采样随机噪声 \(\epsilon\)，计算下一步隐变量 \(\mathbf{A}_t^{\tau+\delta}\)。同时，将该步的对数似然记录到缓存中：
+\end{enumerate}
+
+\[
+\log p_\theta\left(\mathbf{A}_t^{\tau+\delta}\mid \mathbf{A}_t^\tau,\mathbf{o}_t\right)
+\]
+
+步骤 3：动作执行与奖励获取（外部循环终点）
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  当内部去噪循环到达 \(\tau=1\) 时，得到无噪声的确定性物理动作 \(\mathbf{a}_t=\mathbf{A}_t^1\)。
+\item
+  将动作 \(a_t\) 下发给环境执行。
+\item
+  观测状态更新，并返回单步奖励，例如在抓取任务成功时返回稀疏的 \(+1\) 奖励。
+\end{enumerate}
+
+步骤 4：强化学习策略更新（RL 反向传播）
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  收集到一个或多个 Episode 的完整轨迹后，计算累计优势函数（Advantage）。
+\item
+  提取出步骤 2 中精确计算的联合对数似然总和 \(\sum_{\tau}\log p_\theta\)。
+\item
+  应用 PPO 算法的截断代理目标函数（Surrogate Objective）计算策略梯度。
+\item
+  更新 VLA 模型网络参数 \(\theta\) 以及噪声网络参数，使得在相似观测下，能获取高环境奖励的去噪轨迹生成概率最大化。
+\end{enumerate}
+
+\hypertarget{ux56dbux8be5ux65b9ux6cd5ux5982ux4f55ux89e3ux51b3ux6d41ux5339ux914drlux8131ux79bbux6700ux4f18ux4f20ux8f93ux540eux6b65ux6570ux6fc0ux589eux7684ux95eeux9898}{%
+\subsection{四、该方法如何解决流匹配RL``脱离最优传输后步数激增''的问题}\label{ux56dbux8be5ux65b9ux6cd5ux5982ux4f55ux89e3ux51b3ux6d41ux5339ux914drlux8131ux79bbux6700ux4f18ux4f20ux8f93ux540eux6b65ux6570ux6fc0ux589eux7684ux95eeux9898}}
+
+在传统的流匹配中，轨迹变弯曲会导致 ODE 求解器（如欧拉法、RK4）在积分时产生巨大的截断误差，从而必须将步长 \(\Delta t\) 切得极小（即 NFE 激增）。Flow-Noise 从根本上绕开了 ODE 求解器。它将整个生成过程重构成了一个离散时间的 MDP。环境的转移函数被强行定义为：
+
+\[
+\mathbf{A}_t^{\tau+\delta}=\bar{a}_t^\tau
+\]
+
+这意味着，模型不是在预测一个连续的``切线方向''，而是直接跳跃到下一个离散状态。RL 算法（如 PPO）优化的是这一个个离散跳跃点的累积奖励。既然根本不用连续微分方程来积分，自然也就无所谓``曲率导致截断误差''的问题，模型依然可以在较少的步数内（例如 10 步 MDP）稳定生成高奖励结果。
+
+这让Flow-Noise看起来很像扩散模型，但同时又具备了流匹配模型自身去噪轨迹接近直线、速度快的优点。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-166}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-166}}
+
+\begin{itemize}
+\tightlist
+\item
+  Chen, K., Liu, Z., Zhang, T., Guo, Z., Xu, S., Lin, H., Zang, H., Li, X., Zhang, Q., Yu, Z., Fan, G., Huang, T., Wang, Y., \& Yu, C. (2025). \href{https://arxiv.org/abs/2510.25889}{π\_RL: Online RL Fine-tuning for Flow-based Vision-Language-Action Models}. arXiv:2510.25889.
+\item
+  Schulman, J., Wolski, F., Dhariwal, P., Radford, A., \& Klimov, O. (2017). \href{https://arxiv.org/abs/1707.06347}{Proximal Policy Optimization Algorithms}. arXiv:1707.06347.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{flowgrpoux5316odeux4e3asdeux8bbaux6587}{%
+\section{FlowGRPO：化ODE为SDE（论文）}\label{flowgrpoux5316odeux4e3asdeux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux4eceodeux5230sdeux7684ux53d8ux6362}{%
+\subsection{一、从ODE到SDE的变换}\label{ux4e00ux4eceodeux5230sdeux7684ux53d8ux6362}}
+
+\begin{itemize}
+\tightlist
+\item
+  背景原理：在标准的流匹配（Flow Matching）或扩散模型中，图像生成被建模为一个确定性的 ODE。这意味着，只要给定一个初始纯噪声，模型去噪生成图像的轨迹就是唯一确定、不可改变的。
+\item
+  RL的困境与解法：强化学习（RL）的本质是探索与利用（Exploration and Exploitation）。如果轨迹是确定的，模型就无法尝试新的生成路径，自然也就无从得知哪种路径能获得更高的奖励。因此，FlowGRPO 将这个确定的 ODE 转化为了 SDE。通过在每一步去噪过程中引入由 \(g(t)\) 控制的随机噪声扰动，算法赋予了模型偏离既定路线去``试错''的能力。有了这种随机探索性，RL 才能发挥作用。
+\end{itemize}
+
+具体来说，FlowGRPO将流匹配中的常微分方程（ODE）：
+
+\[
+dx_t=v_\theta(x_t,t)dt
+\]
+
+转化为了随机微分方程：
+
+\[
+dx_t=\left[v_\theta(x_t,t)+g(t)\nabla\log p_t(x_t)\right]dt+\sqrt{2g(t)}\,dw_t
+\]
+
+仔细观察，可以发现加入的项来自扩散随机加噪的随机梯度朗之万动力学表达式：
+
+\[
+dx_t=\nabla\log p(x_t)dt+\sqrt{2}\,dw_t
+\]
+
+其中第二项为探索噪声，第一项为保证 \(x\) 关于 \(t\) 的边缘分布不变的修正项，避免模型遇到OOD情形。
+
+乘的系数 \(g(t)\) 表示布朗运动的剧烈程度，是一个预定义好的函数。
+
+\hypertarget{ux4e8cux6bd4ux4f8bux5f52ux4e00ux5316ux4e0eux622aux65adux673aux5236ux7684ux4feeux590d}{%
+\subsection{二、比例归一化与截断机制的修复}\label{ux4e8cux6bd4ux4f8bux5f52ux4e00ux5316ux4e0eux622aux65adux673aux5236ux7684ux4feeux590d}}
+
+\begin{itemize}
+\tightlist
+\item
+  背景原理：在 PPO 或 GRPO 等强化学习算法中，为了保证训练的稳定性，必须使用``截断机制''（Clipping）。它通过计算新旧策略的``重要性比值''（Importance Ratio），强制限制模型每次参数更新的幅度，防止模型因为某次偶然的高奖励而彻底破坏原本的生成能力。
+\end{itemize}
+
+在流匹配的 SDE 采样中，每一步的去噪转移概率是一个高斯分布。设定当前步的时间间隔为 \(\Delta t\)，噪声方差为 \(\sigma_{t_k}^2\Delta t\)。新策略（当前正在优化的模型）和旧策略（收集数据时的参考模型）的概率密度函数都可以写成高斯形式。重要性比值定义为新旧策略概率之比 \(r_{t_k}(\theta)\)，取自然对数后为：
+
+\[
+\begin{aligned}
+\log r_{t_k}(\theta)
+&=
+-\frac{1}{2\sigma_{t_k}^2\Delta t}
+\left\|x_{t_k-\Delta t}-\mu_\theta\right\|^2
+\\
+&\quad+
+\frac{1}{2\sigma_{t_k}^2\Delta t}
+\left\|x_{t_k-\Delta t}-\mu_{\theta_{old}}\right\|^2
+\end{aligned}
+\]
+
+关键点来了：在强化学习中，训练数据的轨迹 \(x_{t_k-\Delta t}\) 是由旧策略 \(p_{\theta_{old}}\) 采样生成的。因此它必然满足：
+
+\[
+\begin{aligned}
+x_{t_k-\Delta t}
+&=
+\mu_{\theta_{old}}+\sqrt{\sigma_{t_k}^2\Delta t}\cdot\epsilon
+\end{aligned}
+\]
+
+这里 \(\epsilon\sim\mathcal{N}(0,I)\) 是标准高斯噪声。将这个 \(x_{t_k-\Delta t}\) 代入对数公式，并定义新旧策略的均值差为 \(\Delta\mu=\mu_{\theta_{old}}-\mu_\theta\)，公式展开并化简后得到：
+
+\[
+\begin{aligned}
+\log r_{t_k}(\theta)
+&=
+-\frac{\|\Delta\mu\|^2}{2\sigma_{t_k}^2\Delta t}
+\\
+&\quad-
+\frac{\epsilon^T\Delta\mu}{\sigma_{t_k}\sqrt{\Delta t}}
+\end{aligned}
+\]
+
+对上述公式求高斯噪声 \(\epsilon\) 的数学期望，由于 \(\mathbb{E}[\epsilon]=0\)，第二项被消去：
+
+\[
+\begin{aligned}
+\mathbb{E}_{\epsilon}\left[\log r_{t_k}(\theta)\right]
+&=
+-\frac{\|\Delta\mu\|^2}{2\sigma_{t_k}^2\Delta t}
+\end{aligned}
+\]
+
+因为 \(\|\Delta\mu\|^2>0\)（只要策略更新了，均值就会有差异），所以对数重要性比值的期望严格小于 0。
+
+\begin{itemize}
+\item
+  截断失效的危机：在流匹配模型中，由于概率密度的特性，这个重要性比值的分布会系统性地向左偏移（平均值小于 1），并且在不同的时间步长上表现出极不一致的方差。这导致预设的截断边界（比如 \([1-\epsilon,1+\epsilon]\)）形同虚设，无法有效约束模型那些过于自信的错误更新，进而引发严重的``奖励黑客''（Reward Hacking）现象，即模型钻空子获得高分但生成一堆无意义的乱象。
+\item
+  RatioNorm 的解法：为了修复这个问题，论文引入了 RatioNorm 技术。该技术对数重要性比值进行标准化处理，强行将其分布重新居中到零附近。这样一来，截断边界就能再次精准地``卡''住过大的策略更新，确保了最终导出的图像目标函数 \(\mathcal{J}_{Flow}(\theta)\) 能够平稳收敛。
+\end{itemize}
+
+\[
+\begin{aligned}
+\log \tilde{r}_{t_k}(\theta)
+&=
+\sigma_{t_k}\sqrt{\Delta t}
+\left(
+\log r_{t_k}(\theta)
+\right.
+\\
+&\quad\left.
++\frac{\|\Delta\mu_\theta(x_{t_k},t_k)\|^2}{2\sigma_{t_k}^2\Delta t}
+\right)
+\end{aligned}
+\]
+
+\hypertarget{ux53c2ux8003ux6587ux732e-167}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-167}}
+
+\begin{itemize}
+\tightlist
+\item
+  Liu, J., Liu, G., Liang, J., et al.~(2025). \href{https://arxiv.org/abs/2505.05470}{Flow-GRPO: Training Flow Matching Models via Online RL}. arXiv:2505.05470.
+\item
+  Shao, Z., Wang, P., Zhu, Q., et al.~(2024). \href{https://arxiv.org/abs/2402.03300}{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}. arXiv:2402.03300.
+\end{itemize}
+
+\clearpage

@@ -1,0 +1,869 @@
+\hypertarget{ux6301ux7eedux5f3aux5316ux5b66ux4e60}{%
+\chapter{持续强化学习}\label{ux6301ux7eedux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux57faux4e8eux68afux5ea6ux7684ux5143ux5f3aux5316ux5b66ux4e60}{%
+\section{基于梯度的元强化学习}\label{ux57faux4e8eux68afux5ea6ux7684ux5143ux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux57faux4e8eux68afux5ea6ux7684ux5143ux5f3aux5316ux5b66ux4e60ux4ee5mamlux4e3aux4f8b}{%
+\subsection{一、基于梯度的元强化学习：以MAML为例}\label{ux4e00ux57faux4e8eux68afux5ea6ux7684ux5143ux5f3aux5316ux5b66ux4e60ux4ee5mamlux4e3aux4f8b}}
+
+基于梯度的Meta-RL的核心理念是寻找一组最优的初始网络参数。这组参数本身并不针对任何特定的任务做到最优，但当面临一个新任务时，只需在此参数基础上，利用新任务的少量数据进行一步或几步梯度下降（或上升），就能迅速收敛到该任务的最优解。
+
+\hypertarget{ux4e00mamlux7684ux6838ux5fc3ux67b6ux6784}{%
+\subsubsection{（一）MAML的核心架构}\label{ux4e00mamlux7684ux6838ux5fc3ux67b6ux6784}}
+
+MAML包含两个优化循环：内环（Inner Loop / Adaptation）和外环（Outer Loop / Meta-optimization）。
+
+\textbf{内环（快速适应）}：
+
+对于特定任务 \(T_i\)，智能体使用当前策略 \(\pi_\theta\) 在环境中采样少量轨迹数据（Trajectories），记为 \(D_i = \{(s_t, a_t, r_t, s_{t+1})\}\)。利用这些数据计算任务专属的梯度，并更新出一个临时参数 \(\theta_i'\)（假设只进行一步梯度更新，学习率为 \(\alpha\)）：
+
+\[
+\theta_i' = \theta - \alpha \nabla_\theta \mathcal{L}_{T_i}(\theta)
+\]
+
+在强化学习中，目标是最大化期望回报 \(J(\theta)\)，此时我们使用策略梯度定理，内环更新变为梯度上升：
+
+\[
+\theta_i' = \theta + \alpha \nabla_\theta J_{T_i}(\theta)
+\]
+
+其中 \(J_{T_i}(\theta) = \mathbb{E}_{\tau \sim \pi_\theta}\left[\sum_t \gamma^t r_t\right]\)。
+
+\textbf{外环（元参数更新）}：
+
+MAML 的精髓在于，它的元目标（Meta-objective）并不是优化初始参数 \(\theta\) 在原始任务上的表现，而是优化经过内环更新后的参数 \(\theta_i'\) 在该任务上的表现。这实际上是在优化``适应能力''。
+
+外环的总体目标函数为所有采样任务更新后表现的期望：
+
+\[
+J_{meta}(\theta)
+= \sum_{T_i \sim p(T)} J_{T_i}(\theta_i')
+= \sum_{T_i \sim p(T)} J_{T_i}\left(\theta + \alpha \nabla_\theta J_{T_i}(\theta)\right)
+\]
+
+为了最大化元目标，我们需要对初始参数 \(\theta\) 求导（元梯度学习率为 \(\beta\)）：
+
+\[
+\theta \leftarrow \theta + \beta \nabla_\theta \sum_{T_i \sim p(T)} J_{T_i}(\theta_i')
+\]
+
+应用链式法则，这里的梯度 \(\nabla_\theta J_{T_i}(\theta_i')\) 展开后将包含二阶导数（Hessian 矩阵），因为 \(\theta_i'\) 本身就包含 \(\theta\) 的梯度：
+
+\[
+\nabla_\theta J_{T_i}(\theta_i')
+= \nabla_{\theta_i'} J_{T_i}(\theta_i') \cdot \nabla_\theta \theta_i'
+= \nabla_{\theta_i'} J_{T_i}(\theta_i') \cdot
+\left(I + \alpha \nabla_\theta^2 J_{T_i}(\theta)\right)
+\]
+
+这就是基于梯度的 Meta-RL 能有效学习的关键所在：通过二阶优化计算，外环强迫参数 \(\theta\) 走向那些使得内环梯度更新最有效率的空间。
+
+\hypertarget{ux4e8cmamlux7684ux5de5ux4f5cux6d41}{%
+\subsubsection{（二）MAML的工作流}\label{ux4e8cmamlux7684ux5de5ux4f5cux6d41}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{初始化}：随机初始化策略网络参数 \(\theta\)，设置元批量大小 \(N\)、内环学习率 \(\alpha\)、外环学习率 \(\beta\)。
+\item
+  \textbf{外环循环（Meta-training）}：
+
+  \begin{enumerate}
+  \def\labelenumii{\arabic{enumii}.}
+  \tightlist
+  \item
+    从任务分布 \(p(T)\) 中采样一个批次的任务集合 \(\{T_i\}_{i=1}^N\)。
+  \item
+    对于批次中的每一个任务 \(T_i\)（并行处理）：
+
+    \begin{enumerate}
+    \def\labelenumiii{\arabic{enumiii}.}
+    \tightlist
+    \item
+      \textbf{内环数据收集}：使用当前全局策略 \(\pi_\theta\) 在环境 \(T_i\) 中交互，收集少量轨迹数据 \(D_i\)。
+    \item
+      \textbf{内环参数适应}：使用 \(D_i\) 评估策略梯度 \(\nabla_\theta J_{T_i}(\theta)\)，并计算适应后的特定任务参数 \(\theta_i' = \theta + \alpha \nabla_\theta J_{T_i}(\theta)\)。
+    \item
+      \textbf{验证数据收集}：使用适应后的策略 \(\pi_{\theta_i'}\) 再次在环境 \(T_i\) 中交互，收集验证轨迹数据 \(D_i'\)。
+    \end{enumerate}
+  \item
+    \textbf{外环参数更新}：收集所有任务的验证集 \(D_i'\)，利用它们计算元梯度并更新全局参数：
+  \end{enumerate}
+\end{enumerate}
+
+\[
+\theta \leftarrow \theta + \beta \sum_{i=1}^{N} \nabla_\theta J_{T_i}(\theta_i' \mid D_i')
+\]
+
+\hypertarget{ux4e8cux5982ux4f55ux907fux514dux5728ux663eux5b58ux4e2dux5b9eux4f8bux5316ux4e8cux9636hessianux77e9ux9635}{%
+\subsection{二、如何避免在显存中实例化二阶Hessian矩阵？}\label{ux4e8cux5982ux4f55ux907fux514dux5728ux663eux5b58ux4e2dux5b9eux4f8bux5316ux4e8cux9636hessianux77e9ux9635}}
+
+事实上，元学习的表达式中确实出现了二阶Hessian矩阵：
+
+\[
+\nabla_\theta J_{T_i}(\theta_i')
+= \nabla_{\theta_i'} J_{T_i}(\theta_i') \cdot \nabla_\theta \theta_i'
+= \nabla_{\theta_i'} J_{T_i}(\theta_i') \cdot
+\left(I + \alpha \nabla_\theta^2 J_{T_i}(\theta)\right)
+\]
+
+但它是以和向量乘积的形式存在的，简化为考虑Hessain矩阵H和向量v乘积计算的问题：
+
+\textbf{计算一阶梯度}：首先，对损失函数 \(\mathcal{L}\) 进行一次常规的反向传播，得到一阶梯度向量 \(g\)：
+
+\[
+g = \nabla_\theta \mathcal{L}(\theta)
+\]
+
+此时，显存开销仅为 \(O(N)\)，即存储梯度向量的大小。
+
+\textbf{构造标量点积}：将梯度向量 \(g\) 与目标向量 \(v\) 进行点积计算。因为 \(v\) 是一个与 \(\theta\) 无关的常数向量，这一步会得到一个纯标量 \(S\)：
+
+\[
+S = g^T v
+\]
+
+此时，显存开销为 \(O(1)\)。
+
+\textbf{对标量求一阶导数（梯度的梯度）}：接下来，我们对标量 \(S\) 再次关于参数 \(\theta\) 求梯度。根据微积分求导法则：
+
+\[
+\nabla_\theta S = \nabla_\theta(g^T v) = (\nabla_\theta g)^T v = Hv
+\]
+
+这一步实质上是让框架在第一次反向传播建立的计算图上，再进行一次反向传播（Reverse-over-reverse autodiff）。显存开销依然严格保持在 \(O(N)\)。
+
+这样的计算总开销约等于两次独立的前向+反向传播。
+
+\hypertarget{ux4e09ux6838ux5fc3ux96beux70b9}{%
+\subsection{三、核心难点}\label{ux4e09ux6838ux5fc3ux96beux70b9}}
+
+元强化学习的核心难点在于：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  如果内部梯度下降次数多，反向传播时为了修改元参数，需要沿着时间步回传梯度：
+\end{enumerate}
+
+\[
+W_i = W_{i-1} - \eta \nabla_W l_i(W_{i-1})
+\]
+
+外层循环要计算 \(\nabla_{W_0}\mathcal{L}\)，必须通过链式法则穿过所有时间步（mini-batch）进行反向传播：
+
+\[
+\frac{\partial \mathcal{L}}{\partial W_0}
+= \sum_i \frac{\partial l_i}{\partial W_{i-1}}
+\left(\prod_{j=1}^{i-1} \frac{\partial W_j}{\partial W_{j-1}}\right)
+\]
+
+根据深度学习框架的默认机制，为了在反向传播时能计算上述偏导数，前向传播时必须在显存中保留所有中间时刻的激活状态，容易导致显存溢出。而如果不保存大部分中间权重，则反向传播时需要重新计算，时间消耗大。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  每次运用不能``开箱即用''，而是需要从元参数出发进行若干步微调。由于当前工业界的模型部署高度依赖所有并发请求共享同一套静态的模型权重，这种方式不仅大大增加了首字延迟，还会导致推理阶段需要保存计算图和存储优化器状态，整体计算开销骤增。此外，由于用户的Prompt是不可控的，如果输入包含噪声、对抗性特征或极度模糊的指令，基于伪标签的梯度下降极易将模型推向乱码等输出。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-143}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-143}}
+
+\begin{itemize}
+\tightlist
+\item
+  Finn, C., Abbeel, P., \& Levine, S. (2017). \href{https://arxiv.org/abs/1703.03400}{Model-Agnostic Meta-Learning for Fast Adaptation of Deep Networks}. ICML 2017.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{discorlux5143ux5b66ux4e60ux8bbeux8ba1rlux7b97ux6cd5ux8bbaux6587}{%
+\section{DiscoRL：元学习设计RL算法（论文）}\label{discorlux5143ux5b66ux4e60ux8bbeux8ba1rlux7b97ux6cd5ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6838ux5fc3ux67b6ux6784-6}{%
+\subsection{一、核心架构}\label{ux4e00ux6838ux5fc3ux67b6ux6784-6}}
+
+DiscoRL是一个由机器通过完全自主的元学习（Meta-learning）过程设计强化学习算法的系统，其包括元网络和内层智能体两部分。内层智能体被通过强化学习训练，但其更新规则不再是一个数学上预定义的标量损失函数，而是由一个元网络（Meta-network）决定。该网络的作用是观察内层智能体与环境的交互轨迹，并动态地根据智能体的策略和预测输出，生成智能体参数的更新规则（注意是更新规则，不是要最大化的目标），即为智能体设计强化学习算法。
+
+\hypertarget{ux4e00ux5185ux5c42ux667aux80fdux4f53}{%
+\subsubsection{（一）内层智能体}\label{ux4e00ux5185ux5c42ux667aux80fdux4f53}}
+
+为了提供足够广阔的算法搜索空间，智能体网络除了输出标准动作策略 \(\pi\) 外，还会输出以下几种预测量：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{无预定义语义的预测（元学习探索的核心）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    观察条件预测 \(y(s) \in \mathbb{R}^n\)：仅依赖于当前状态 \(s_o\)。
+  \item
+    动作条件预测 \(z(s,a) \in \mathbb{R}^m\)：依赖于状态 \(s\) 和采取的动作 \(a_o\)。
+  \item
+    注：这两个向量的物理意义完全未被定义，系统在元学习过程中自由探索它们究竟应该代表什么（例如未来可能发生的显著事件）。
+  \end{itemize}
+\item
+  \textbf{具预定义语义的辅助预测}：为了给发现过程提供基础引导，智能体还会输出动作价值函数 \(q(s,a)\) 以及用于预测下一步动作的辅助策略 \(p(s,a)\)。
+\end{itemize}
+
+\hypertarget{ux4e8cux5143ux7f51ux7edc}{%
+\subsubsection{（二）元网络}\label{ux4e8cux5143ux7f51ux7edc}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{时序反向处理}：在时间步 \(t\)，元网络接收智能体从 \(t\) 到 \(t+n\) 步的完整轨迹（包含策略、各项预测，以及环境返回的奖励 \(r\) 和终止标志 \(b\)）。它通过一个沿时间反向展开的长短期记忆网络（LSTM）处理这些输入，利用未来的上下文信息为当前步的策略和预测生成目标向量 \(\hat{\pi}, \hat{y}, \hat{z}\)。这使得元网络天然囊括了时序差分中的多步自举（Bootstrapping）思想。
+\item
+  \textbf{生命周期级别的动态适应（Meta-RNN）}：除了处理单回合的时间序列，元网络还包含一个沿着智能体的``更新步''前向展开的 LSTM（被称为 Meta-RNN）。这使得生成的更新目标能够根据智能体在不同生命周期阶段（如学习初期与收敛期）的动态特征自适应调整。
+\end{itemize}
+
+\hypertarget{ux4e8cux4f18ux5316ux76eeux6807}{%
+\subsection{二、优化目标}\label{ux4e8cux4f18ux5316ux76eeux6807}}
+
+\textbf{步骤 1：智能体优化（Agent Optimization - 内层循环）}
+
+在给定当前元网络规则的情况下，智能体通过最小化自身预测输出与元网络生成目标之间的散度来更新自身参数 \(\theta\)。
+
+其损失函数定义为：
+
+\[
+L(\theta) = \mathbb{E}_{s,a \sim \pi_\theta}
+\left[
+D(\hat{\pi}, \pi_\theta(s)) + D(\hat{y}, y_\theta(s)) + D(\hat{z}, z_\theta(s,a)) + L_{aux}
+\right]
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \(D(\cdot,\cdot)\) 采用 Kullback-Leibler（KL）散度作为距离度量，因为它能在元优化时提供更平滑的梯度。
+\item
+  \(L_{aux}\) 是基于传统预定义语义的辅助损失。动作价值 \(q\) 向 Retrace 算法计算出的目标逼近，辅助策略 \(p\) 则向未来一步的实际策略趋近。
+\end{itemize}
+
+\textbf{步骤 2：元梯度计算与元优化（Meta-Optimization - 外层循环）}
+
+外层循环的目的是寻找最优的元网络参数 \(\eta\)，使得在多种环境分布 \(\mathcal{E}\) 下训练出的智能体能获得最大的累积折扣奖励。
+
+元目标函数为：
+
+\[
+J(\eta)
+= \mathbb{E}_{\mathcal{E}}\mathbb{E}_{\theta}[J(\theta)]
+= \mathbb{E}_{\mathcal{E}}\mathbb{E}_{\theta}
+\left[
+\mathbb{E}\left[\sum_t \gamma^t r_t\right]
+\right]
+\]
+
+根据链式法则，该元梯度被拆解为两项的乘积：
+
+\[
+\nabla_\eta J(\eta) = \nabla_\eta \theta \nabla_\theta J(\theta)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{智能体更新图的雅可比矩阵（\(\nabla_\eta \theta\)）}：这反映了元网络参数的微小变动如何影响智能体更新后的参数。通过在一个由 20 个智能体更新步组成的滑动窗口内进行完全的反向传播（Backpropagation through agent updates）来计算。
+\item
+  \textbf{标准强化学习梯度（\(\nabla_\theta J(\theta)\)）}：这反映了智能体参数变动对最终期望收益的影响。DiscoRL 在此处利用优势演员-评论家（Advantage Actor-Critic）方法，结合一个专门为发现过程训练的\textbf{元价值函数（Meta-value function）}来进行估计。
+\end{itemize}
+
+\hypertarget{ux4e09ux8badux7ec3ux4e2dux7684ux6570ux503cux7a33ux5b9aux5316}{%
+\subsection{三、训练中的数值稳定化}\label{ux4e09ux8badux7ec3ux4e2dux7684ux6570ux503cux7a33ux5b9aux5316}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{独立 Adam 优化与梯度聚合}：在对种群中所有智能体的元梯度求平均之前，系统会先对每个智能体产生的元梯度 \(g_i\) 单独应用一个 Adam 优化器进行处理：\(\eta \leftarrow \eta + \frac{1}{n}\sum_{i=1}^{n}\mathrm{ADAM}(g_i)\)。这标准化了不同环境传来的梯度幅值。
+\item
+  \textbf{优势归一化}：使用智能体生命周期内累积的优势的指数移动平均值 \(\mu\) 和标准差 \(\sigma\)，对优势项进行归一化处理：\(\bar{A} = (A-\mu)/\sigma\)。这使得来自不同强化学习环境的优势信号尺度保持平衡。
+\item
+  \textbf{KL 散度与熵正则化}：在元目标中加入 \(L_{KL}\)（限制目标策略与当前策略的偏离程度，防止元网络提出过于激进的更新）和 \(L_{ent}\)（对预测 \(y\) 和 \(z\) 进行熵正则化，防止过早收敛）。
+\end{itemize}
+
+\hypertarget{ux56dbux8ba1ux7b97ux5f00ux9500ux95eeux9898}{%
+\subsection{四、计算开销问题}\label{ux56dbux8ba1ux7b97ux5f00ux9500ux95eeux9898}}
+
+\hypertarget{ux4e00ux4e3aux4ec0ux4e48ux4e0dux9700ux8981ux663eux5f0fux6c42ux4e8cux9636ux5bfcux6570}{%
+\subsubsection{（一）为什么不需要显式求二阶导数？}\label{ux4e00ux4e3aux4ec0ux4e48ux4e0dux9700ux8981ux663eux5f0fux6c42ux4e8cux9636ux5bfcux6570}}
+
+在MAML中，θ在训练完毕、开始推理前的初始值为元参数η。在一次梯度下降后，θ的表达式里就出现了元参数η的一阶导。训练目标是通过调整元参数的值，使得在测试时梯度下降得到θ后，Loss值（记为L，是θ的函数）最小。由链式法则，dL/dη=dL/dθ*dθ/dη，进而导致dθ/dη项中出现元参数的二阶导。
+
+但DiscoRL中，在测试时梯度下降的智能体参数为θ，我们并不关心θ的初始值，因为它会被通过RL训练。元网络（参数为η）的输出为智能体的训练提供损失函数。训练目标是智能体的平均目标函数J最大，dJ/dη=dJ/dθ*dθ/dη，而θ关于η的表达式形如：
+
+\[
+\theta_1 = \theta_0 - \alpha \nabla_{\theta_0} L_{agent}(\theta_0,\eta)
+\]
+
+这意味着并不会出现关于η的二阶导数。
+
+然而，如果在大模型中加入这样的在测试时梯度下降的模块，我们不可能不关心θ的初始值，不可能等它被训练好再输出（那将意味着极其严重的推理延时）。但只要它参与训练，就需要计算二阶导数。
+
+\hypertarget{ux4e8cux8ba1ux7b97ux5f00ux9500ux6765ux6e90}{%
+\subsubsection{（二）计算开销来源}\label{ux4e8cux8ba1ux7b97ux5f00ux9500ux6765ux6e90}}
+
+不需要显式求二阶导数绝不代表这里的计算开销不大。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  内存容量：如果要像DiscoRL那样在优化大模型时进一步展开计算图，需要将模型在多个更新步数中的激活值、梯度以及优化器状态（如Adam的一阶和二阶矩）都保存在内存中。
+\item
+  内存带宽：在诸多底层计算（特别是长序列的自回归处理中），大模型经常面临算力未满但内存带宽已达极限的瓶颈状态。元网络（LSTM架构）在每个时间步都需要接收包含庞大参数或状态特征的轨迹输入。在数十个并行的复杂环境中来回搬运高维预测向量（如y(s)和z(s,a)），将导致极其严重的显存访存延迟，使得通信和内存带宽彻底瘫痪。
+\end{enumerate}
+
+\hypertarget{ux4e09ux89e3ux51b3ux65b9ux6848ux622aux65ad20ux6b65}{%
+\subsubsection{（三）解决方案：截断20步}\label{ux4e09ux89e3ux51b3ux65b9ux6848ux622aux65ad20ux6b65}}
+
+假设智能体的初始参数为 \(\theta_0\)，元网络（RL 规则）的参数为 \(\eta_0\)。整个截断工作流可以分为``内层展开''和``外层求导''两个阶段：
+
+\textbf{1. 内层展开（Inner Loop Unrolling）：构建局部计算图}
+
+在滑动窗口内，智能体与环境交互并利用元网络生成的 Target 连续进行 \(N=20\) 次更新：
+
+\begin{itemize}
+\tightlist
+\item
+  第 1 步：\(\theta_1 = \theta_0 - \alpha \nabla_{\theta_0} L_{agent}(\theta_0,\eta)\)
+\item
+  第 2 步：\(\theta_2 = \theta_1 - \alpha \nabla_{\theta_1} L_{agent}(\theta_1,\eta)\)
+\item
+  \ldots{}
+\item
+  第 \(N\) 步：\(\theta_N = \theta_{N-1} - \alpha \nabla_{\theta_{N-1}} L_{agent}(\theta_{N-1},\eta)\)
+\end{itemize}
+
+\textbf{核心关键点}：系统在显存中只保留这 20 步的计算图。智能体参数 \(\theta_N\) 在计算图上与 \(\eta\) 是高度纠缠的，且跨越了 20 步的梯度依赖。
+
+\textbf{2. 外层评估与元反向传播（Outer Loop \& Meta-Backprop）}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{评估}：使用更新了 20 步后的最新智能体参数 \(\theta_N\)，在环境中采集新的验证轨迹（Trajectories），并结合元价值函数（Meta-value function）计算元目标（标准 RL 期望收益）损失 \(J(\theta_N)\)。
+\item
+  \textbf{求导}：对 \(\eta\) 求导。根据链式法则，梯度流会沿着刚才保留的 20 步计算图反向穿透回去：
+\end{itemize}
+
+\[
+\nabla_\eta J(\eta)
+= \frac{\partial J(\theta_N)}{\partial \theta_N}
+\sum_{i=1}^{N}
+\left(\prod_{j=i}^{N-1} \frac{\partial \theta_{j+1}}{\partial \theta_j}\right)
+\frac{\partial \theta_i}{\partial \eta}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{截断并滑动}：一旦这 20 步的元梯度计算完成并更新了 \(\eta\)，系统就会\textbf{丢弃（Detach）}这 20 步的历史计算图，释放显存。然后，将 \(\theta_N\) 作为下一个窗口的新起点 \(\theta_0\)，窗口向前滑动。
+\end{itemize}
+
+\hypertarget{ux4e94ux7ed3ux679cux4e0eux7279ux70b9}{%
+\subsection{五、结果与特点}\label{ux4e94ux7ed3ux679cux4e0eux7279ux70b9}}
+
+通过对最终收敛的 Disco57 和 Disco103 规则进行``白盒化''的逆向工程和梯度分析，研究揭示了这套机器设计的算法表现出的人工算法中不具备的独特性质：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{独创的预测语义表示}：无约束的预测变量 \(y\) 和 \(z\) 自发学会了捕获与策略或价值函数截然不同的信息。它们不仅能以极高的精度预测未来的策略熵和高回报事件，还更倾向于关注画面中距离较远、但在未来可能有重大影响的实体（如远处的敌人），这与传统价值函数聚焦于眼前局部特征形成互补。
+\item
+  \textbf{内建的高效自举（Bootstrapping）}：元网络学会了重度依赖未来的预测信息（如 \(z_{t+k}\)）来反向重构当前预测的目标（\(\hat{z}_t\)）。实验表明，一旦切断元网络的自举回路（将未来输入置零），算法性能将出现断崖式下降。
+\item
+  \textbf{跨底层架构的零样本泛化}：因为元网络仅通过智能体的输出接口（\(\pi, y, z\) 等）生成标量目标，它不仅能在完全未见过的连续控制或离散空间（如 ProcGen、NetHack）中实现 SOTA 级别的 Zero-shot 迁移，甚至能直接作用于比发现阶段大数倍的全新神经网络架构上。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-144}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-144}}
+
+\begin{itemize}
+\tightlist
+\item
+  Oh, J., Farquhar, G., Kemaev, I., et al.~(2025). \href{https://www.nature.com/articles/s41586-025-09761-x}{DiscoRL: Discovering State-Of-The-Art Reinforcement Learning Algorithms}. Nature.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ttt-discoverux6d4bux8bd5ux65f6rlux8bbaux6587}{%
+\section{TTT-Discover：测试时RL（论文）}\label{ttt-discoverux6d4bux8bd5ux65f6rlux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux63d0ux51faux80ccux666f-5}{%
+\subsection{一、提出背景}\label{ux4e00ux63d0ux51faux80ccux666f-5}}
+
+传统的Test-Time Scaling（测试时扩展）方法通常是在冻结的LLM上进行搜索（例如AlphaEvolve使用进化策略提示模型）。冻结的模型无法内化在解决当前难题时的经验和教训，就像一个学生只做题但不消化知识。TTT-Discover在测试阶段对LLM进行RL训练。模型在尝试解决特定问题的过程中，利用产生的数据实时更新权重，从而不仅优化当前的搜索路径，还提升了模型本身解决该问题的能力。
+
+\hypertarget{ux4e8cux95eeux9898ux5b9aux4e49ux548cux6838ux5fc3ux601dux60f3}{%
+\subsection{二、问题定义和核心思想}\label{ux4e8cux95eeux9898ux5b9aux4e49ux548cux6838ux5fc3ux601dux60f3}}
+
+论文将一些科学发现定义为一个特殊的强化学习环境，具有以下特征：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  目标单一：只需要找到一个极值解，而不是优化平均性能。
+\item
+  无需泛化：模型只需要解决当前这一个特定的测试问题，不需要泛化到其他问题。（该方法主要适用于本地部署的模型）
+\item
+  客观验证：奖励函数（Reward）是连续且可验证的（例如代码运行时间、数学公式的界限）。
+\end{enumerate}
+
+TTT-Discover结合了搜索（Search）和学习（Learning）。其核心循环是：从缓冲区重用状态 -\textgreater{} 采样新动作 -\textgreater{} 评估奖励 -\textgreater{} 更新模型权重。
+
+需要注意的是，这不属于元强化学习，因为模型在预训练和后训练中都没有这样的学习。经过此方法在测试时学习的模型，通用性能会下降，也就意味着这种方法并不适用于通用大模型的训练。
+
+\hypertarget{ux4e09ux5b66ux4e60ux65b9ux6cd5ux71b5ux5956ux52b1ux51fdux6570}{%
+\subsection{三、学习方法：熵奖励函数}\label{ux4e09ux5b66ux4e60ux65b9ux6cd5ux71b5ux5956ux52b1ux51fdux6570}}
+
+TTT-Discover 的熵奖励目标写作：
+
+\[
+J_\beta(\Theta) = \mathbb{E}_{s \sim \mathrm{reuse}(\mathcal{H})}\left[\log \mathbb{E}_{a \sim \pi_\Theta(\cdot \mid s)}\left[e^{\beta(s)R(s,a)}\right]\right]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  指数加权与 Softmax 算子：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  核心在于 \(e^{\beta R(\tau)}\) 这一项。数学上，\(\frac{1}{\beta}\log \mathbb{E}[e^{\beta X}]\) 被称为累积生成函数（Cumulant Generating Function）的一种形式，也可视为 Softmax（软最大值）算子。
+\item
+  原理：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    当 \(\beta \to 0\) 时，根据泰勒展开，该目标退化为标准的期望奖励 \(\mathbb{E}[R]\)，表现为风险中性。
+  \item
+    当 \(\beta > 0\) 时，指数函数是凸函数，会对高奖励样本赋予极大的权重，对低奖励样本极不敏感。
+  \item
+    当 \(\beta \to \infty\) 时，该目标函数在数学上等价于 \(\max_\tau R(\tau)\)。
+  \end{itemize}
+\item
+  物理意义：这相当于在寻找``彩票中奖号码''。标准 RL 试图让所有买彩票的平均回报最高，熵目标则迫使模型通过优化参数，极大化``中大奖''（极值解）的概率，即使这意味着其他尝试会彻底失败。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  梯度的重加权机制（Reweighting）：
+\end{enumerate}
+
+该目标的梯度形式揭示了它如何更新模型：
+
+\[
+\nabla_\Theta J_\beta(\Theta) = \mathbb{E}_{\tau \sim \pi_\Theta}\left[\nabla_\Theta \log \pi_\Theta(\tau \mid s) \cdot w_\beta(\tau \mid s)\right]
+\]
+
+其中权重 \(w_\beta(\tau \mid s)\) 为：
+
+\[
+w_\beta(\tau \mid s) = \frac{e^{\beta R(\tau)}}{\mathbb{E}_{\pi}\left[e^{\beta R(\tau)}\right]}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  原理：这是一个自归一化的重要性采样（Self-Normalized Importance Sampling）权重。
+\item
+  解释：模型参数的更新方向不仅取决于奖励 \(R\) 的大小，还取决于 \(R\) 在指数尺度下的相对占比。如果某条轨迹的奖励略高于其他轨迹，在指数放大下，它的权重 \(w_\beta\) 会变得非常大，主导梯度方向，使模型迅速锁定那些``鹤立鸡群''的优秀解。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  自适应 \(\beta(s)\) 的 KL 约束原理：
+\end{enumerate}
+
+论文没有使用固定的 \(\beta\)，而是通过以下约束求解 \(\beta(s)\)：
+
+\[
+KL(q_\beta(\cdot \mid s) \| \pi_\Theta(\cdot \mid s)) = \gamma
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  这里 \(q_\beta\) 是由指数奖励加权后的理想分布。
+\item
+  原理（Trust Region / REPS）：这借鉴了相对熵策略搜索（Relative Entropy Policy Search, REPS）的思想。
+
+  \begin{itemize}
+  \tightlist
+  \item
+    如果 \(\beta\) 太大，权重分布 \(q_\beta\) 会坍缩到一个样本上，导致梯度方差爆炸，训练不稳定。
+  \item
+    如果 \(\beta\) 太小，权重过于均匀，模型无法有效学习到好坏样本的差异。
+  \end{itemize}
+\item
+  作用：通过固定 KL 散度，即固定信息几何上的``步长''，算法动态决定 \(\beta\)。对于探索尚不充分的状态，保持较小的 \(\beta\) 以防过拟合偶然噪声；对于已经发现明显优势路径的状态，增大 \(\beta\) 以激进地利用好路径。
+  \#\#\# 四、搜索方法：PUCT重用
+\end{itemize}
+
+仅仅依靠上述的训练目标是不够的，还需要一个高效的``搜索''机制来决定每次训练从哪个状态（State）开始。重用缓冲区H中的旧状态（即之前的中间解或完整解）相当于为当前的尝试增加了额外的``时间步''，从而扩展了探索的有效视界。这使得模型能够在已有成果的基础上继续优化，涌现出更复杂的解决方案。选择状态的方法改编自蒙特卡洛树搜索（MCTS）中的UCT（Upper Confidence Bound for Trees）算法。
+
+其评分函数为：
+
+\[
+score(s) = Q(s) + c \cdot scale \cdot P(s) \cdot \frac{\sqrt{1+T}}{1+n(s)}
+\]
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3ux4eceucbux5230puct}{%
+\subsubsection{（一）核心思想：从UCB到PUCT}\label{ux4e00ux6838ux5fc3ux601dux60f3ux4eceucbux5230puct}}
+
+直观上，PUCT 的总评分由两部分组成：
+
+\[
+\mathcjk{总评分} = \underbrace{\mathcjk{价值估计 }(Q)}_{\mathcjk{利用：\mathcjk{选当前最好的}}} + \underbrace{\mathcjk{探索加成 }(U)}_{\mathcjk{探索：\mathcjk{选尝试得少的}}}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  UCB 是这一思想的鼻祖，最初用于多臂老虎机（Multi-Armed Bandit）问题。
+\item
+  PUCT 是这一思想在蒙特卡洛树搜索（MCTS）中的进化版，被 AlphaGo 和 TTT-Discover 等现代 AI 系统采用。
+\end{itemize}
+
+在最基础的 UCB1 算法中，假设对所有选项一无所知，完全依靠统计数据：
+
+\[
+Score = \bar{X}_j + c\sqrt{\frac{\ln N}{n_j}}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \(\bar{X}_j\)：平均奖励，即利用项。
+\item
+  \(\sqrt{\frac{\ln N}{n_j}}\)：随着总次数 \(N\) 增加而增加，随着该选项被选次数 \(n_j\) 增加而减少。
+\item
+  局限性：UCB 假设所有选项的初始概率是均等的。但在复杂的科学发现或围棋中，模型往往已经知道某些方向明显更有希望，UCB 无法利用这种``直觉''。
+\end{itemize}
+
+PUCT（Polynomial UCT）引入了一个关键项：先验概率 \(P(s)\)。它允许搜索算法在缺乏数据时先``相信''模型的直觉，随后随着数据增多再逐渐转向依赖真实奖励。
+
+\hypertarget{ux4e8cux516cux5f0fux89e3ux91caux548cux6539ux8fdb}{%
+\subsubsection{（二）公式解释和改进}\label{ux4e8cux516cux5f0fux89e3ux91caux548cux6539ux8fdb}}
+
+核心选择公式也可写成：
+
+\[
+Score(s) = Q(s) + c \cdot P(s) \cdot \frac{\sqrt{1+T}}{1+n(s)}
+\]
+
+其中 \(P(s)\) 是先验项，\(\frac{\sqrt{1+T}}{1+n(s)}\) 是衰减系数。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  利用项（Exploitation）：\(Q(s)\)
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  定义：\(Q(s) = \max_{s' \in \mathrm{Child}(s)} R(s')\)；如果是新节点，则为 \(R(s)\)。
+\item
+  原理：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    在传统 AlphaZero 中，\(Q(s)\) 是子节点的平均胜率。但在这里，为了``发现''，算法采用乐观原则（Optimism）。
+  \item
+    如果一个起始代码片段曾经生成过一个极其高效的内核，即使只有一次，它也会被认为是一个极具潜力的``种子''，无论它生成过多少垃圾代码。
+  \item
+    使用 \(\max\) 而非 \(\mathrm{mean}\) 使搜索能够容忍高方差。只要上限够高，该状态就会被优先选择。
+  \end{itemize}
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  先验项（Prior）：\(P(s)\)
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  形式：\(P(s) \propto (|\mathcal{H}| - rank(s))\)，即基于排名的线性分布。
+\item
+  原理：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    这是一个启发式引导：假设``好种出好苗''，即当前奖励高的状态更有可能通过变异产生更好的子状态。
+  \item
+    使用排名（Rank-based）而非绝对奖励数值（Value-based）是为了鲁棒性。奖励数值的分布可能极其不均匀，例如长尾分布；若直接归一化，概率可能集中在最好的一个状态上。排名分布则保证即使是 Top-100 的解也有被选中的非零概率，从而维持种群多样性。
+  \end{itemize}
+\end{itemize}
+
+PUCT 相比 UCB 的两个重大改进：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  引入 \(P(s)\)（Prior）：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  UCB：对所有未探索节点一视同仁。
+\item
+  PUCT：利用 \(P(s)\) 给不同节点不同的``起跑线''。在 TTT-Discover 中，\(P(s)\) 基于缓冲区中的排名（Rank），即``好状态更有可能产生好子代''。这意味着算法会优先探索那些模型认为有潜力的路径，而不是盲目乱撞。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  多项式级别的探索衰减：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  PUCT 的名字来源之一是其探索项的衰减速率。随着访问次数 \(n(s)\) 的增加，探索加成项 \(\frac{\sqrt{T}}{n}\) 会比 UCB 的 \(\sqrt{\frac{\ln T}{n}}\) 衰减得更平滑或更激进，具体取决于调参，因此更适合在深层树结构中快速收敛到高概率路径。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  探索项（Exploration）：\(\frac{\sqrt{1+T}}{1+n(s)}\)
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  符号：\(T\) 是父节点（这里指整个缓冲区）的总访问次数，\(n(s)\) 是状态 \(s\) 及其后代的被访问次数。
+\item
+  原理（UCB - Upper Confidence Bound）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    这是一项基于计数的不确定性奖励。
+  \item
+    随着总训练步数 \(T\) 增加，所有状态的探索加成都会变大。
+  \item
+    但对于已经被频繁访问过的状态 \(s\)，分母 \(1+n(s)\) 会迅速增大，从而压制其得分。
+  \item
+    这种动态平衡迫使算法关注那些``看起来还不错（\(Q\) 和 \(P\) 较高）但还没被怎么尝试过（\(n\) 较小）''的潜力股。一旦某个潜力股被尝试很多次却没有产生新的高 \(Q\)，它的得分就会下降，算法会自动转向其他分支。
+  \end{itemize}
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  探索系数 \(c\) 与 \(scale\)
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  \(c\) 控制探索的激进程度，\(scale = R_{\max} - R_{\min}\) 用于将探索项和利用项（奖励）拉伸到同一量级。
+\item
+  原理：确保 \(Q\)（奖励值）和 \(U\)（探索加成）可以直接相加，避免因为奖励数值过大或过小导致探索项失效或主导搜索。
+\end{itemize}
+
+TTT-Discover 选择 PUCT 的原因是：
+
+\begin{itemize}
+\tightlist
+\item
+  搜索空间太大：科学发现的解空间几乎是无限的。标准 UCB 需要对所有可能得解进行大量随机尝试才能收敛，效率太低。
+\item
+  利用长尾分布：论文发现高奖励的解往往很少（长尾）。PUCT 通过 \(P(s)\)（基于排名的先验）能够迅速锁定那些``虽然探索次数少，但排名很高''的潜力股，从而在有限计算预算内找到极值解。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-145}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-145}}
+
+\begin{itemize}
+\tightlist
+\item
+  Yuksekgonul, M., Koceja, D., Li, X., et al.~(2026). \href{https://arxiv.org/abs/2601.16175}{Learning to Discover at Test Time}. arXiv:2601.16175.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{evotuneux8fdbux5316ux641cux7d22ux4e0erlux7ed3ux5408ux8bbaux6587}{%
+\section{EvoTune：进化搜索与RL结合（论文）}\label{evotuneux8fdbux5316ux641cux7d22ux4e0erlux7ed3ux5408ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-12}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-12}}
+
+EvoTune的核心思想是将进化搜索（作为探索策略）与强化学习（作为优化策略）紧密结合。
+
+进化搜索（Search）：负责在程序空间中探索，生成新的训练数据。
+
+强化学习（Learning）：利用搜索发现的高质量程序作为信号，更新LLM的权重，使其生成的分布 \(\pi\) 向高分区域通过。
+
+这种设计符合Sutton的``Bitter Lesson''观点：搜索生成数据，学习从数据中提炼模式以指导未来的搜索。
+
+需要注意的是，这不属于元强化学习，因为模型在预训练和后训练中都没有这样的学习。经过此方法在测试时学习的模型，通用性能会下降，也就意味着这种方法并不适用于通用大模型的训练。
+
+\hypertarget{ux4e8cux7b97ux6cd5ux67b6ux6784}{%
+\subsection{二、算法架构}\label{ux4e8cux7b97ux6cd5ux67b6ux6784}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  进化搜索
+\end{enumerate}
+
+该阶段的目标是最大化奖励函数 \(r(x,y)\)，其中 \(x\) 是提示词，\(y\) 是生成的程序：
+
+\[
+y^* = \arg\max_y \mathbb{E}_{x \sim \mathcal{D}}\left[\mathbb{E}_{y \sim \pi_\theta(\cdot \mid x)}[r(x,y)]\right]
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  程序数据库（Program Database）：维护一个``岛屿模型''（Island-based）的数据库 \(\mathcal{D}^t\)，存储生成的有效程序及其评分。
+\item
+  提示构建：从数据库中采样高分程序，利用少样本提示（Few-shot prompting）构造 \(x^t\)，引导 LLM 生成新的候选程序 \(y^{t,k}\)。
+\item
+  评估与存储：评估生成的程序，更新数据库 \(\mathcal{D}^t \leftarrow \mathcal{D}^{t-1} \cup \{(x^t, y^{t,k}, r(y^{t,k}))\}\)。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  RL训练
+\end{enumerate}
+
+每进行 \(f_{RL}\) 次搜索迭代后，利用积累的数据对 LLM 进行微调。
+
+\begin{itemize}
+\tightlist
+\item
+  RL 目标：优化策略 \(\pi_\theta\) 以最大化期望奖励，同时使用 KL 散度约束防止模型偏离参考模型（Reference Model，即初始模型 \(\pi_{\mathrm{ref}}\)）：
+\end{itemize}
+
+\[
+\max_{\pi_\theta}\mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_\theta}[r(x,y)] - \beta \mathbb{D}_f\left[\pi_{\mathrm{ref}}(\cdot \mid x) \| \pi_\theta(\cdot \mid x)\right]
+\]
+
+（1）基于DPO算法的损失函数
+
+基于偏好数据的 DPO 损失函数为：
+
+\[
+\mathcal{L}(\pi_\theta; \pi_{\mathrm{ref}}) =
+\mathbb{E}_{(x,y_+,y_-) \sim \mathcal{D}_{\mathrm{pref}}}
+\left[
+-\log \sigma\left(
+\beta f'\left(\frac{\pi_\theta(y_+ \mid x)}{\pi_{\mathrm{ref}}(y_+ \mid x)}\right)
+- \beta f'\left(\frac{\pi_\theta(y_- \mid x)}{\pi_{\mathrm{ref}}(y_- \mid x)}\right)
+\right)
+\right]
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(\pi_\theta\) 是当前正在训练的 LLM 策略。
+\item
+  \(\pi_{\mathrm{ref}}\) 是参考策略，即初始的 Base LLM。
+\item
+  \((x,y_+,y_-)\) 是偏好数据三元组，其中 \(y_+\) 是评分较高的程序，\(y_-\) 是评分较低的程序。
+\item
+  \(\sigma\) 是 Sigmoid 函数。
+\item
+  \(\beta\) 是控制正则化强度的超参数。
+\item
+  \(f'\) 是 f-divergence 中凸函数 \(f\) 的导数，决定了 KL 散度的方向。
+\end{itemize}
+
+（2）Forward RL
+
+这里尤其值得注意的是，它采用了Forward RL而非Reverse RL：
+
+标准的 DPO 通常基于 Reverse KL（\(\mathbb{D}_{KL}(\pi_\theta \| \pi_{\mathrm{ref}})\)），这种方向倾向于通过集中概率质量到单一模式来``求模''（Mode-seeking），容易导致输出多样性下降（Mode Collapse）。
+
+在进化搜索中，多样性（Diversity）至关重要。为了保持多样性，EvoTune 采用了基于 Forward KL 正则化的 DPO 目标形式，其损失函数为：
+
+\[
+\mathcal{L}(\pi_\theta; \pi_{\mathrm{ref}}) =
+\mathbb{E}_{(x,y_+,y_-) \sim \mathcal{D}_{\mathrm{pref}}}
+\left[
+-\log \sigma\left(
+\beta f'\left(\frac{\pi_\theta(y_+ \mid x)}{\pi_{\mathrm{ref}}(y_- \mid x)}\right)
+- \beta f'\left(\frac{\pi_\theta(y_- \mid x)}{\pi_{\mathrm{ref}}(y_- \mid x)}\right)
+\right)
+\right]
+\]
+
+其中对于 Forward KL，函数 \(f'(u) = -1/u\)；而 Reverse KL 则是 \(f'(u) = \log u + 1\)。
+
+实验证明：使用 Forward KL 的变体不仅发现了最高分的程序，而且生成的唯一解（Unique Scores）数量显著多于 Reverse KL 和基线，说明其在维持搜索多样性方面有效。
+
+这背后的原理是：
+
+\begin{itemize}
+\tightlist
+\item
+  多样性保护（Diversity Maintenance）：进化搜索非常依赖种群的多样性。标准 DPO（Reverse KL）有很强的 Mode-seeking 倾向，会使模型收敛到单一解，导致 Mode Collapse。
+\item
+  Mass-covering 行为：Forward KL 具有 ``Mass-covering'' 的特性，它鼓励策略分布 \(\pi_\theta\) 覆盖参考分布 \(\pi_{\mathrm{ref}}\) 中的高概率区域，而不是仅仅集中在某一个峰值上。这使得模型能生成更多样化的解（Unique Solutions），从而更有利于后续的进化迭代。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-146}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-146}}
+
+\begin{itemize}
+\tightlist
+\item
+  Lange, R. T., et al.~(2024). \href{https://arxiv.org/abs/2411.10125}{Algorithm Discovery With LLMs: Evolutionary Search Meets Reinforcement Learning}. arXiv:2411.10125.
+\end{itemize}
+
+\clearpage

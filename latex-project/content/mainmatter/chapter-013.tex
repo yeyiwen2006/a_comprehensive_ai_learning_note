@@ -1,0 +1,1894 @@
+\hypertarget{ux7efcux5408ux4ef7ux503cux4e0eux7b56ux7565ux7684ux7b97ux6cd5}{%
+\chapter{综合价值与策略的算法}\label{ux7efcux5408ux4ef7ux503cux4e0eux7b56ux7565ux7684ux7b97ux6cd5}}
+
+\hypertarget{actor-criticux7b97ux6cd5}{%
+\section{Actor-Critic算法}\label{actor-criticux7b97ux6cd5}}
+
+\hypertarget{ux4e00actor-criticux7b97ux6cd5ux7684ux57faux672cux539fux7406}{%
+\subsection{一、Actor-Critic算法的基本原理}\label{ux4e00actor-criticux7b97ux6cd5ux7684ux57faux672cux539fux7406}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  提出背景
+\end{enumerate}
+
+在策略梯度算法中，我们通过策略梯度获得了参数θ的调整方向，再通过动作价值的蒙特卡洛估计G\_t来获得调整的正负和幅度。但是蒙特卡洛估计存在需要样本量高、必须走完全程才能更新、方差大等问题。考虑到G\_t本身其实是对动作价值优劣的估计，我们可以结合前面基于价值的强化学习方法，引入动作价值函数。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  数学表示
+\end{enumerate}
+
+为了让目标函数（Q值的在状态-动作对概率分布下的期望）最大，策略梯度公式应为：
+
+回顾我们之前得出的结论，最理想的策略梯度公式是：
+
+\[
+\nabla_\theta J(\theta)=\mathbb{E}\left[\nabla_\theta\log\pi_\theta(a\mid s)\cdot Q^\pi(s,a)\right]
+\]
+
+为了降低方差，我们通常会引入一个基线（Baseline）\(V^\pi(s)\)，将 \(Q\) 转化为优势函数（Advantage Function）：
+
+\[
+A^\pi(s,a)=Q^\pi(s,a)-V^\pi(s)
+\]
+
+这里Q(s,a)表示s状态下采取a动作的价值，V(s)表示s状态的价值，A(s,a)就是动作a相对于平均水平的优势。
+
+根据贝尔曼方程，在一次采样中，如果接下来走到s'，则下一步更新中认为：
+
+根据贝尔曼方程（Bellman Equation）：
+
+\[
+Q(s,a)\approx r+\gamma V(s')
+\]
+
+将这个代入优势函数公式：
+
+\[
+A(s,a)\approx \underbrace{r+\gamma V_\phi(s')-V_\phi(s)}_{\text{TD Error }\delta}
+\]
+
+从而我们并不需要构建Q网络，只需要一个V网络即可。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  网络更新
+\end{enumerate}
+
+和Sarsa不同：没有``Q表''
+
+Actor-Critic算法通常由策略网络和价值网络两部分构成，将策略函数的优化与价值函数的优化分开，从而结合了两种学习的优点。
+
+（1）策略网络（Actor）的更新
+
+策略网络由上面的策略梯度表达式更新。我们把策略梯度中的G\_t换成了这种策略下的A(s,a)值。由于我们不需要G\_t，而是可以直接利用价值网络存储的A(s,a)，故每走一步，就可以进行一次更新。当A(s,a)＞0时，会倾向于让a的概率增大，反之倾向于减小。
+
+（2）价值网络（Critic）的更新
+
+当从状态s到s'，获得奖励r，V(s)的更新目标Target=r+gamma*V(s')。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  与其他算法（Sarsa、DQN）的对比
+\end{enumerate}
+
+（1）与Sarsa的对比
+
+Sarsa的Q既负责打分，也负责决策（epsilon-greedy策略），而Critic的Q只负责打分，策略权在Actor手里；Sarsa有显式Q表，Critic通过深度学习拟合。
+
+相同点（The Core DNA）：
+
+\begin{itemize}
+\tightlist
+\item
+  数学根据一致：都基于贝尔曼期望方程（Bellman Expectation Equation），即 \(\mathrm{Value}\approx r+\gamma\cdot\mathrm{Next\_Value}\)。这里的 \(\mathrm{Next\_Value}\) 都是指``按照当前策略走下去的价值''，不取最大值。
+\item
+  策略属性一致：通常都是 On-policy（同策略）。它们更新的目标值，紧紧跟随当前智能体的实际行为模式；如果智能体变笨了，它们评估出的价值也会变低。
+\end{itemize}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}@{}}
+\toprule
+维度 & Critic（通常指 V-based） & Sarsa（Q-based） \\
+\midrule
+\endhead
+所需数据 & \(S,A,R,S'\) & \(S,A,R,S',A'\) \\
+更新时机 & 看到状态 \(S'\) 即可更新。它只需要预估 \(S'\) 的平均前景。 & 必须等到选出 \(A'\) 后。它必须知道下一步确切走了哪条路。 \\
+更新目标 & \(Target=r+\gamma V(s')\)，直接使用状态价值，隐含了对动作的期望。 & \(Target=r+\gamma Q(s',a')\)，使用下一步实际发生动作的价值。 \\
+随机性/方差 & 较低。\(V(s')\) 是网络输出的平滑值，过滤掉了下一步选动作的随机噪声。 & 较高。受下一步动作 \(a'\) 的具体选择影响，可能这步走得很好、下步走得烂，导致 Target 波动。 \\
+核心角色 & 辅助者（Coach）。它只负责打分，必须配合 Actor 使用，自己不产出动作。 & 独裁者（Doer）。既负责打分，又直接根据分值决定动作（\(\epsilon\)-greedy）。 \\
+\bottomrule
+\end{longtable}
+
+（2）与DQN的对比
+
+Critic和Sarsa运用的都是贝尔曼期望方程，而DQN运用的是贝尔曼最优方程。Critic和Sarsa根据当前策略对应的概率分布，估计价值的期望，数据必须实时由当前策略生成，具体体现：
+
+Sarsa：
+
+\[
+Q(s,a)\leftarrow Q(s,a)+\alpha\left[\underbrace{r+\gamma Q(s',a')}_{\text{Target}}-Q(s,a)\right]
+\]
+
+Critic：
+
+\[
+L=\left(\underbrace{r+\gamma V(s')}_{\text{Target}}-V(s)\right)^2
+\]
+
+虽然式子里看起来没有策略，但是这种更新方式意味着V(s)本质上是过去不同动作得到的Q(s,a)（即r+gamma*V(s')）的移动平均。随着策略的变化，不同动作的概率分布也就会变化，因此在下一步，必须重新根据此刻的策略（动作概率分布）采样新的动作a，才能保证r+V(s')的期望是对新的策略的价值的无偏估计，而不能用别的策略下采样的动作进行V的更新，因而它是On-policy的。
+
+而DQN的更新与策略无关，只取最优价值。
+
+\begin{longtable}[]{@{}llll@{}}
+\toprule
+特性 & Critic（in AC） & Sarsa & DQN \\
+\midrule
+\endhead
+核心方程 & 贝尔曼期望方程 & 贝尔曼期望方程 & 贝尔曼最优方程 \\
+目标值（Target） & \(r+\gamma V(s')\) & \(r+\gamma Q(s',a')\) & \(r+\gamma\max Q(s',a')\) \\
+对未来的态度 & 诚实（基于当前概率） & 诚实（基于实际选择） & 乐观（假设未来最优） \\
+所需样本 & \((s,a,r,s')\) & \((s,a,r,s',a')\) & \((s,a,r,s')\) \\
+数据利用 & On-policy（通常不复用） & On-policy（通常不复用） & Off-policy（可复用经验池） \\
+主要用途 & 减小 PG 的方差（PPO/A2C） & 学习安全保守的策略 & 学习寻找最优解的策略 \\
+\bottomrule
+\end{longtable}
+
+场景：一条路紧贴着悬崖。掉下去扣 100 分，走正路扣 1 分。
+
+策略特点：现在的策略 \(\pi\) 还有点笨，有 \(10\%\) 的概率会手滑掉下去（\(\epsilon\)-greedy）。
+
+DQN（Q-Learning）的视角：
+
+\begin{itemize}
+\tightlist
+\item
+  它会说：``嘿，贴着悬崖走是最短路径！只要我不手滑（取 max），这就是最优解。''
+\item
+  结果：它学出的价值函数会鼓励你贴着悬崖走。但因为你实际上会手滑，你就会不断掉下去。
+\item
+  特点：盲目自信，评估的是``理论上的完美策略''。
+\end{itemize}
+
+SARSA（以及 AC 中的 Critic）的视角：
+
+\begin{itemize}
+\tightlist
+\item
+  它会说：``嘿，虽然贴着悬崖走最近，但以你现在的笨拙程度（当前策略 \(\pi\)），你走那条路有很大几率掉下去摔死。所以那条路的价值（\(Q\) 或 \(V\)）其实很低！''
+\item
+  结果：它给出的价值估计会逼迫 Actor 离悬崖远一点，走安全的路。
+\item
+  特点：实事求是，评估的是``你现在的真实水平''。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  训练和前向推理时的组件
+\end{enumerate}
+
+所有存在Actor和Critic的模型架构，包括后面介绍的TRPO、PPO、DDPG、SAC等，都遵循以下原则：
+
+训练时：Actor和Critic同时工作。
+
+前向推理时：舍弃Critic，只留Actor。
+
+这就好比你学开车（训练）时，教练（Critic）坐在副驾不停地给你打分、纠正动作（更新策略）；但是当你拿到驾照自己上路（推理）时，教练就不在了，只有你（Actor）在开车，你只需要看路况（状态）并打方向盘（动作），动作也不需要再纠正（策略不再更新）。
+
+\hypertarget{ux4e8ca2cux548ca3c}{%
+\subsection{二、A2C和A3C}\label{ux4e8ca2cux548ca3c}}
+
+由前面介绍的内容，这是一个On-Policy算法，而且无法像SAC那样建立Replay Buffer（原因见SAC部分），每次更新策略都必须重新采样。这不仅不适合并行计算，而且导致了严重的数据相关性问题，因为相近时刻的状态s也比较相近，随着训练进行，状态随时间的分布会改变，数据不满足独立同分布假设。故我们需要有不同Worker在同一时刻分别采样，统一更新梯度。具体有以下两种底层实现方法。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  A3C（Google DeepMind,ICML 2016）
+\end{enumerate}
+
+每一个Worker都是一个独立的进程，进程里都有一个环境副本、一个本地神经网络副本。Worker自己在本地网络跑前向传播，算出梯度，然后把梯度推送到全局网络，并把全局网络的最新参数拉回来覆盖本地网络。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  A2C（OpenAI,2017）
+\end{enumerate}
+
+使用multiprocessing也就是所谓的SubprocVecEnv（子进程向量化环境）。每一个Worker进程里只有一个环境副本，主进程持有唯一的一个神经网络（通常在GPU上）。16个Worker并行执行env.step()，返回各自状态。主进程收集16个s，拼接成一个Batch，用GPU一次性算出16个各自的动作，发回给Worker。Worker非常轻量，只负责模拟物理环境。
+
+目前主流的Actor-Critic算法（包括PPO），其底层并行架构基本都沿用了A2C的``向量化环境''模式。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-54}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-54}}
+
+\begin{itemize}
+\tightlist
+\item
+  Mnih, V., Badia, A. P., Mirza, M., et al.~(2016). \href{https://arxiv.org/abs/1602.01783}{Asynchronous Methods for Deep Reinforcement Learning}. ICML 2016.
+\item
+  OpenAI. (2017). \href{https://openai.com/index/openai-baselines-acktr-a2c/}{OpenAI Baselines: ACKTR \& A2C}.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{trpoux7b97ux6cd5ux4e0eux91cdux8981ux6027ux91c7ux6837}{%
+\section{TRPO算法与重要性采样}\label{trpoux7b97ux6cd5ux4e0eux91cdux8981ux6027ux91c7ux6837}}
+
+\hypertarget{ux4e00ux63d0ux51faux80ccux666f}{%
+\subsection{一、提出背景}\label{ux4e00ux63d0ux51faux80ccux666f}}
+
+在强化学习中，尤其是在策略梯度方法中，我们通过不断更新策略网络（一个概率分布）来让智能体表现得更好。但这里有一个巨大的风险：如果一次更新步子迈得太大，新策略可能会彻底``跑偏''，选择一个很差的动作，进而采样到差的数据，算出不准的梯度，恶性循环，导致训练崩溃、性能急剧下降，并且很难恢复。
+
+\hypertarget{ux4e8cux6570ux5b66ux8868ux8fbe-1}{%
+\subsection{二、数学表达}\label{ux4e8cux6570ux5b66ux8868ux8fbe-1}}
+
+在机器学习中，KL散度 \(D_{\mathrm{KL}}(P\Vert Q)=H(P,Q)-H(P)\) 可以表示预测分布 \(Q\) 和标签分布 \(P\) 之间的差异，这里 \(H(P,Q)\) 是交叉熵，即用 \(Q\) 的编码系统去编码 \(P\) 的数据所需的平均长度。准确地说，这是前向KL散度，衡量了使用了错误的编码系统（\(Q\)）而导致与正确编码系统（\(P\)）相比额外多出的信息量，也就是 \(Q\) 偏离 \(P\) 的程度，在旧策略 \(P\) 概率高而新策略 \(Q\) 概率低的时候，惩罚会很大，这保证了新策略覆盖原策略，不会过度收缩（Collapse），避免忽略了真实分布的某些模式。还有一种KL散度是反向KL散度，即 \(D_{\mathrm{KL}}(Q\Vert P)\)，它在旧策略 \(P\) 概率低而新策略 \(Q\) 概率高的时候，惩罚很大。
+
+将KL散度运用到强化学习中，则是像一个~``稳定器''或``刹车''~。大模型一般均用反向KL散度），因为反向KL散度会对新策略高概率、原策略低概率的区域给出较大惩罚，进而让新的概率空间不跳出预训练后概率较大的空间（如果跳出空间往往表现为输出乱码、不符合正常语义的内容等，即``模式崩塌''）。RL获得的空间往往是预训练的子集（这也可能是RL难以让模型获得预训练完全没见过的技能的原因之一）。
+
+我们知道，KL散度 \(D_{\mathrm{KL}}(P\Vert Q)=H(P,Q)-H(P)\)，其中 \(H(P,Q)\) 为交叉熵。在 TRPO 或 PPO 这类算法中，我们为什么用KL散度而不用交叉熵呢？不是因为梯度不同（它们梯度其实一样），而是因为``标尺''的零点不同。KL散度提供了一个绝对的零点（即 \(D_{\mathrm{KL}}=0\) 代表没变化），这让我们能设定一个通用的安全阈值（Trust Region）；而交叉熵的``零点''是浮动的（等于旧策略的熵 \(H(P)\)），导致无法设定一个固定的阈值来限制更新幅度。
+
+TRPO算法可以表达为这样一个优化问题：
+
+\[
+\begin{aligned}
+\max_\theta\quad
+& \mathbb{E}_{s\sim\rho_{\theta_{\mathrm{old}}},\,a\sim\pi_{\theta_{\mathrm{old}}}}
+\bigl[
+\frac{\pi_\theta(a\mid s)}{\pi_{\theta_{\mathrm{old}}}(a\mid s)}
+A^{\pi_{\mathrm{old}}}(s,a)
+\bigr] \\
+\text{subject to}\quad
+& \bar{D}_{\mathrm{KL}}(\pi_{\theta_{\mathrm{old}}}\Vert \pi_\theta)\le \delta
+\end{aligned}
+\]
+
+其中 \(\frac{\pi_\theta(a\mid s)}{\pi_{\theta_{\mathrm{old}}}(a\mid s)}\) 是概率比率，\(A^{\pi_{\mathrm{old}}}(s,a)\) 是优势函数，\(\delta\) 是信赖域半径，也就是允许策略变动的最大幅度。
+
+\hypertarget{ux4e09ux76eeux6807ux51fdux6570ux91cdux8981ux6027ux91c7ux6837ux7684ux89e3ux91ca}{%
+\subsection{三、目标函数（重要性采样）的解释}\label{ux4e09ux76eeux6807ux51fdux6570ux91cdux8981ux6027ux91c7ux6837ux7684ux89e3ux91ca}}
+
+TRPO是一个Online Policy，随着策略的更新，从旧策略中采样的数据就无法使用，造成了极大的数据浪费。为了能有效利用旧数据，我们采取了统计学中重要性采样的方法。
+
+假设你的任务是统计全国人民的平均收入。
+
+\begin{itemize}
+\tightlist
+\item
+  目标分布 \(P\)（Target）：全国人民的分布。
+\item
+  采样分布 \(Q\)（Proposal）：你作为采样员，只能在上海陆家嘴街头随机拉人问收入。
+\end{itemize}
+
+直接算平均值的问题：如果你直接拿陆家嘴路人的平均收入，结果肯定远高于全国平均水平，因为你采样的地点（分布 \(Q\)）偏向富人。
+
+重要性采样的解决方案：你可以继续在陆家嘴采样，但算账时要加权重：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  富人：在陆家嘴很多，但在全国比例没那么高，给他们的收入乘一个小于 \(1\) 的权重（降权）。
+\item
+  普通收入者：在陆家嘴很少，但在全国比例很高；如果你在陆家嘴好不容易遇到一个普通人，这个样本就太珍贵了，它代表了全国那一大群人，给他的收入乘一个大于 \(1\) 的权重（加权）。
+\end{enumerate}
+
+假设我们需要计算某个函数 \(f(x)\) 在目标分布 \(P(x)\) 下的期望，但只能从另一个分布 \(Q(x)\) 采样：
+
+\[
+\mathbb{E}_{x\sim P}[f(x)] = \int P(x)f(x)\,dx
+\]
+
+做恒等变换：
+
+\[
+\begin{aligned}
+\mathbb{E}_{x\sim P}[f(x)]
+&= \int P(x)f(x)\cdot \frac{Q(x)}{Q(x)}\,dx \\
+&= \int Q(x)(\frac{P(x)}{Q(x)}f(x))\,dx
+\end{aligned}
+\]
+
+因此：
+
+\[
+\mathbb{E}_{x\sim P}[f(x)]
+=
+\mathbb{E}_{x\sim Q}
+\bigl[
+\frac{P(x)}{Q(x)}f(x)
+\bigr]
+\]
+
+其中 \(\frac{P(x)}{Q(x)}\) 就是重要性权重（Importance Weight）。
+
+这样，我们就能对旧策略Q采样出来的数据进行``再利用''了。
+
+应用在TRPO中，即：
+
+\[
+\mathbb{E}_{a\sim\pi_{\mathrm{old}}}
+\bigl[
+\frac{\pi_{\mathrm{new}}(a\mid s)}{\pi_{\mathrm{old}}(a\mid s)}
+A(s,a)
+\bigr]
+\]
+
+当然，这个公式是在s给定的条件下的期望，还没有考虑s的占用度量会随着策略变化而变化。考虑后，公式如下：
+
+\[
+J(\theta)=
+\sum_s\rho_{\pi_\theta}(s)
+\sum_a\pi_\theta(a\mid s)r(s,a)
+\]
+
+利用重要性采样变换后：
+
+\[
+J(\theta)=
+\mathbb{E}_{s\sim\rho_{\theta_{\mathrm{old}}},\,a\sim\pi_{\theta_{\mathrm{old}}}}
+\bigl[
+\frac{\rho_{\pi_\theta}(s)}{\rho_{\pi_{\theta_{\mathrm{old}}}}(s)}
+\cdot
+\frac{\pi_\theta(a\mid s)}{\pi_{\theta_{\mathrm{old}}}(a\mid s)}
+\cdot
+A^{\pi_{\mathrm{old}}}(s,a)
+\bigr]
+\]
+
+困难点在于：计算 \(\frac{\rho_{\pi_\theta}(s)}{\rho_{\pi_{\theta_{\mathrm{old}}}}(s)}\) 是极其困难的。\(\rho(s)\) 这种状态占用分布由环境动力学 \(P(s'\mid s,a)\) 和策略 \(\pi\) 经过多步交互共同决定，不像动作概率 \(\pi(a\mid s)\) 那样可以直接从策略网络读出来。除非你知道环境的完整模型并解复杂的流方程，否则很难显式求出这个状态分布比值。
+
+TRPO 的做法是直接近似令：
+
+\[
+\frac{\rho_{\pi_\theta}(s)}{\rho_{\pi_{\theta_{\mathrm{old}}}}(s)}\approx 1
+\]
+
+也就是说，它假设在我更新策略的一瞬间，遇到的状态分布还没来得及发生剧烈变化。
+
+我们可以看到，重要性采样必须以限制Q相对于P的偏差为前提。否则，就好比你在陆家嘴（Q）好不容易抓到一个极度罕见的贫困户，根据公式，这个人的样本权重会变成几万倍，这一个样本就会主导整个梯度的计算，导致神经网络的更新方向剧烈波动，模型直接训练崩溃。
+
+\hypertarget{ux56dbux4f18ux5316ux95eeux9898ux7684ux6c42ux89e3}{%
+\subsection{四、优化问题的求解}\label{ux56dbux4f18ux5316ux95eeux9898ux7684ux6c42ux89e3}}
+
+TPRO可以被写成下面的优化问题：
+
+\[
+\begin{aligned}
+\max_\theta\quad
+& L(\theta)=\mathbb{E}
+\bigl[
+\frac{\pi_\theta}{\pi_{\mathrm{old}}}A
+\bigr] \\
+\text{subject to}\quad
+& \bar{D}_{\mathrm{KL}}(
+\pi_{\theta_{\mathrm{old}}}(\cdot\mid s)
+\Vert
+\pi_\theta(\cdot\mid s)
+)\le \delta
+\end{aligned}
+\]
+
+求解如下：
+
+第一步：泰勒展开（近似化）
+
+令：
+
+\[
+x=\theta-\theta_{\mathrm{old}}
+\]
+
+由于信赖域很小，可以对目标函数和约束进行泰勒展开。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  对目标函数 \(L(\theta)\) 做一阶展开：
+\end{enumerate}
+
+\[
+L(\theta)\approx
+L(\theta_{\mathrm{old}})
++
+\nabla_\theta L(\theta_{\mathrm{old}})^{T}x
+\]
+
+其中 \(L(\theta_{\mathrm{old}})\) 是常数，不影响优化；\(\nabla_\theta L(\theta_{\mathrm{old}})\) 就是标准的策略梯度，记为向量 \(\mathbf{g}\)。因此近似目标变为：
+
+\[
+\max_x\ \mathbf{g}^{T}x
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  对约束条件 \(\bar{D}_{\mathrm{KL}}\) 做二阶展开：
+\end{enumerate}
+
+\[
+\bar{D}_{\mathrm{KL}}\bigl(
+\pi_{\theta_{\mathrm{old}}}(\cdot\mid s)
+\Vert
+\pi_{\theta_{\mathrm{old}}+x}(\cdot\mid s)
+\bigr)
+\approx
+\bar{D}_{\mathrm{KL}}\bigl(
+\pi_{\theta_{\mathrm{old}}}(\cdot\mid s)
+\Vert
+\pi_{\theta_{\mathrm{old}}}(\cdot\mid s)
+\bigr)
++
+(\nabla_\theta \bar{D}_{\mathrm{KL}})^{T} x
++
+\frac{1}{2}x^{T}\nabla_\theta^{2}\bar{D}_{\mathrm{KL}}x
+\]
+
+第一项 \(\bar{D}_{\mathrm{KL}}(\pi_{\theta_{\mathrm{old}}}(\cdot\mid s)\Vert\pi_{\theta_{\mathrm{old}}}(\cdot\mid s))=0\)；第二项在新旧策略分布相等时取极小值，导数为 \(0\)。第三项中的 \(\nabla_\theta^{2}\bar{D}_{\mathrm{KL}}\) 是 KL 散度的二阶导数矩阵，也就是费雪信息矩阵（Fisher Information Matrix, FIM），记为 \(\mathbf{H}\)。因此约束近似为：
+
+\[
+\frac{1}{2}x^{T}\mathbf{H}x\le \delta
+\]
+
+第二步：求解新方向（拉格朗日乘子法）
+
+现在问题变为：
+
+\[
+\begin{aligned}
+\max_x\quad
+& \mathbf{g}^{T}x \\
+\text{subject to}\quad
+& \frac{1}{2}x^{T}\mathbf{H}x\le \delta
+\end{aligned}
+\]
+
+构建拉格朗日函数：
+
+\[
+\mathcal{L}(x,\lambda)=
+\mathbf{g}^{T}x
+-\lambda
+\bigl(
+\frac{1}{2}x^{T}\mathbf{H}x-\delta
+\bigr)
+\]
+
+对 \(x\) 求导并令导数为 \(0\)：
+
+\[
+\mathbf{g}-\lambda\mathbf{H}x=0
+\quad\Longrightarrow\quad
+\mathbf{H}x=\frac{1}{\lambda}\mathbf{g}
+\]
+
+于是我们得到了更新方向（还没有确定步长）：
+
+\[
+x\propto\mathbf{H}^{-1}\mathbf{g}
+\]
+
+这就是著名的自然梯度（Natural Gradient）方向。它不是沿着普通梯度 \(\mathbf{g}\) 走，而是用曲率矩阵 \(\mathbf{H}\) 的逆去修正方向。
+
+接下来确定步长（缩放系数）。将：
+
+\[
+x=\beta\mathbf{H}^{-1}\mathbf{g}
+\]
+
+代入约束条件 \(\frac{1}{2}x^{T}\mathbf{H}x=\delta\)，得到：
+
+\[
+\beta=
+\sqrt{
+\frac{2\delta}{\mathbf{g}^{T}\mathbf{H}^{-1}\mathbf{g}}
+}
+\]
+
+最终的参数更新公式为：
+
+\[
+x^{*}
+=
+\sqrt{
+\frac{2\delta}{\mathbf{g}^{T}\mathbf{H}^{-1}\mathbf{g}}
+}
+\mathbf{H}^{-1}\mathbf{g}
+\]
+
+第三步：数值求解（共轭梯度法 CG）
+
+虽然公式推出来了，但工程上根本没法直接算。痛点在于 \(\mathbf{H}\) 是 Hessian 矩阵，维度是 \(N\times N\)（\(N\) 是参数量）。如果参数有 100 万，\(\mathbf{H}\) 就有 1 万亿个元素，内存直接爆炸，更别提求逆矩阵 \(\mathbf{H}^{-1}\) 了。
+
+TRPO 的核心魔法是共轭梯度法（Conjugate Gradient, CG）。我们需要计算的是向量：
+
+\[
+\mathbf{s}=\mathbf{H}^{-1}\mathbf{g}
+\]
+
+等价于求解线性方程组：
+
+\[
+\mathbf{H}\mathbf{s}=\mathbf{g}
+\]
+
+CG 算法的特点是：求解 \(\mathbf{H}\mathbf{s}=\mathbf{g}\) 不需要显式地写出矩阵 \(\mathbf{H}\)，只需要能够计算矩阵-向量乘积 \(\mathbf{H}v\)。也就是说，只要你能给我一个函数，输入向量 \(v\)，输出 \(\mathbf{H}v\)，我就能迭代解出 \(\mathbf{s}\)。
+
+\(\mathbf{H}\) 是 KL 散度的二阶导数。计算 \(\mathbf{H}v\) 不需要真的算二阶导，有一个极其高效的技巧（Pearlmutter Trick）：
+
+\[
+\mathbf{H}v
+=
+\nabla_\theta(\nabla_\theta D_{\mathrm{KL}}\cdot v)
+\]
+
+具体做法是：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  先算 KL 散度的梯度 \(\nabla_\theta D_{\mathrm{KL}}\)。
+\item
+  算这个梯度和向量 \(v\) 的点积，得到一个标量。
+\item
+  再对这个标量求一次梯度。
+\end{enumerate}
+
+在 PyTorch / TensorFlow 这类自动微分框架下，这只需要做两次反向传播，速度很快，且不需要存储矩阵。
+
+第四步：线性搜索（Line Search）
+
+前面的二阶近似只是近似。真正更新后，实际 KL 散度可能会超过 \(\delta\)，或者真实目标函数反而下降。为了保证万无一失，TRPO 最后会做回溯线性搜索（Backtracking Line Search）：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  算出理想更新量 \(x^{*}\)。
+\item
+  设实际更新量：
+\end{enumerate}
+
+\[
+\Delta\theta=\alpha^{j} x^{*}
+\quad
+(\alpha \mathcjk{ \mathcjk{初始为} } 1)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  检查两个条件：
+\end{enumerate}
+
+\[
+\bar{D}_{\mathrm{KL}}(
+\pi_{\theta_{\mathrm{old}}}(\cdot\mid s)
+\Vert
+\pi_{\theta_{\mathrm{old}}+\Delta\theta}(\cdot\mid s)
+)\le \delta
+\]
+
+\[
+L(\theta_{\mathrm{old}}+\Delta\theta)\ge L(\theta_{\mathrm{old}})
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  如果不行，就让 \(j\leftarrow j+1\)，比如 \(\alpha\) 变成 \(0.5,0.25,\ldots\)，缩短步长再试。
+\item
+  直到满足条件，才真正更新参数。
+\end{enumerate}
+
+总结 TRPO 的求解流程：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  准备数据：用旧策略收集一批轨迹。
+\item
+  算梯度：计算策略梯度 \(\mathbf{g}\)。
+\item
+  算方向（CG）：利用 Hessian-向量积技巧，跑若干步共轭梯度算法，解出 \(\mathbf{s}\approx\mathbf{H}^{-1}\mathbf{g}\)。
+\item
+  算系数：代入公式算出最大步长系数 \(\beta\)。
+\item
+  线性搜索：沿着 \(\beta\mathbf{s}\) 方向试探，找到满足约束的最大步长。
+\item
+  更新：\(\theta_{\mathrm{new}}=\theta_{\mathrm{old}}+\mathrm{final\_step}\)。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-55}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-55}}
+
+\begin{itemize}
+\tightlist
+\item
+  Schulman, J., Levine, S., Abbeel, P., Jordan, M., \& Moritz, P. (2015). \href{https://arxiv.org/abs/1502.05477}{Trust Region Policy Optimization}. ICML 2015.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ppoux7b97ux6cd5ux4e0egae}{%
+\section{PPO算法与GAE}\label{ppoux7b97ux6cd5ux4e0egae}}
+
+PPO由TRPO衍生而来。TRPO提出了运用重要性采样、限制更新范围等，但它作为一个带约束的优化问题，求解十分复杂，是一个``精确但昂贵''的算法，在大模型中并不实用。我们想到，可以将约束条件直接写入目标函数。具体而言，有两种方法，也因此产生了PPO的两种变体。
+
+\hypertarget{ux4e00ppo-penalty}{%
+\subsection{一、PPO-Penalty}\label{ux4e00ppo-penalty}}
+
+目标函数如下：
+
+\[
+J^{\mathrm{PEN}}(\theta)
+=
+\mathbb{E}_t
+\bigl[
+\frac{\pi_\theta(a_t\mid s_t)}
+{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}
+A_t
+-
+\beta\cdot
+D_{\mathrm{KL}}
+\bigl(
+\pi_{\theta_{\mathrm{old}}}(\cdot\mid s_t)
+\Vert
+\pi_\theta(\cdot\mid s_t)
+\bigr)
+\bigr]
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  第一项：TRPO 中的代理目标，即 Ratio \(\times\) Advantage，负责让策略变好。
+\item
+  第二项：KL 散度惩罚项，\(D_{\mathrm{KL}}\) 衡量新旧策略分布的差异。
+\item
+  \(\beta\)：惩罚系数。\(\beta\) 越大，越不允许策略剧烈变化。
+\end{itemize}
+
+这里第一项同TRPO，即找到一个新策略，让获得奖励在新策略下的期望最大；第二项的前向KL散度主要意在确保旧策略 \(\pi_{\mathrm{old}}\) 概率高的区域，如预训练中学习到的常见的人类语言模式和世界基础知识，新策略 \(\pi_{\mathrm{new}}\) 概率也高，避免模型为了获取更高的 Reward 而丢弃预训练中学习到的知识而发生``模式崩塌''；而对于一些旧策略概率较低的高难度问题解法，新策略在提高概率的同时不会受到过度的惩罚。这样可以保证每次更新都在一个可信的``信任区域''内进行。
+
+PPO-Penalty 的精髓在于它不是使用固定的 \(\beta\)，而是根据每一轮更新后的实际 KL 散度值动态调整。设：
+
+\[
+d = D_{\mathrm{KL}}(\pi_{\mathrm{old}},\pi_{\mathrm{new}})
+\]
+
+设定一个目标 KL 值 \(d_{\mathrm{targ}}\)，例如 \(0.01\)：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  如果 \(d < d_{\mathrm{targ}}/1.5\)，说明策略变动太小、过于保守，于是减小 \(\beta\)，例如：
+\end{enumerate}
+
+\[
+\beta \leftarrow \beta/2
+\]
+
+让下一轮步子迈大一点。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  如果 \(d > d_{\mathrm{targ}}\times 1.5\)，说明策略变动太大、过于激进，于是增大 \(\beta\)，例如：
+\end{enumerate}
+
+\[
+\beta \leftarrow 2\beta
+\]
+
+让下一轮受到的惩罚更重。
+
+\hypertarget{ux4e8cppo-clipux4e3bux6d41}{%
+\subsection{二、PPO-Clip（主流）}\label{ux4e8cppo-clipux4e3bux6d41}}
+
+\[
+r_t(\theta)=
+\frac{\pi_\theta(a_t\mid s_t)}
+{\pi_{\theta_{\mathrm{old}}}(a_t\mid s_t)}
+\]
+
+\[
+J^{\mathrm{CLIP}}(\theta)
+=
+\mathbb{E}_t
+\bigl[
+\min\bigl(
+r_t(\theta)A_t,\,
+\mathrm{clip}(r_t(\theta),1-\epsilon,1+\epsilon)A_t
+\bigr)
+\bigr]
+\]
+
+上式中 \(A_t\) 表示动作的相对价值（下面会讲），我们希望新策略能让价值在该策略下的期望最大，经重要性采样可得上式，\(J\) 对 \(\theta\) 的导数即为此时参数网络更新的梯度。\(A_t\) 大于 \(0\) 时，我们会希望 \(\pi_\theta\) 更大，这等价于让 \(r_t\) 更大。\(E_t\) 是按旧策略采样获得的数据。
+
+在工程中，我们先按照 \(\pi_{\mathrm{old}}\) 走若干步，然后开始若干次更新。在每一轮策略更新中固定 \(\pi_{\mathrm{old}}\) 仍为采集数据时用的策略（在代码实现里就是对过去的样本直接算术平均），重复若干次下述操作：
+
+当 \(A_t>0\)，即动作是好的：
+
+\begin{itemize}
+\tightlist
+\item
+  原本希望 \(r_t\) 越大越好，也就是增加该动作概率。
+\item
+  Clip 限制：一旦 \(r_t>1+\epsilon\)，公式这一项变成 \((1+\epsilon)A_t\)，这是一个常数，导数为 \(0\)。
+\item
+  结果：策略更新停止，防止因为某个动作偶然得到高分，就把它的概率无限提高。
+\end{itemize}
+
+当 \(A_t<0\)，即动作是不好的：
+
+\begin{itemize}
+\tightlist
+\item
+  原本希望 \(r_t\) 越小越好，也就是降低该动作概率。
+\item
+  Clip 限制：一旦 \(r_t<1-\epsilon\)，公式这一项变成 \((1-\epsilon)A_t\)，导数为 \(0\)。
+\item
+  结果：策略更新停止，防止因为某个动作导致负分，就过度破坏策略结构。
+\end{itemize}
+
+一旦超出范围，目标函数J直接被``抹平''，以最大化目标函数为目的的本轮策略更新``失去动力''，自然就停止了。
+
+\hypertarget{ux4e09ux4e3aux4ec0ux4e48ppo-clipux6548ux679cux66f4ux4f18}{%
+\subsection{三、为什么PPO-Clip效果更优？}\label{ux4e09ux4e3aux4ec0ux4e48ppo-clipux6548ux679cux66f4ux4f18}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  稳定性：PPO-Penalty 的 \(\beta\) 调整虽然也是动态的，但有时候调整滞后，或者震荡，导致训练不稳定。而 PPO-Clip 的截断是硬性的、逐个样本生效的，极其稳健。
+\item
+  计算量：PPO-Penalty 需要计算 \(\pi_{\mathrm{new}}\) 和 \(\pi_{\mathrm{old}}\) 间的 KL 散度（虽然比 TRPO 的二阶导简单，但也需要算 log 概率的差值），而且两个概率都在变化，故计算开销大。PPO-Clip 只需要做简单的乘法和比大小（min, clamp），计算开销低。
+\item
+  超参数：PPO-Clip 的 \(\epsilon\) 通常固定 \(0.2\) 就能适配大多数环境（Atari, MuJoCo,机器人）。PPO-Penalty 的 \(d_{\mathrm{targ}}\) 和 \(\beta\) 初始值则比较敏感。
+\end{enumerate}
+
+\hypertarget{ux56dbux635fux5931ux51fdux6570-1}{%
+\subsection{四、损失函数}\label{ux56dbux635fux5931ux51fdux6570-1}}
+
+\[
+L_{\mathrm{total}}
+=
+-
+\underbrace{L^{\mathrm{CLIP}}}_{\text{Actor loss}}
++
+c_1
+\underbrace{L^{\mathrm{VF}}}_{\text{Critic loss}}
+-
+c_2
+\underbrace{S}_{\text{Entropy}}
+\]
+
+注意符号的微妙之处：这里假设优化器执行的是梯度下降，即最小化（minimize）。
+
+\begin{itemize}
+\tightlist
+\item
+  \(L^{\mathrm{CLIP}}\)：我们希望最大化奖励。为了用梯度下降优化，需要加负号，写成 \(-L^{\mathrm{CLIP}}\)。
+\item
+  \(L^{\mathrm{VF}}\)：我们希望最小化预测误差（MSE），所以直接是 \(+L^{\mathrm{VF}}\)。
+\item
+  \(S\)：我们希望最大化熵（鼓励探索）。为了用梯度下降优化，需要加负号，写成 \(-S\)。
+\end{itemize}
+
+把它们加在一起，PyTorch/TensorFlow 的优化器就可以一键优化所有目标。
+
+反向传播时，Loss的不同项就会将各个梯度分别传给不同模块的对应变量：
+
+\begin{verbatim}
+输入图像 --> [共享 CNN 层] --> 提取出的特征向量
+                         |
+                         +-----------------------------+
+                         |                             |
+                    [Actor 头]                    [Critic 头]
+                    输出动作概率                  输出价值 V
+\end{verbatim}
+
+\hypertarget{ux4e94ux4f18ux52bfux51fdux6570-a_tgaegeneralized-advantage-estimation}{%
+\subsection{\texorpdfstring{五、优势函数 \(A_t\)：GAE（Generalized Advantage Estimation）}{五、优势函数 A\_t：GAE（Generalized Advantage Estimation）}}\label{ux4e94ux4f18ux52bfux51fdux6570-a_tgaegeneralized-advantage-estimation}}
+
+Advantage \(A_t\) 衡量动作 \(a_t\) 比该状态下``平均表现''好多少。理论定义为：
+
+\[
+A_t=Q(s_t,a_t)-V(s_t)
+\]
+
+但在实际计算中，我们无法直接得知 \(Q\)，只能通过采样估计。
+
+情况一：单步估计（1-step estimation）
+
+如果我们只看一步未来，那么动作 \(a_t\) 的 \(Q\) 值可以被估计为：
+
+\[
+r_t+\gamma V(s_{t+1})
+\]
+
+此时 \(A_t\) 的估计值直接等于 TD Error：
+
+\[
+\hat{A}_t^{(1)}
+=
+\underbrace{r_t+\gamma V(s_{t+1})}_{\approx Q(s_t,a_t)}
+- V(s_t)
+=\delta_t
+\]
+
+PPO 默认使用 GAE 来计算优势函数。这是一个非常精妙的设计，它将 TD Error 做了指数加权移动平均：
+
+\[
+\hat{A}_t^{\mathrm{GAE}}
+=
+\delta_t
++(\gamma\lambda)\delta_{t+1}
++(\gamma\lambda)^{2}\delta_{t+2}
++\cdots
+\]
+
+其中 \(\lambda\) 是一个范围在 \([0,1]\) 之间的超参数。
+
+通过 \(\lambda\) 可以调节 TD Error 的作用：
+
+当 \(\lambda=0\) 时，属于高偏差、低方差：
+
+\[
+\hat{A}_t
+=
+\delta_t
+=
+r_t+\gamma V(s_{t+1})-V(s_t)
+\]
+
+此时 \(A_t\) 完全等于当前的单步 TD Error。
+
+\begin{itemize}
+\tightlist
+\item
+  优点：方差小，只依赖一步随机奖励 \(r_t\)。
+\item
+  缺点：偏差大，严重依赖 Critic 网络 \(V(s_{t+1})\) 的准确性。如果 Critic 没训练好，估计就是错的。
+\end{itemize}
+
+当 \(\lambda=1\) 时，属于无偏差、高方差：
+
+\[
+\hat{A}_t
+=
+\sum_{l=0}^{\infty}\gamma^{l}\delta_{t+l}
+=
+\bigl(
+\sum_{l=0}^{\infty}\gamma^{l}r_{t+l}
+\bigr)
+- V(s_t)
+\]
+
+此时公式展开后，中间的 \(V\) 项会相互抵消，最终变成 Monte Carlo Returns（真实回报）减去 Baseline。
+
+\begin{itemize}
+\tightlist
+\item
+  优点：偏差小，真实回报是最准确的``事实''。
+\item
+  缺点：方差极大，因为累加了每一步环境的随机性。
+\end{itemize}
+
+那这里 \(A_t\) 是用什么动作计算得到的呢？后面会提到，PPO实际运行时先用老策略走一定步数，再统一计算途中各个 \(t\) 时刻的优势函数，再更新。因此 \(A_t\) 就是用这些步数的实际动作算出来的。
+
+\hypertarget{ux516dux5728ux5de5ux7a0bux4e2dux7684ux8fd0ux884cux6d41ux7a0bux5982openai-baselinesux6216stable-baselines3}{%
+\subsection{六、在工程中的运行流程（如OpenAI Baselines或Stable Baselines3）}\label{ux516dux5728ux5de5ux7a0bux4e2dux7684ux8fd0ux884cux6d41ux7a0bux5982openai-baselinesux6216stable-baselines3}}
+
+在工程中，走一步更新一次意味着串行计算，GPU利用率极低。基于我们已经通过重要性采样保证了数据的可复用性，我们往往以一个``大循环''为单位：每一次都一次性走若干步（如2048步），收集一批数据，运用这批数据训练更新策略，再扔掉这批数据。
+
+初始化：初始化 Actor 网络 \(\pi_\theta\) 和 Critic 网络 \(V_\phi\)。
+
+大循环（For each iteration）包括四个阶段：
+
+\textbf{1. 数据收集阶段（Interaction）}
+
+\begin{itemize}
+\tightlist
+\item
+  使用当前策略 \(\pi_{\theta_{\mathrm{old}}}\) 在环境中运行 \(T\) 步，例如 2048 步。
+\item
+  收集轨迹数据：
+\end{itemize}
+
+\[
+\{s_t,a_t,r_t,s_{t+1},\log\pi_{\mathrm{old}}(a_t\mid s_t)\}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  利用 Critic 网络计算状态价值 \(V(s_t)\)。
+\end{itemize}
+
+\textbf{2. 优势计算阶段（Advantage）}
+
+\begin{itemize}
+\tightlist
+\item
+  计算 TD Error：
+\end{itemize}
+
+\[
+\delta_t=r_t+\gamma V(s_{t+1})-V(s_t)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  计算 GAE（Generalized Advantage Estimation）\(\hat{A}_t\)。这是一个递归公式，用来在偏差和方差之间做平衡。
+\end{itemize}
+
+注：在收集数据的过程中，一般我们会顺便把 \(V(s_t)\) 算出来，这是因为在 PPO 的工程实现中，Actor 和 Critic 通常共享部分底层网络（CNN/MLP）。当让 Actor 选择动作 \(a_t\) 时，必须把 \(s_t\) 喂进网络。既然数据已经流过网络了，顺便让 Critic 输出一下 \(V(s_t)\)，几乎不增加额外的计算成本。如果不存下来，等到训练阶段，还得把 \(s_t\) 重新喂一遍网络来得到 \(V(s_t)\) 用于计算优势，重复计算，浪费 GPU。
+
+注：优势是在走完动作步后、更新策略梯度前统一计算的，GAE是TD Error加权后，再一直从t累加到2048得到的。
+
+\textbf{3. 优化更新阶段（Optimization）}
+
+\begin{itemize}
+\tightlist
+\item
+  重要：此时 \(\pi_{\theta_{\mathrm{old}}}\) 固定不动，作为分母；优化的是新的 \(\pi_\theta\)，作为分子。
+\item
+  将收集到的 \(T\) 个数据打乱，分成多个 mini-batch，例如每个 batch 64 个数据。
+\item
+  Epoch 循环，例如重复 10 次。
+\end{itemize}
+
+对每个 mini-batch：
+
+\begin{itemize}
+\tightlist
+\item
+  计算新概率比率：
+\end{itemize}
+
+\[
+r_t(\theta)=
+\frac{\pi_\theta(a\mid s)}
+{\pi_{\mathrm{old}}(a\mid s)}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  计算 Clip 损失 \(L^{\mathrm{CLIP}}\)。
+\item
+  计算 Critic 的价值损失：
+\end{itemize}
+
+\[
+L^{\mathrm{VF}}=
+\bigl(
+V_\phi(s_t)-V_{\mathrm{target}}
+\bigr)^{2}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  计算熵正则项 \(S\)，用于鼓励探索。
+\item
+  计算总损失：
+\end{itemize}
+
+\[
+L=
+-
+L^{\mathrm{CLIP}}
++
+c_1L^{\mathrm{VF}}
+-
+c_2S
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  反向传播，更新 \(\theta\) 和 \(\phi\)。
+\end{itemize}
+
+\textbf{4. 同步策略}
+
+\begin{itemize}
+\tightlist
+\item
+  本轮更新结束后，令：
+\end{itemize}
+
+\[
+\pi_{\theta_{\mathrm{old}}}\leftarrow\pi_\theta
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  清空数据缓冲区，进入下一次大循环。
+\end{itemize}
+
+假设参数设置如下：
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{n\_steps}，缓冲区大小：\(2048\)。
+\item
+  \texttt{batch\_size}，小批次大小：\(64\)。
+\item
+  \texttt{n\_epochs}，复用次数：\(10\)。
+\end{itemize}
+
+在一个``大循环''里，反向传播发生的次数是：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  数据分批：2048 个数据被分成：
+\end{enumerate}
+
+\[
+2048/64=32
+\]
+
+个 mini-batch。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  一轮遍历：这 32 个 mini-batch 会被依次喂给 GPU，产生 32 次反向传播。
+\item
+  多轮复用：重复跑 10 个 epoch。
+\item
+  总次数：
+\end{enumerate}
+
+\[
+32\times 10=320
+\]
+
+因此，一个大循环中一共产生 320 次反向传播。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-56}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-56}}
+
+\begin{itemize}
+\tightlist
+\item
+  Schulman, J., Wolski, F., Dhariwal, P., Radford, A., \& Klimov, O. (2017). \href{https://arxiv.org/abs/1707.06347}{Proximal Policy Optimization Algorithms}. arXiv:1707.06347.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{klux6563ux5ea6ux5728rlux4e2dux7684ux5176ux4ed6ux5e94ux7528}{%
+\section{KL散度在RL中的其他应用}\label{klux6563ux5ea6ux5728rlux4e2dux7684ux5176ux4ed6ux5e94ux7528}}
+
+除了在 TRPO 和 PPO 中作为稳定性约束外，KL 散度在 RL 中还有其他几个精妙的应用。
+
+\hypertarget{ux63a2ux7d22ux4e0eux4fe1ux606fux589eux76ca}{%
+\subsection{1. 探索与信息增益}\label{ux63a2ux7d22ux4e0eux4fe1ux606fux589eux76ca}}
+
+在好奇心驱动探索和基于信息的探索方法中，KL 散度被用来量化``惊喜''或``信息增益''。
+
+\begin{itemize}
+\tightlist
+\item
+  核心思想：智能体应该探索那些能带来最多``新信息''的状态。
+\item
+  如何实现：使用 KL 散度来衡量新观测数据与当前模型预测之间的差异。
+\item
+  如果一个状态转换 \((s,a,s')\) 与智能体内部动态模型的预测分布相差很大，即 KL 散度高，那么这个转换就是``令人惊讶的''，应该获得额外的``内在奖励''。
+\end{itemize}
+
+数学形式为：
+
+\[
+r_{\mathrm{intrinsic}}
+=
+D_{\mathrm{KL}}\bigl(
+P_{\mathrm{predicted}}(\cdot\mid s,a)
+\Vert
+P_{\mathrm{empirical}}(s')
+\bigr)
+\]
+
+其中 \(P_{\mathrm{empirical}}(s')\) 是实际到达状态的分布，通常用 Dirac delta 函数表示。
+
+这鼓励智能体主动探索那些它无法准确预测结果的环境区域，从而更高效地学习世界模型。
+
+\hypertarget{ux6a21ux4effux5b66ux4e60ux4e0eux884cux4e3aux514bux9686}{%
+\subsection{2. 模仿学习与行为克隆}\label{ux6a21ux4effux5b66ux4e60ux4e0eux884cux4e3aux514bux9686}}
+
+在模仿学习中，目标是让智能体的策略 \(\pi_{\mathrm{learner}}\) 尽可能接近专家策略 \(\pi_{\mathrm{expert}}\)。
+
+\begin{itemize}
+\tightlist
+\item
+  直接最小化 KL 散度：可以将损失函数直接定义为两者之间的 KL 散度：
+\end{itemize}
+
+\[
+L_{\mathrm{imitation}}
+=
+\mathbb{E}_{s\sim d_{\mathrm{expert}}}
+\bigl[
+D_{\mathrm{KL}}\bigl(
+\pi_{\mathrm{expert}}(\cdot\mid s)
+\Vert
+\pi_{\mathrm{learner}}(\cdot\mid s)
+\bigr)
+\bigr]
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  解释：这个损失函数要求学习者的策略，在专家访问过的状态上，其动作分布要与专家的动作分布高度一致。这是一种非常直接且有效的模仿学习方式。
+\end{itemize}
+
+\hypertarget{ux4fe1ux606fux8bbaux6b63ux5219ux5316ux4e0eux6700ux5927ux71b5-rl}{%
+\subsection{3. 信息论正则化与最大熵 RL}\label{ux4fe1ux606fux8bbaux6b63ux5219ux5316ux4e0eux6700ux5927ux71b5-rl}}
+
+在最大熵强化学习（如 SAC、Soft Q-Learning）中，目标不仅是最大化累积奖励，还要最大化策略的熵，即策略的随机性。
+
+\begin{itemize}
+\tightlist
+\item
+  核心目标：
+\end{itemize}
+
+\[
+J(\pi)
+=
+\mathbb{E}
+\bigl[
+\sum_t \gamma^{t}
+\bigl(
+r(s_t,a_t)+\alpha\mathcal{H}(\pi(\cdot\mid s_t))
+\bigr)
+\bigr]
+\]
+
+其中 \(\mathcal{H}\) 是熵，\(\alpha\) 是温度参数。
+
+\begin{itemize}
+\tightlist
+\item
+  与 KL 散度的联系：这个最大熵目标在数学上等价于在标准 RL 目标上加上一个与均匀分布的 KL 散度正则项。
+\item
+  最大化熵 \(\mathcal{H}(\pi)\) 等价于最小化 \(D_{\mathrm{KL}}(\pi\Vert\mathrm{Uniform})\)，即鼓励策略接近均匀分布，也就是最随机的分布。
+\item
+  在 SAC 中的具体体现：SAC 的策略更新目标实际上包含了与一个引导分布（通常是当前 Q 函数诱导的 Boltzmann 分布）的 KL 散度最小化。
+\end{itemize}
+
+\hypertarget{ux591aux4efbux52a1ux5b66ux4e60ux4e0eux77e5ux8bc6ux8fc1ux79fb}{%
+\subsection{4. 多任务学习与知识迁移}\label{ux591aux4efbux52a1ux5b66ux4e60ux4e0eux77e5ux8bc6ux8fc1ux79fb}}
+
+当智能体需要学习多个相关任务时，KL 散度可以帮助防止灾难性遗忘并促进知识迁移。
+
+\begin{itemize}
+\tightlist
+\item
+  防止遗忘：在学习新任务时，可以在损失函数中加入一个 KL 散度项，约束新策略不要偏离在旧任务上学到的策略太远：
+\end{itemize}
+
+\[
+L
+=
+L_{\mathrm{new\_task}}
++
+\beta D_{\mathrm{KL}}\bigl(
+\pi_{\mathrm{old}}
+\Vert
+\pi_{\mathrm{new}}
+\bigr)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  知识迁移：通过最小化不同任务策略之间的 KL 散度，可以鼓励它们共享共同的行为模式，从而加速新任务的学习。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-57}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-57}}
+
+\begin{itemize}
+\tightlist
+\item
+  Pathak, D., Agrawal, P., Efros, A. A., \& Darrell, T. (2017). \href{https://arxiv.org/abs/1705.05363}{Curiosity-driven Exploration by Self-supervised Prediction}. ICML 2017.
+\item
+  Ho, J., \& Ermon, S. (2016). \href{https://proceedings.neurips.cc/paper/2016/hash/cc7e2b878868cbae992d1fb743995d8f-Abstract.html}{Generative Adversarial Imitation Learning}. NeurIPS 2016.
+\item
+  Haarnoja, T., Zhou, A., Abbeel, P., \& Levine, S. (2018). \href{https://arxiv.org/abs/1801.01290}{Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor}. ICML 2018.
+\item
+  Kirkpatrick, J., Pascanu, R., Rabinowitz, N., et al.~(2017). \href{https://doi.org/10.1073/pnas.1611835114}{Overcoming catastrophic forgetting in neural networks}. Proceedings of the National Academy of Sciences, 114(13), 3521-3526.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ddpgux7b97ux6cd5}{%
+\section{DDPG算法}\label{ddpgux7b97ux6cd5}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-3}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-3}}
+
+DDPG算法可以视为DQN的一种改进算法。我们知道，DQN无法用于输出连续动作，是因为它有一个取max的操作。当输出动作有无限多种时，我们无法直接进行``取极大似然''这一操作，或者说无法直接求出这个优化问题的解析解。由此，我们想到训练一个神经网络来学习、输出这个让价值函数取极大的动作。输入是所在状态，输出是动作，这显然是一个策略网络。
+
+由此，它成为了一个结合价值与策略的Actor-Critic架构，但同时又以DQN为基础，后面我们会看到它引入了DQN的经验回放、目标网络等。和REINFORCE、PPO中``输出动作由在概率分布中随机采样''不同，DDPG的输出动作是对概率分布中极大值点的逼近。
+
+\hypertarget{ux4e8cux7f51ux7edcux67b6ux6784}{%
+\subsection{二、网络架构}\label{ux4e8cux7f51ux7edcux67b6ux6784}}
+
+DDPG算法引入了``目标网络''思想：
+
+DDPG 包含四个网络：
+
+\begin{itemize}
+\tightlist
+\item
+  Actor 网络 \(\mu_\theta\)：当前策略网络。输入 \(s\)，输出 \(a\)。
+\item
+  Critic 网络 \(Q_\phi\)：当前价值网络。输入 \(s\) 和 \(a\)，输出 \(Q(s,a)\)。
+\item
+  Target Actor \(\mu_{\theta'}\)：目标策略网络。结构同 Actor，参数滞后更新。
+\item
+  Target Critic \(Q_{\phi'}\)：目标价值网络。结构同 Critic，参数滞后更新。
+\end{itemize}
+
+两个目标网络的用途后续会介绍。
+
+\hypertarget{ux4e09ux6570ux5b66ux539fux7406ux4e0eux66f4ux65b0ux516cux5f0f}{%
+\subsection{三、数学原理与更新公式}\label{ux4e09ux6570ux5b66ux539fux7406ux4e0eux66f4ux65b0ux516cux5f0f}}
+
+\hypertarget{critic-ux7684ux66f4ux65b0ux62dfux5408-bellman-ux6700ux4f18ux65b9ux7a0b}{%
+\subsubsection{1. Critic 的更新（拟合 Bellman 最优方程）}\label{critic-ux7684ux66f4ux65b0ux62dfux5408-bellman-ux6700ux4f18ux65b9ux7a0b}}
+
+Critic 的任务是估算 \(Q\) 值。由于 DDPG 是 Off-policy，我们使用 TD Error。
+
+\begin{itemize}
+\tightlist
+\item
+  计算目标值（Target）：这里用到了 Target Actor 和 Target Critic。
+\end{itemize}
+
+\[
+y_i
+=
+r_i
++
+\gamma Q_{\phi'}\bigl(
+s_{i+1},
+\mu_{\theta'}(s_{i+1})
+\bigr)
+\]
+
+注意：这里没有 \(\max\) 操作，因为动作是连续的，无法穷举。DDPG 认为 Target Actor 输出的动作 \(\mu_{\theta'}(s')\) 近似就是那个最优动作。
+
+\begin{itemize}
+\tightlist
+\item
+  损失函数：
+\end{itemize}
+
+\[
+L_{\mathrm{critic}}
+=
+\frac{1}{N}
+\sum_i
+\bigl(
+y_i-Q_\phi(s_i,a_i)
+\bigr)^{2}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  通过最小化 MSE 来更新 \(Q_\phi\)。
+\end{itemize}
+
+Critic的任务是拟合Q网络，获取环境的价值特征，与自身采取的策略无关，因而损失函数类似于DQN，而没有出现累积奖励J。
+
+\hypertarget{actor-ux7684ux66f4ux65b0ux786eux5b9aux6027ux7b56ux7565ux68afux5ea6ux5b9aux7406}{%
+\subsubsection{2. Actor 的更新（确定性策略梯度定理）}\label{actor-ux7684ux66f4ux65b0ux786eux5b9aux6027ux7b56ux7565ux68afux5ea6ux5b9aux7406}}
+
+这是 DDPG 的精髓。我们希望 Actor 输出的动作 \(a=\mu_\theta(s)\) 能够让 Critic 打分 \(Q(s,a)\) 最高。
+
+目标函数为：
+
+\[
+J(\theta)
+=
+\mathbb{E}\bigl[
+Q(s,\mu_\theta(s))
+\bigr]
+\]
+
+利用链式法则求梯度：
+
+\[
+\nabla_\theta J
+\approx
+\mathbb{E}
+\bigl[
+\nabla_a Q_\phi(s,a)
+\big|_{a=\mu_\theta(s)}
+\cdot
+\nabla_\theta \mu_\theta(s)
+\bigr]
+\]
+
+直观解释：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Critic 告诉 Actor：在状态 \(s\)，如果把动作 \(a\) 增大一点，\(Q\) 值会增加多少。这是 \(\nabla_a Q\)。
+\item
+  Actor 收到信号后，计算自己的参数 \(\theta\) 该怎么变，才能让输出的 \(a\) 增大。这是 \(\nabla_\theta\mu\)。
+\item
+  两者相乘，直接通过反向传播更新 \(\theta\)。
+\end{enumerate}
+
+\hypertarget{ux56dbux63d0ux9ad8ux8badux7ec3ux7a33ux5b9aux6027ux7684ux6280ux672f}{%
+\subsubsection{（四）提高训练稳定性的技术}\label{ux56dbux63d0ux9ad8ux8badux7ec3ux7a33ux5b9aux6027ux7684ux6280ux672f}}
+
+\textbf{A. 经验回放（Replay Buffer）}
+
+同 DQN。DDPG 是 Off-policy 的，训练时把数据 \((s,a,r,s')\) 存入 Buffer，更新时随机抽取 Batch。这消除了数据的时间相关性，提高了样本效率。
+
+\textbf{B. 软更新（Soft Update）}
+
+DQN 的目标网络是每隔 \(C\) 步把参数直接复制过去（Hard Update）。DDPG 觉得这样太剧烈了，改用软更新：
+
+\[
+\theta'
+\leftarrow
+\tau\theta+(1-\tau)\theta'
+\]
+
+其中 \(\tau\) 是一个很小的数，如 \(0.001\)。这意味着目标网络的变化非常缓慢，只会平滑地跟随主网络更新，极大地增强了 Critic 训练的稳定性。
+
+\textbf{C. 探索噪声（Exploration Noise）}
+
+因为策略是确定性的，即输入 \(s\) 必得 \(a\)，Actor 自己不会尝试新动作。为了探索，必须在训练时的动作上手动加噪声：
+
+\[
+a_{\mathrm{train}}
+=
+\mu_\theta(s)+\mathcal{N}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  原论文使用的是 OU 噪声（Ornstein-Uhlenbeck process），因为它具有时间相关性，适合机器人控制。
+\item
+  现在很多实现发现简单的高斯噪声（Gaussian Noise）效果也不错。
+\end{itemize}
+
+\hypertarget{ux4e94ux7b97ux6cd5ux5b8cux6574ux6d41ux7a0b}{%
+\subsubsection{（五）算法完整流程}\label{ux4e94ux7b97ux6cd5ux5b8cux6574ux6d41ux7a0b}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化 Actor \(\mu\)、Critic \(Q\) 及其对应的 Target 网络 \(\mu'\)、\(Q'\)。
+\item
+  循环（Episode）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    初始化噪声进程 \(\mathcal{N}\)。
+  \item
+    循环（Step）：
+
+    \begin{enumerate}
+    \def\labelenumii{\arabic{enumii}.}
+    \tightlist
+    \item
+      根据当前状态 \(s_t\)，选择动作 \(a_t=\mu(s_t)+\mathrm{Noise}\)。
+    \item
+      执行动作，得到 \(r_t,s_{t+1}\)。
+    \item
+      存入 Buffer \(R\)。
+    \item
+      采样：从 \(R\) 中随机采一个 Batch。
+    \item
+      算目标：\(y=r+\gamma Q'(s',\mu'(s'))\)。
+    \item
+      更新 Critic：最小化 \((y-Q(s,a))^{2}\)。
+    \item
+      更新 Actor：最大化 \(Q(s,\mu(s))\)。
+    \item
+      软更新 Target：\(\theta'\leftarrow\tau\theta+(1-\tau)\theta'\)。
+    \end{enumerate}
+  \end{itemize}
+\end{enumerate}
+
+\hypertarget{ux516dddpg-ux7684ux4f18ux7f3aux70b9}{%
+\subsubsection{（六）DDPG 的优缺点}\label{ux516dddpg-ux7684ux4f18ux7f3aux70b9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  优点
+\end{enumerate}
+
+Off-policy：样本效率高，比PPO快（指需要的交互次数少）。
+
+解决连续控制：填补了DQN在连续动作空间的空白。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  缺点
+\end{enumerate}
+
+对超参数敏感：非常难调（特别是学习率和噪声）。
+
+Q值估计过高：Critic的更新目标实质上和DQN的r+gamma*maxQ(s,a)，由于取max操作，被高估的数值更可能被取到，容易导致结果Q值虚高，误导策略。后来TD3（Twin Delayed DDPG）算法通过用两个Critic取最小值，解决了这个问题。
+
+稳定性不如 PPO：容易收敛到局部最优或震荡。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-58}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-58}}
+
+\begin{itemize}
+\tightlist
+\item
+  Lillicrap, T. P., Hunt, J. J., Pritzel, A., et al.~(2016). \href{https://arxiv.org/abs/1509.02971}{Continuous control with deep reinforcement learning}. ICLR 2016.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{sacux7b97ux6cd5}{%
+\section{SAC算法}\label{sacux7b97ux6cd5}}
+
+SAC（Soft Actor-Critic）是目前在连续动作控制中（如机器人控制、自动驾驶）应用最广泛的强化学习算法之一。
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-4}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-4}}
+
+传统 RL 的目标是：
+
+\[
+\max_\pi
+\sum_t
+\mathbb{E}[r_t]
+\]
+
+也就是说，只要分数高就行，不关心你怎么走，也不关心你的动作是否单一。这通常导致策略坍缩到某一条特定路径，一旦环境微变，策略就可能失效，鲁棒性差。
+
+SAC 的目标是：
+
+\[
+\max_\pi
+\sum_t
+\mathbb{E}
+\bigl[
+r_t+\alpha\mathcal{H}(\pi(\cdot\mid s_t))
+\bigr]
+\]
+
+也就是说，既要分数高，又要熵 \(\mathcal{H}\) 最大。
+
+SAC 鼓励Actor在保持高回报的同时，尽可能让动作分布更``宽''、更随机。直观例子：假设有两条路都能通往终点拿到100分。DDPG/PPO通常会随机收敛到其中一条，并不再探索另一条，SAC会根据概率同时走这两条路。好处在于极强的探索能力（不需要像DDPG那样手动加噪声，策略本身就是随机的）和鲁棒性（面对干扰时，智能体掌握了多种解决方案），适合需要保留更多可能性的场景。
+
+\hypertarget{ux4e8cux67b6ux6784}{%
+\subsection{二、架构}\label{ux4e8cux67b6ux6784}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  Actor：和 DDPG 的``逼近 \(Q\) 值最大的策略''（DQN 变体）不同，SAC 的 Actor 在整个概率分布（高斯分布）范围内随机采样（一般会先输出均值和标准差再采样）。Actor 希望自身输出的概率分布能使期望总奖励最大，这里奖励的估计运用了 Critic。
+\item
+  Critic：运用贝尔曼期望方程。
+\end{enumerate}
+
+由于 Actor 会选择 \(Q\) 值大的策略，在更新某个状态时，在下一个状态选取的策略很可能就是那个 \(Q\) 被高估的策略，这样就会导致 \(Q\) 值的偏高不断向前传播。为解决这个问题，采用双 \(Q\) 网络架构，使用两个 Critic 网络（\(Q_1,Q_2\)）来计算价值，取最小值以缓解过估计问题。同时，在考量``状态的价值''时，不仅考虑动作的价值，也考虑当前位置策略的随机性。
+
+普通时序差分更新可以写成：
+
+\[
+Q(s_t,a_t)
+\leftarrow
+Q(s_t,a_t)
++
+\alpha
+\bigl[
+r_t+\gamma Q(s_{t+1},a_{t+1})-Q(s_t,a_t)
+\bigr]
+\]
+
+SAC 的 Critic 更新可以理解为在这类动作价值递推中加入熵项，让策略在追求高回报的同时保留足够随机性。
+
+\hypertarget{ux4e09ux76eeux6807ux51fdux6570}{%
+\subsection{三、目标函数}\label{ux4e09ux76eeux6807ux51fdux6570}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Critic 的目标函数
+\end{enumerate}
+
+在 SAC 的推导中，状态价值 \(V(s)\) 和动作价值 \(Q(s,a)\) 的关系是：
+
+\[
+V(s_t)
+=
+\mathbb{E}_{a_t\sim\pi}
+\bigl[
+Q(s_t,a_t)
+-
+\alpha\log\pi(a_t\mid s_t)
+\bigr]
+\]
+
+这句话的人话翻译是：站在状态 \(s_t\)，还没做动作，我现在的身价 \(V\) 是多少？答案是：等于我接下来随便做一个动作 \(a_t\)，这个动作带来的后续总回报 \(Q(s_t,a_t)\)，加上我做这个动作本身带来的随机性快乐，也就是当前熵奖励。
+
+从而 Critic 的训练目标为让 \(Q(s_t,a_t)\) 趋近于下面的值：
+
+\[
+y
+=
+r_t
++
+\gamma
+\bigl(
+Q(s_{t+1},a_{t+1})
+-
+\alpha\log\pi(a_{t+1}\mid s_{t+1})
+\bigr)
+\]
+
+这是一个递归的过程，可以展开为：
+
+\[
+Q(s_t,a_t)
+\approx
+\mathbb{E}
+\bigl[
+r_t
++
+\gamma(r_{t+1}+\alpha\mathcal{H}_{t+1})
++
+\gamma^{2}(r_{t+2}+\alpha\mathcal{H}_{t+2})
++
+\cdots
+\bigr]
+\]
+
+关键点：
+
+\begin{itemize}
+\tightlist
+\item
+  它包含了 \(r_t\) 以及从 \(t+1\) 时刻开始的所有未来奖励和熵。
+\item
+  它不包含当前时刻 \(t\) 的熵 \(-\alpha\log\pi(a_t\mid s_t)\)。
+\end{itemize}
+
+也就是说，\(Q(s_t,a_t)\) 事实上包含了 \(r_t\)，以及从 \(t+1\) 时刻开始未来的所有奖励和熵。但需要注意的是，它不包括当前时刻 \(t\) 的熵，因为对于同一状态 \(s_t\)，当前状态 \(t\) 下的随机性是定值（不同策略下未来的随机性才不同），比较不同动作 \(a_t\) 的在 \(t\) 时刻的熵没有意义。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  Actor 的目标函数
+\end{enumerate}
+
+对于给定状态s，Actor的目标是选择一个策略，使得下面的表达式值最大：
+
+\[
+J(\theta)
+=
+\mathbb{E}_{a\sim\pi}
+\bigl[
+Q(s,a)
+-
+\alpha\log\pi(a\mid s)
+\bigr]
+\]
+
+它的实际意义是，既希望动作价值（未来期望获得的奖励，以及未来状态的期望熵值）尽可能大，也希望当下状态下自己策略的熵值尽可能大。
+
+\hypertarget{ux56dbsacux8badux7ec3ux4e2dux7684ux4e24ux4e2aux95eeux9898ux4e0eux89e3ux51b3ux65b9ux6848}{%
+\subsection{四、SAC训练中的两个问题与解决方案}\label{ux56dbsacux8badux7ec3ux4e2dux7684ux4e24ux4e2aux95eeux9898ux4e0eux89e3ux51b3ux65b9ux6848}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Actor 的更新中，目标函数 \(J(\theta)\) 表达式中涉及动作 \(a\)。动作 \(a\) 是采样获得的，采样操作不可导。也就是说我们无法计算 \(a\) 对 \(u\) 的导数。因为在采样操作中，\(u\) 只是改变了概率密度，而不是直接参与了生成 \(a\) 的算术运算，我们无法回答``\(u\) 增加一个小量，会让 \(a\) 增加多少''。这样，梯度传不过去，就无法反向传播。但是我们客观上又需要通过梯度来更新采样分布。
+\end{enumerate}
+
+解决方案是重参数化（Reparameterization）：不直接从 \(\mathcal{N}(\mu,\sigma)\) 采样，而是从标准正态分布 \(\epsilon\sim\mathcal{N}(0,1)\) 采样，然后变换：
+
+\[
+a
+=
+\tanh\bigl(
+\mu_\theta(s)+\sigma_\theta(s)\cdot\epsilon
+\bigr)
+\]
+
+这样，我们要调整的变量（均值、方差）都回到了计算图里，\(\epsilon\) 的分布则被确定为 \(\mathcal{N}(0,1)\)，相当于变成了一个普通的、与参数无关的、不需要我们调整的随机噪声，把随机性从计算图的内部踢到了计算图的外部（输入端）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \(\alpha\) 的调整：早期的 SAC 需要手动调整，很难调。后来作者提出了自动调整方案，原理是设定一个目标熵，如果当前策略太随机（实际熵 \(>\) 目标熵），就减小 \(\alpha\)，让它收敛一点；如果当前策略太确定（实际熵 \(<\) 目标熵），就增大 \(\alpha\)，逼它去探索。
+\end{enumerate}
+
+\hypertarget{ux4e94sacux66f4ux65b0ux7684ux76eeux6807ux4e0eux7b56ux7565ux6709ux5173ux90a3ux4e3aux4ec0ux4e48sacux662foff-policy}{%
+\subsection{五、SAC更新的目标与策略有关，那为什么SAC是Off-Policy？}\label{ux4e94sacux66f4ux65b0ux7684ux76eeux6807ux4e0eux7b56ux7565ux6709ux5173ux90a3ux4e3aux4ec0ux4e48sacux662foff-policy}}
+
+SAC的确会利用经验回放里自身走过的路，但是在计算目标值时，抛弃了回放池里存储的``旧的下一步动作''，而是利用当前的策略在``旧的下一步状态''上重新采样了一个``新的下一步动作''。
+
+假设 Replay Buffer 里存的一条旧数据是：
+
+\[
+(s_t,a_t,r_t,s_{t+1})
+\]
+
+这条数据可能是 1 小时前采集的，那时的策略是 \(\pi_{\mathrm{old}}\)。
+
+\textbf{A. 左边项（预测值）：\(Q(s_t,a_t)\)}
+
+这里用的 \(s_t\) 和 \(a_t\) 都是 Buffer 里的旧数据。
+
+\begin{itemize}
+\tightlist
+\item
+  逻辑：Critic 的任务是记住历史。它需要学习``在状态 \(s_t\) 执行动作 \(a_t\)，确实得到了 \(r_t\) 的奖励并跳到了 \(s_{t+1}\)''。
+\item
+  这部分没问题：Q 函数的学习本身就是为了拟合环境动力学，和策略无关。
+\end{itemize}
+
+\textbf{B. 右边项（目标值）：\(y\)}
+
+问题出在这里。我们需要计算下一时刻的价值：
+
+\[
+y
+=
+r_t
++
+\gamma
+\bigl(
+Q(s_{t+1},\tilde{a}_{t+1})
+-
+\alpha\log\pi(\tilde{a}_{t+1}\mid s_{t+1})
+\bigr)
+\]
+
+注意这个 \(\tilde{a}_{t+1}\)，也就是新的下一步动作。它从哪里来？
+
+\begin{itemize}
+\tightlist
+\item
+  如果是 Sarsa（On-policy）：Sarsa 会直接使用 Buffer 里存的那个旧动作 \(a_{t+1}\)，因为 Sarsa 评估的是``生成这条数据的那个旧策略''。所以一旦策略变了，旧数据的 \(a_{t+1}\) 就不能代表新策略行为了，数据作废。
+\item
+  如果是 SAC（Off-policy）：SAC 无视 Buffer 里原本存的那个 \(a_{t+1}\)。它看着 Buffer 里的 \(s_{t+1}\)，然后问当前的 Actor（新策略 \(\pi_{\mathrm{new}}\)）：如果现在的你站在 \(s_{t+1}\) 这个位置，你会做什么动作？
+\end{itemize}
+
+Actor 会根据当前的参数，重新采样出一个动作 \(\tilde{a}_{t+1}\sim\pi_{\mathrm{new}}(\cdot\mid s_{t+1})\)。然后 Critic 用这个新动作 \(\tilde{a}_{t+1}\) 去计算未来的价值。
+
+在这个重新采样 \(a_{t+1}\) 的过程中，我们并不需要与环境交互，因为我们只需要根据当前的采样策略采样动作即可，不需要从环境中获得奖励或进行状态转移。
+
+让我们回顾 Off-policy 的定义：用于优化的数据生成策略（Behavior Policy）与当前待评估或优化的策略（Target Policy）不一致。
+
+在 SAC 中：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  数据的提供者是旧策略，因为它提供了 \(s_t,a_t,r_t,s_{t+1}\)，特别是状态转移的物理事实。
+\item
+  价值的评估者是新策略，因为我们在 \(s_{t+1}\) 上假想了新策略会怎么做，即重采样了 \(\tilde{a}_{t+1}\)。
+\end{enumerate}
+
+这种``移花接木''的操作，正是 Off-policy 的精髓：利用旧策略走过的路 \((s\to s')\) 来了解世界，但用新策略的脑子来判断未来值多少钱。
+
+理论上其实还有一个问题：Replay Buffer里的s是旧策略访问过的状态。新策略可能会访问完全不同的状态区域。但深度学习的泛化能力通常能缓解这个问题，所以DDPG/SAC在实践中效果很好。
+
+\hypertarget{ux516dsarsaa2cux548cppoux80fdux7528ux8fd9ux79cdux65b9ux5f0fux53d8ux6210off-policyux5417}{%
+\subsection{六、Sarsa、A2C和PPO能用这种方式变成off-policy吗？}\label{ux516dsarsaa2cux548cppoux80fdux7528ux8fd9ux79cdux65b9ux5f0fux53d8ux6210off-policyux5417}}
+
+在标准Sarsa中：
+
+\[
+Q(s_t,a_t)
+\leftarrow
+Q(s_t,a_t)
++
+\alpha
+\bigl[
+r_t
++
+\gamma Q(s_{t+1},a_{t+1})
+-
+Q(s_t,a_t)
+\bigr]
+\]
+
+我们用类似的思路，舍弃历史数据中的 \(a_{t+1}\)，用当前策略 \(\pi_{\mathrm{new}}\) 重新采样一个 \(a_{t+1}\)：
+
+也就是抛弃历史数据中的 \(a_{t+1}\)，用当前的策略 \(\pi_{\mathrm{new}}\) 在 \(s_{t+1}\) 上重新采样一个 \(\tilde{a}_{t+1}\)：
+
+\[
+Q(s_t,a_t)
+\leftarrow
+Q(s_t,a_t)
++
+\alpha
+\bigl[
+r_t
++
+\gamma Q(s_{t+1},\tilde{a}_{t+1})
+-
+Q(s_t,a_t)
+\bigr],
+\quad
+\tilde{a}_{t+1}\sim\pi_{\mathrm{new}}(\cdot\mid s_{t+1})
+\]
+
+这里的数据来源 \((s_t,a_t,s_{t+1})\) 来自旧的行为策略，也就是 Replay Buffer；未来的估算 \(Q(s_{t+1},\tilde{a}_{t+1})\) 使用的是当前的新策略 \(\pi_{\mathrm{new}}\)。因此行为策略和目标策略解耦了，你利用旧的经验到达 \(s_{t+1}\)，再评估如果当前策略接管后续操作会发生什么。这正是 Off-policy 的定义。
+
+因此，这是可以的。事实上，正如DDPG可以视为连续动作中的DQN一样，SAC也可以视为深度网络、连续动作、含熵版本的``进化版Sarsa''。
+
+但A2C和PPO就不行。A2C中Critic网络V(s)的输入只有状态s，更新方式对于用按当前策略采样动作a后的下一状态s'，用V(s')更新V(s)。当我们从Replay Buffer中取出旧数据，改变策略为当前策略，动作变为a'，我们就不知道下一状态是什么了，无法更新。
+
+在 A2C 中，Critic 是一个 V 网络 \(V(s)\)。
+
+\begin{itemize}
+\tightlist
+\item
+  \(V(s)\) 的输入只有状态 \(s\)。
+\item
+  \(V(s)\) 的输出代表在这个状态下，遵循当前策略的平均期望回报。
+\end{itemize}
+
+如果你在 \(s'\) 采样了一个新动作 \(\tilde{a}'\)，你想问 Critic：在这个状态做这个新动作 \(\tilde{a}'\) 好不好？V 网络会回答：我不知道。我只能告诉你 \(s'\) 这个状态整体好不好，也就是 \(V(s')\)。我无法区分动作 \(\tilde{a}_1\) 和 \(\tilde{a}_2\) 谁更好，因为我不接受动作作为输入。
+
+如果坚持要用``重采样''的思路，即 Off-policy，你就必须让 Critic 有能力评估具体的动作。这意味着必须把 Critic 从 \(V(s)\) 升级为 \(Q(s,a)\)。
+
+一旦做出这个改变：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  引入 \(Q(s,a)\) 网络。
+\item
+  使用 Replay Buffer。
+\item
+  使用 \(y=r+\gamma Q(s',\tilde{a}')\)，其中 \(\tilde{a}'\) 是重采样的。
+\end{enumerate}
+
+这就不再是 A2C，而是重新发明了 SAC（Soft Actor-Critic）。
+
+而 PPO 中的优势函数 \(A_t\) 是用 GAE 计算出来的：
+
+\[
+\hat{A}_t
+\approx
+\sum_{k=0}^{\infty}
+\gamma^{k} r_{t+k}
+-
+V(s_t)
+\]
+
+现在的困境是：如果你在 PPO 中使用 Replay Buffer 中的旧状态 \(s_t\)，然后用新策略采样了一个新动作 \(\tilde{a}_t\)：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  你不知道环境给 \(\tilde{a}_t\) 的即时奖励 \(r(s_t,\tilde{a}_t)\) 是多少，因为你没有在环境里真跑。
+\item
+  你不知道执行 \(\tilde{a}_t\) 后的下一个状态 \(s_{t+1}\) 是什么。
+\item
+  没有 \(r\) 和 \(s'\)，就无法计算 \(\hat{A}_t\)。
+\item
+  没有 \(\hat{A}_t\)，PPO 的梯度就无法计算。
+\end{enumerate}
+
+\hypertarget{ux4e03ddpgux4e0esacux7684ux6bd4ux8f83}{%
+\subsection{七、DDPG与SAC的比较}\label{ux4e03ddpgux4e0esacux7684ux6bd4ux8f83}}
+
+\hypertarget{ux4e00ux76f8ux540cux70b9}{%
+\subsubsection{（一）相同点}\label{ux4e00ux76f8ux540cux70b9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  架构相同：两者都有明确的 Actor（负责动作）和 Critic（负责打分）。
+\item
+  数据利用方式相同：都为 Off-policy，可以从过去的历史数据中提取知识，都使用经验回放池（Replay Buffer）。
+\item
+  训练稳定性技巧相同：为了防止 Critic 追逐一个快速变化的目标，两者都使用了目标网络（Target Networks）。两者都使用软更新（Soft Update），让目标网络缓慢跟随主网络。
+\item
+  应用领域相同：都用于解决连续动作空间的问题（如机械臂、自动驾驶）。
+\end{enumerate}
+
+\hypertarget{ux4e8cux4e0dux540cux70b9}{%
+\subsubsection{（二）不同点}\label{ux4e8cux4e0dux540cux70b9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  数学原理不同：DDPG基于贝尔曼最优方程，更像 Q-learning 和 DQN 的变体；SAC 基于贝尔曼期望方程（准确说是软贝尔曼期望方程），更像 Sarsa 的变体。
+\item
+  策略的确定性 vs 随机性：DDPG 输入状态，输出一个固定（准确说是拟合定值）的动作值，其 Actor 不会探索，必须手动在输出动作上加噪声，如果在训练后期去掉噪声，策略可能非常僵硬，容易过拟合到某条单一路径；SAC 输入状态，输出高斯分布的均值和方差，然后采样得到动作，故内生探索，策略本身就是随机的，方差决定了探索力度，训练和探索融为一体，鲁棒性极强。
+\item
+  优化目标不同：DDPG 只在乎累积奖励，容易收敛到局部最优，且对超参数极度敏感；SAC 既关注累积奖励，也关注策略的多样性，不容易陷入局部最优，具有很好的容错性和抗干扰能力。
+\item
+  Critic的结构不同：DDPG通常只用1个Q网络，容易出现Q值过估计；SAC使用了2个Q网络，抑制了过估计。
+\item
+  Actor的梯度获取方式不同：DDPG直接用链式法则；SAC必须重参数化，剥离随机变量。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-59}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-59}}
+
+\begin{itemize}
+\tightlist
+\item
+  Haarnoja, T., Zhou, A., Abbeel, P., \& Levine, S. (2018). \href{https://arxiv.org/abs/1801.01290}{Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor}. ICML 2018.
+\item
+  Haarnoja, T., Zhou, A., Hartikainen, K., et al.~(2018). \href{https://arxiv.org/abs/1812.05905}{Soft Actor-Critic Algorithms and Applications}. arXiv:1812.05905.
+\end{itemize}
+
+\clearpage

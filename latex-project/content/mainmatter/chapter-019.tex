@@ -1,0 +1,1612 @@
+\hypertarget{ux6ce8ux610fux529bux673aux5236ux7684ux5de5ux7a0bux4f18ux5316}{%
+\chapter{注意力机制的工程优化}\label{ux6ce8ux610fux529bux673aux5236ux7684ux5de5ux7a0bux4f18ux5316}}
+
+\hypertarget{ux952eux503cux7f13ux5b58kv-cache}{%
+\section{键值缓存（KV Cache）}\label{ux952eux503cux7f13ux5b58kv-cache}}
+
+\hypertarget{ux4e00kv-cacheux7684ux6838ux5fc3ux539fux7406}{%
+\subsection{一、KV Cache的核心原理}\label{ux4e00kv-cacheux7684ux6838ux5fc3ux539fux7406}}
+
+在全注意力（Full Attention）中，生成每一个token的时间、空间复杂度为O(n\^{}2)（其中在推理阶段运用KV Cache能让生成单个token的时间复杂度降为O(n)、生成序列的时间复杂度为O(n\textsuperscript{2)，内存空间复杂度为O(n)），这些成为处理长序列（长上下文）的主要障碍。特别是在推理阶段（不是训练阶段），生成每一个token，计算的成本均为O(L}2)。然而在通过输入序列计算K、V矩阵时，这里很多都是重复计算。
+
+为了解决推理时计算时间复杂度的问题，LLM普遍运用了KV Cache：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  由输入计算Q、K、V时
+\end{enumerate}
+
+传统注意力机制中：
+
+\[
+Q = XW_Q,\quad K = XW_K,\quad V = XW_V
+\]
+
+而KV Cache中，由于在生成第t+1个token时，我们只需要第t个token作为Q。而对于K和V，其实在之前生成中已经计算过其第1至t-1行（即第1至t-1个token的K和V），可以把它们存在内存中，从而可以直接拿来用，只需要计算第t个token的K和V：
+
+\[
+q_t = x_tW_Q,\quad k_t = x_tW_K,\quad v_t = x_tW_V
+\]
+
+这里的k\_t和v\_t在内存里拼接到之前算出的K和V矩阵下面，供后续使用。这样就能将计算复杂度从O(L)变成O(1)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  计算注意力权重时
+\end{enumerate}
+
+在传统注意力机制中：
+
+\[
+\mathrm{Scores} = Q \cdot K^T
+\]
+
+操作描述：
+
+\begin{itemize}
+\tightlist
+\item
+  \(Q\) 的维度是 \(t \times d_k\)。
+\item
+  \(K\) 的维度是 \(t \times d_k\)，因此 \(K^T\) 的维度是 \(d_k \times t\)。
+\item
+  这是一个标准的矩阵乘法，得到的注意力分数矩阵维度是 \(t \times t\)。
+\end{itemize}
+
+在KV Cache中：
+
+\[
+\mathrm{Scores} = q_t \cdot (K_{\mathrm{cache}}^{(t)})^T
+\]
+
+操作描述：
+
+\begin{itemize}
+\tightlist
+\item
+  \(q_t\) 的维度是 \(1 \times d_k\)。
+\item
+  \(K_{\mathrm{cache}}^{(t)}\) 的维度是 \(t \times d_k\)（转置后为 \(d_k \times t\)）。
+\item
+  这是一次``向量-矩阵''乘法，得到的当前步注意力分数维度是 \(1 \times t\)。
+\end{itemize}
+
+从而计算复杂度从O(L\^{}2)变成O(L)
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  加权得到输出值时
+\end{enumerate}
+
+在传统注意力中：
+
+\[
+Y = \mathrm{Softmax}(\mathrm{Scores}) \cdot V
+\]
+
+操作描述：
+
+\begin{itemize}
+\tightlist
+\item
+  注意力矩阵维度是 \(t \times t\)。
+\item
+  \(V\) 矩阵维度是 \(t \times d_v\)。
+\item
+  输出 \(Y\) 的维度是 \(t \times d_v\)。
+\end{itemize}
+
+在KV Cache中：
+
+\[
+y_t = \alpha_t \cdot V_{\mathrm{cache}}^{(t)}
+\]
+
+操作描述：
+
+\begin{itemize}
+\tightlist
+\item
+  权重 \(\alpha_t\) 的维度是 \(1 \times t\)。
+\item
+  \(V_{\mathrm{cache}}^{(t)}\) 的维度是 \(t \times d_v\)。
+\item
+  这是一次``向量-矩阵''乘法，输出 \(y_t\) 的维度是 \(1 \times d_v\)。
+\end{itemize}
+
+\hypertarget{ux4e8cux4e3aux4ec0ux4e48ux8badux7ec3ux7684ux65f6ux5019ux4e0dux7528kv-cache}{%
+\subsection{二、为什么训练的时候不用KV Cache？}\label{ux4e8cux4e3aux4ec0ux4e48ux8badux7ec3ux7684ux65f6ux5019ux4e0dux7528kv-cache}}
+
+KV Cache是为了解决推理（Inference）阶段每次生成一个token的``串行计算''低效问题而设计的；而训练（Training）阶段天然是并行计算的，我们已经知道完整答案，使用Teacher Forcing和掩码技术，可以在一次计算中算出所有位置的Loss，自然就没有``缓存上一步结果给下一步用''的需求。如果在训练阶段强行使用KV Cache，反而会把高效的并行训练退化为低效的串行训练，导致训练速度下降成百上千倍。
+
+前面介绍过，预训练或微调阶段，各个步骤是在一个矩阵运算中同时完成的。
+
+我们一次性拿到了所有token 的 Q、K、V，随后计算注意力分数，并进行掩码。掩码是一个``上三角矩阵''，它在计算注意力分数后、进行 Softmax 之前起作用。它会强制将所有未来位置(i,j)（i\textgreater j）的注意力分数，即q\_i与k\_j的点积设置为一个绝对值极大的负数（例如 -1e9）。
+
+这个过程中不存在``第1步算完存下来给第2步用''的情况，因为第1步和第2步是同时发生的。
+
+【特例：在RLHF的PPO训练阶段，流程分为两步：Rollout（生成阶段）让模型针对 Prompt 生成回答，这一步本质是推理，所以这时候会用到 KV Cache；Update（更新阶段）拿着生成的回答和奖励（Reward）去计算梯度更新模型，回到并行模式，不用KV Cache。】
+
+\hypertarget{ux4e09ux9884ux586bux5145prefill}{%
+\subsection{三、预填充（Prefill）}\label{ux4e09ux9884ux586bux5145prefill}}
+
+在生成开始前，我们会让模型一次性并行读完所有prompt（提示词），利用Q = X\emph{W\_Q，K = X}W\_K，V=X*W\_V计算初始Q、K、V矩阵，将初始状态下的KV Cache存入缓存。然后，再开始解码（Decode），自回归地生成token。
+
+预填充是计算密集型任务，而解码是内存密集型任务。在一些架构中，会让二者分别用高算力和高显存带宽的GPU。
+
+\hypertarget{ux56dbux7cfbux7edfux786cux4ef6ux7ba1ux7406paged-attentionvllm}{%
+\subsection{四、系统硬件管理：Paged Attention（vLLM）}\label{ux56dbux7cfbux7edfux786cux4ef6ux7ba1ux7406paged-attentionvllm}}
+
+KV Cache在显存中需要连续空间，导致大量的显存碎片浪费（类似于操作系统的内存碎片）。借鉴操作系统的虚拟内存页（Paging）技术。将KV Cache分块存储在不连续的物理显存中，通过页表来索引。这极大地提高了显存利用率，使得在同样的显存下可以支持更大的Batch Size，从而提升推理吞吐量。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-90}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-90}}
+
+\begin{itemize}
+\tightlist
+\item
+  Kwon, W., Li, Z., Zhuang, S., et al.~(2023). \href{https://arxiv.org/abs/2309.06180}{Efficient Memory Management for Large Language Model Serving with PagedAttention}. SOSP 2023.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{flash-attention}{%
+\section{Flash Attention}\label{flash-attention}}
+
+\hypertarget{ux4e00flash-attention-ux89e3ux51b3ux7684ux6838ux5fc3ux95eeux9898}{%
+\subsection{一、Flash Attention 解决的核心问题}\label{ux4e00flash-attention-ux89e3ux51b3ux7684ux6838ux5fc3ux95eeux9898}}
+
+如果说 KV Cache 解决了推理阶段的时间复杂度问题，那么 Flash Attention 的核心目的是解决训练阶段的空间复杂度问题，即 IO 瓶颈（Memory Bound）。
+
+在 GPU 中，计算单元（SRAM）速度极快但容量小，而显存（HBM）容量大但读写速度慢。标准 Attention 的计算过程中，由于中间矩阵 \(N \times N\) 太大，无法放入 SRAM，导致必须频繁地与 HBM 进行读写交换。
+
+Flash Attention 利用了两个核心数学技巧来实现加速和显存节省：分块计算（Tiling）和重计算（Recomputation）。
+
+输入矩阵为 \(Q,K,V \in \mathbb{R}^{N \times d}\)。标准 Attention 输出 \(O\) 的计算公式为：
+
+\[
+S = QK^T,\quad S \in \mathbb{R}^{N \times N}
+\]
+
+\[
+P = \mathrm{softmax}(S),\quad P \in \mathbb{R}^{N \times N}
+\]
+
+\[
+O = PV,\quad O \in \mathbb{R}^{N \times d}
+\]
+
+这里的关键问题是 \(S\) 和 \(P\) 都是 \(N \times N\) 矩阵。当序列长度 \(N\) 很大时，它们的显存占用会随 \(N^2\) 增长，成为训练长序列模型时的主要瓶颈。
+
+\hypertarget{ux4e8cux5206ux5757ux4e0e-online-softmax}{%
+\subsection{二、分块与 Online Softmax}\label{ux4e8cux5206ux5757ux4e0e-online-softmax}}
+
+给定序列长度 \(N\) 和注意力头维度 \(d\)，以及 GPU 片上 SRAM 的容量 \(M\)（以浮点数元素个数计）。为了确保计算时 \(Q\)、\(K\)、\(V\) 的子块都能容纳在 SRAM 中，论文中将分块大小计算如下：
+
+\begin{itemize}
+\tightlist
+\item
+  列分块大小（对应 \(K,V\) 的序列维度）：
+\end{itemize}
+
+\[
+B_c = \left\lceil \frac{M}{4d} \right\rceil
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  行分块大小（对应 \(Q\) 的序列维度）：
+\end{itemize}
+
+\[
+B_r = \min\left(\left\lceil \frac{M}{4d} \right\rceil, d\right)
+\]
+
+根据这两个块大小，输入矩阵被切割为：
+
+\begin{itemize}
+\tightlist
+\item
+  \(Q \in \mathbb{R}^{N \times d}\) 被切分为 \(T_r = \left\lceil \frac{N}{B_r} \right\rceil\) 个块：\(Q_1,\ldots,Q_{T_r}\)，每块大小为 \(B_r \times d\)。
+\item
+  \(K,V \in \mathbb{R}^{N \times d}\) 被分别切分为 \(T_c = \left\lceil \frac{N}{B_c} \right\rceil\) 个块：\(K_1,\ldots,K_{T_c}\) 与 \(V_1,\ldots,V_{T_c}\)，每块大小为 \(B_c \times d\)。
+\item
+  输出矩阵 \(O \in \mathbb{R}^{N \times d}\) 及统计量向量 \(l \in \mathbb{R}^N\)、\(m \in \mathbb{R}^N\) 也按行被切分为 \(T_r\) 块。
+\end{itemize}
+
+注意：这里不会把一个 token 的 \(q\) 向量切分在不同的块中，\(k\) 和 \(v\) 同理。换句话说，分块发生在序列维度上，而不是注意力头维度上。每一对 \(Q_i\) 与 \(K_j\) 都会相乘，得到一个局部注意力分数块：
+
+\[
+S_{ij} = Q_iK_j^T
+\]
+
+所有 \(S_{ij}\) 共同覆盖完整的 \(S = QK^T\)。输出不是把各块结果简单拼接，而是在 Online Softmax 的统计量校正下，把每个局部块对应的 \(PV\) 贡献累加到当前输出块中。
+
+为了避免一次性生成巨大的 \(N \times N\) 矩阵，Flash Attention 将输入 \(Q,K,V\) 切分成小的 Block，在 SRAM 中分块计算。
+
+难点在于 Softmax 是全局操作，依赖于整行的最大值和分母之和：
+
+\[
+\mathrm{softmax}(x)_i = \frac{e^{x_i-m}}{\sum_j e^{x_j-m}},\quad m = \max(x)
+\]
+
+如果只看一部分数据，无法确定全局的 \(m\) 和分母。因此 Flash Attention 使用 Online Softmax 算法，在处理新的 Block 时动态更新局部统计量。
+
+假设我们处理两个分块，第一块的局部最大值为 \(m_1\)，局部指数和为 \(l_1\)，未归一化的输出为 \(O_1\)；第二块对应 \(m_2,l_2,O_2\)。合并后的全局最大值 \(m_{new}\) 和全局指数和 \(l_{new}\) 的更新规则如下：
+
+\[
+m_{new} = \max(m_1,m_2)
+\]
+
+\[
+l_{new} = e^{m_1-m_{new}}l_1 + e^{m_2-m_{new}}l_2
+\]
+
+最终输出 \(O_{new}\) 的更新规则为：
+
+\[
+O_{new} = \mathrm{diag}(l_{new})^{-1}\left(\mathrm{diag}\left(l_1 \odot e^{m_1-m_{new}}\right)O_1 + \mathrm{diag}\left(l_2 \odot e^{m_2-m_{new}}\right)O_2\right)
+\]
+
+通过这种方式，Flash Attention 只需要遍历一次 \(K,V\)，并在 SRAM 中不断更新 \(O\) 的值，最终写回 HBM。中间产生的 \(N \times N\) Attention 矩阵 \(S\) 和 \(P\) 从未完整地存在于 HBM 中。
+
+\hypertarget{ux7b97ux6cd5ux5de5ux4f5cux6d41-1}{%
+\subsubsection{算法工作流}\label{ux7b97ux6cd5ux5de5ux4f5cux6d41-1}}
+
+外层循环遍历 Query 分块。对于 \(i = 1\) 到 \(T_r\)：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  从 HBM 中将 \(Q_i\) 加载到 SRAM 中。
+\item
+  在 SRAM 中为当前块初始化局部累加器：
+\end{enumerate}
+
+\[
+O_i = 0,\quad l_i = 0,\quad m_i = -\infty
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\item
+  内层循环遍历 Key/Value 分块。对于 \(j = 1\) 到 \(T_c\)：
+
+  \begin{enumerate}
+  \def\labelenumii{\arabic{enumii}.}
+  \tightlist
+  \item
+    从 HBM 中将 \(K_j\) 和 \(V_j\) 加载到 SRAM。
+  \item
+    计算局部注意力分数，在 SRAM 中计算矩阵乘法：
+  \end{enumerate}
+\end{enumerate}
+
+\[
+S_{ij} = Q_iK_j^T \in \mathbb{R}^{B_r \times B_c}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  计算局部最大值：
+\end{enumerate}
+
+\[
+m_{ij} = \mathrm{rowmax}(S_{ij})
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  更新全局最大值，比较旧的行最大值与刚计算出的局部最大值：
+\end{enumerate}
+
+\[
+m_i^{new} = \max(m_i,m_{ij})
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  计算局部的未归一化指数权重：
+\end{enumerate}
+
+\[
+P_{ij} = e^{S_{ij}-m_i^{new}}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{5}
+\tightlist
+\item
+  更新全局指数和，并带有缩放补偿：
+\end{enumerate}
+
+\[
+l_i^{new} = e^{m_i-m_i^{new}}l_i + \sum_{\text{row}} P_{ij}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{6}
+\tightlist
+\item
+  更新输出矩阵块，并带有缩放补偿与新值累加：
+\end{enumerate}
+
+\[
+O_i^{new} = e^{m_i-m_i^{new}}O_i + P_{ij}V_j
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{7}
+\tightlist
+\item
+  状态更新，将当前状态覆盖为新的全局状态，准备处理下一个 \(j\) 块：
+\end{enumerate}
+
+\[
+m_i \leftarrow m_i^{new},\quad l_i \leftarrow l_i^{new},\quad O_i \leftarrow O_i^{new}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  当内层循环结束，即当前 \(Q_i\) 与所有 \(K,V\) 块都计算完毕，对累加好的 \(O_i\) 进行真正的 Softmax 归一化：
+\end{enumerate}
+
+\[
+O_i = \mathrm{diag}(l_i)^{-1}O_i
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  将计算完毕的 \(O_i\)，以及统计量 \(l_i,m_i\)（用于可能的反向传播重计算）从 SRAM 一次性写回到 HBM。
+\end{enumerate}
+
+\hypertarget{ux4e09ux91cdux8ba1ux7b97}{%
+\subsection{三、重计算}\label{ux4e09ux91cdux8ba1ux7b97}}
+
+在反向传播时，Flash Attention 不存储庞大的注意力权重矩阵 \(P\)，而是在需要时将其重新算一遍，以避免 \(N \times N\) 的空间复杂度让显存爆炸。
+
+\hypertarget{ux4e3aux4ec0ux4e48ux53cdux5411ux4f20ux64adux9700ux8981-p}{%
+\subsubsection{\texorpdfstring{1. 为什么反向传播需要 \(P\)？}{1. 为什么反向传播需要 P？}}\label{ux4e3aux4ec0ux4e48ux53cdux5411ux4f20ux64adux9700ux8981-p}}
+
+为了看清反向传播，先列出前向传播的三个关键步骤：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  计算 Score：
+\end{enumerate}
+
+\[
+S = QK^T
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  计算 Probability（Softmax）：
+\end{enumerate}
+
+\[
+P = \mathrm{softmax}(S)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  计算 Output：
+\end{enumerate}
+
+\[
+O = PV
+\]
+
+假设最终损失函数是 \(\mathcal{L}\)，目标是求 \(\frac{\partial \mathcal{L}}{\partial Q}\)、\(\frac{\partial \mathcal{L}}{\partial K}\) 和 \(\frac{\partial \mathcal{L}}{\partial V}\)。并且已经得到了：
+
+\[
+dO = \frac{\partial \mathcal{L}}{\partial O}
+\]
+
+先计算 \(dV\)：
+
+\[
+dV = \frac{\partial \mathcal{L}}{\partial V} = P^T \cdot dO
+\]
+
+这一步已经需要 \(P\)。
+
+再计算从 \(O = PV\) 反传到 \(P\) 的梯度：
+
+\[
+dP = dO \cdot V^T
+\]
+
+这一步用到了 \(V\)，暂时不需要 \(P\)。但接下来需要面对 \(dP/dS\)。注意 Softmax 不是线性函数，无法像用 \(V^T\) 表示 \(dP/dO\) 一样直接用常参数表示出 \(dP/dS\)。相反，Softmax 的导数必然会用到 \(P\)（或 \(S\)）的值。
+
+可以用下面的形式直观理解这类归一化函数的导数会依赖输出值本身：
+
+\[
+\sigma'(x) = \sigma(x)\cdot(1-\sigma(x))
+\]
+
+严格地说，向量 Softmax 的雅可比矩阵满足：
+
+\[
+\frac{\partial P_i}{\partial S_j} = P_i(\delta_{ij}-P_j)
+\]
+
+在矩阵形式下，Softmax 反向传播中 \(dS\) 的计算公式为（\(\odot\) 代表逐元素乘法）：
+
+\[
+dS = P \odot \left(dP - (dP \odot P)1\right)
+\]
+
+这里 \(1\) 代表全 1 向量，用于表示行求和操作。仔细看这个公式，里面全是 \(P\)。直观上，Softmax 函数在两端，即概率接近 0 或 1 的区域非常平缓，梯度很小；在中间区域梯度大。要计算梯度 \(dS\)，必须知道当前概率值 \(P\) 到底是在平缓区还是陡峭区。
+
+如果继续反传到 \(Q\) 和 \(K\)，则由 \(S = QK^T\) 得到：
+
+\[
+dQ = dS K,\quad dK = dS^T Q
+\]
+
+如果使用缩放注意力 \(S = QK^T/\sqrt{d}\)，上式还需要相应乘上 \(1/\sqrt{d}\) 的缩放因子。
+
+结论是：不知道 \(P\)，就无法穿过 Softmax 层把梯度传给 \(Q\) 和 \(K\)。
+
+\hypertarget{ux91cdux8ba1ux7b97ux91c7ux7528ux7684ux65b9ux6cd5}{%
+\subsubsection{2. 重计算采用的方法}\label{ux91cdux8ba1ux7b97ux91c7ux7528ux7684ux65b9ux6cd5}}
+
+正因为上述两个原因，反向传播计算梯度时，\(P\) 是绝对不可或缺的。
+
+标准 Attention 算法的选择是：存下来。
+
+\begin{itemize}
+\tightlist
+\item
+  在前向传播时算好了 \(P\)，即使它有 \(N \times N\) 那么大，也硬着头皮存进 HBM 显存里，留给反向传播用。这就是显存爆炸的根源。
+\end{itemize}
+
+Flash Attention 算法的选择是：现用现算。
+
+\begin{itemize}
+\tightlist
+\item
+  既然 \(P\) 必须用到，但又不想存它，就在反向传播需要用到 \(P\) 的那一瞬间，利用已经存好的 \(Q,K\) 和 SRAM 里的统计量，重新执行一遍前向计算：
+\end{itemize}
+
+\[
+\mathrm{softmax}\left(\frac{QK^T}{\sqrt{d}}\right)
+\]
+
+这会生成出 \(P\) 的一个小块，用完即丢。
+
+因此，Flash Attention 保存的是反向传播所需的低阶输入和统计量，例如 \(Q,K,V,O,l,m\)，而不是完整的 \(P\)。这样可以把原本需要保存的 \(O(N^2)\) 中间矩阵，改成在反向传播中按块重算。
+
+\hypertarget{ux4e3aux4ec0ux4e48ux4fddux5b58-qkvux4f46ux4e0dux4fddux5b58-p}{%
+\subsubsection{\texorpdfstring{3. 为什么保存 \(Q,K,V\)，但不保存 \(P\)？}{3. 为什么保存 Q,K,V，但不保存 P？}}\label{ux4e3aux4ec0ux4e48ux4fddux5b58-qkvux4f46ux4e0dux4fddux5b58-p}}
+
+简单来说，不讨论 \(Q,K,V\) 是因为它们太``小''了，而 \(P\)（以及 \(S\)）太``大''了。
+
+这里的``大''和``小''，是指随着序列长度 \(N\) 增长时，显存占用的增长速度不同：
+
+\begin{itemize}
+\tightlist
+\item
+  \(Q,K,V\) 的大小是线性增长，复杂度为 \(O(Nd)\)。
+\item
+  \(P\) 的大小是平方增长，复杂度为 \(O(N^2)\)。
+\end{itemize}
+
+当 \(N\) 变得非常大，例如长文本处理时，平方项才是撑爆显存的核心问题。
+
+具体来说：
+
+\begin{itemize}
+\tightlist
+\item
+  对 \(Q,K,V\)：因为它们很小，复杂度为 \(O(Nd)\)，而且重计算它们的成本也不低，需要从更底层的输入再算一遍线性层，所以 Flash Attention 选择把 \(Q,K,V\) 缓存（Cache）在 HBM 显存里。
+\item
+  对 \(P\)：因为它太大，复杂度为 \(O(N^2)\)，存它会导致 OOM（Out Of Memory），而且它的 IO 开销巨大。所以 Flash Attention 选择不存它，而是用 \(Q,K,V\) 重新算一遍。
+\end{itemize}
+
+这就是 Flash Attention 节省显存的核心：保留线性规模的必要状态，丢弃平方规模的中间注意力矩阵，并在反向传播需要时按块重算。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-91}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-91}}
+
+\begin{itemize}
+\tightlist
+\item
+  Dao, T., Fu, D. Y., Ermon, S., Rudra, A., \& Re, C. (2022). \href{https://arxiv.org/abs/2205.14135}{FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness}. NeurIPS 2022.
+\item
+  Dao, T. (2023). \href{https://arxiv.org/abs/2307.08691}{FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning}. arXiv:2307.08691.
+\item
+  Shah, J., Bikshandi, G., Zhang, Y., Thakkar, V., Ramani, P., \& Dao, T. (2024). \href{https://arxiv.org/abs/2407.08608}{FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision}. arXiv:2407.08608.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux73afux72b6ux6ce8ux610fux529bring-attention}{%
+\section{环状注意力（Ring Attention）}\label{ux73afux72b6ux6ce8ux610fux529bring-attention}}
+
+Ring Attention（环状注意力）是分布式系统（多GPU/TPU）上的Flash Attention延伸，Google Gemini等模型均运用了此技术。
+
+FlashAttention 解决的是单张显卡内，如何通过分块计算（Tiling）把超长序列塞进有限的 SRAM 中；Ring Attention 解决的是多张显卡间，如何通过分块轮转，把超长序列（比如100万+ Token）塞进集群的显存中，并打破单卡显存的物理上限。
+
+假设你想训练一个上下文长度为1000万的模型。注意力机制要求Q必须和所有的K, V进行交互。即使使用了FlashAttention，单张H100也存不下这么长的KV Cache和中间激活值。这时候需要序列并行（Sequence Parallelism），把长序列切分到N张显卡上。
+
+Ring Attention做法：每张显卡存一个Query块（Q矩阵的若干行，也就是若干个token的Query），让K, V数据块（每个数据块包含矩阵若干行）在显卡之间像``回转寿司''一样，通过高速互连网络流动，每张卡只处理流经它的那一小块数据，算完就传给下一张卡，绝不囤积数据。
+
+这个过程会在环上的 \(P\) 个节点之间执行 \(P\) 轮：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Inner Loop（计算）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    GPU \(i\) 使用本地的 \(Q_i\) 和当前持有的 Key/Value 块（记为 \(K_{\mathrm{curr}}, V_{\mathrm{curr}}\)）计算注意力分数和局部输出。
+  \item
+    计算使用 FlashAttention 的 blockwise 逻辑，维护局部的 softmax 归一化因子和 log-sum-exp 统计量。
+  \end{itemize}
+\item
+  \textbf{Communication（通信）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    在计算的同时，GPU \(i\) 将当前的 \(K_{\mathrm{curr}}, V_{\mathrm{curr}}\) 发送给下一张卡（GPU \(i+1\)）。
+  \item
+    GPU \(i\) 同时从上一张卡（GPU \(i-1\)）接收新的 Key/Value 块。
+  \end{itemize}
+\item
+  \textbf{Overlap（计算与通信重叠）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    Ring Attention 的精髓在于矩阵乘法计算通常比传输 Key/Value 块更耗时，因此二者可以并行推进。
+  \item
+    当系统计算第 \(t\) 块数据时，网络已经在传输第 \(t+1\) 块数据。
+  \item
+    如果计算时间大于传输时间，通信延迟就被完全隐藏，整体上接近零额外通信开销。
+  \end{itemize}
+\end{enumerate}
+
+其中计算依赖于Softmax的分块计算性质：
+
+Ring Attention 之所以能成立，依赖于 softmax 的分块计算性质，这也是 FlashAttention 的基础。标准 softmax 需要全局归一化：
+
+\[
+\mathrm{softmax}(x)_i = \frac{e^{x_i}}{\sum_{j=1}^{N} e^{x_j}}
+\]
+
+但是，可以把序列切成两个块 \(A\) 和 \(B\)，分别计算局部统计量，再把它们合并成全局统计量。
+
+先计算块 \(A\) 的局部最大值和局部指数和：
+
+\[
+m_A = \max_{j \in A} x_j,\qquad
+l_A = \sum_{j \in A} e^{x_j - m_A}
+\]
+
+再计算块 \(B\) 的局部最大值和局部指数和：
+
+\[
+m_B = \max_{j \in B} x_j,\qquad
+l_B = \sum_{j \in B} e^{x_j - m_B}
+\]
+
+最后用简单的数学变换合并，更新全局最大值 \(m_{\mathrm{global}}\) 和全局归一化因子 \(l_{\mathrm{global}}\)：
+
+\[
+m_{\mathrm{global}} = \max(m_A, m_B)
+\]
+
+\[
+l_{\mathrm{global}} =
+e^{m_A - m_{\mathrm{global}}} l_A
++ e^{m_B - m_{\mathrm{global}}} l_B
+\]
+
+因此，Ring Attention 每次只需要在显存里放一个 \(K, V\) block，算完就更新统计量，然后把该 block 挪走。
+
+计算的具体步骤如下：
+
+对第 \(i\) 张显卡而言，当前轮只使用本地 query 块 \(Q_i\) 和当前持有的 \(K_{\mathrm{curr}}, V_{\mathrm{curr}}\)。以下统计量都按 query 行分别计算，矩阵形式中相应的最大值和求和会按行广播。
+
+计算局部分数：
+
+\[
+S = \frac{Q_i K_{\mathrm{curr}}^T}{\sqrt{d}}
+\]
+
+计算当前块的行最大值：
+
+\[
+m_{\mathrm{block}} = \max(S)
+\]
+
+计算当前块的局部指数和：
+
+\[
+l_{\mathrm{block}} = \sum \exp(S - m_{\mathrm{block}})
+\]
+
+计算非归一化的注意力输出：
+
+\[
+\tilde O_{\mathrm{block}} = \exp(S - m_{\mathrm{block}}) V_{\mathrm{curr}}
+\]
+
+第i张显卡的输出O是一个和Q\_i行数相同的矩阵（如果每张显卡只存一个Query向量，则O就是一个向量），是对于每个Query，根据目前已经经过该显卡的K、V得到的对V进行注意力加权的结果。每一轮计算后，更新统计量和输出O：
+
+假设上一轮已经维护了 \(m_{\mathrm{prev}}\)、\(l_{\mathrm{prev}}\) 和 \(O_{\mathrm{prev}}\)，当前块给出了 \(m_{\mathrm{block}}\)、\(l_{\mathrm{block}}\) 和 \(\tilde O_{\mathrm{block}}\)。online softmax 的合并方式如下。
+
+更新全局最大值：
+
+\[
+m_{\mathrm{new}} = \max(m_{\mathrm{prev}}, m_{\mathrm{block}})
+\]
+
+更新归一化因子：
+
+\[
+l_{\mathrm{new}} =
+e^{m_{\mathrm{prev}} - m_{\mathrm{new}}} l_{\mathrm{prev}}
++ e^{m_{\mathrm{block}} - m_{\mathrm{new}}} l_{\mathrm{block}}
+\]
+
+更新输出 \(O\)：
+
+\[
+O_{\mathrm{new}} =
+\frac{
+l_{\mathrm{prev}} e^{m_{\mathrm{prev}} - m_{\mathrm{new}}} O_{\mathrm{prev}}
++ e^{m_{\mathrm{block}} - m_{\mathrm{new}}} \tilde O_{\mathrm{block}}
+}{
+l_{\mathrm{new}}
+}
+\]
+
+这样，每张卡不需要保存完整的 \(K, V\)，只要在每一轮合并局部统计量和局部输出，就能得到等价于全局 softmax 的注意力结果。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-92}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-92}}
+
+\begin{itemize}
+\tightlist
+\item
+  Liu, H., Zaharia, M., \& Abbeel, P. (2023). \href{https://arxiv.org/abs/2310.01889}{Ring Attention with Blockwise Transformers for Near-Infinite Context}. arXiv:2310.01889.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{multi-queryux4e0egrouped-query-attention}{%
+\section{Multi-Query与Grouped-Query Attention}\label{multi-queryux4e0egrouped-query-attention}}
+
+\hypertarget{ux4e00mqaux7684ux57faux672cux601dux60f3}{%
+\subsection{一、MQA的基本思想}\label{ux4e00mqaux7684ux57faux672cux601dux60f3}}
+
+在MHA中，随着序列变长，显存占用巨大。内存带宽（Memory Bandwidth）成为核心限制。推理过程主要是矩阵乘向量（GEMV），是典型的内存带宽受限操作。GPU 花在``搬运 KV Cache 数据''上的时间远多于``计算''的时间。MQA（Multi-Query Attention）的核心思想非常简单粗暴：所有的 Query 头之间共享同一组 Key 和 Value 头。
+
+MHA（Multi-Head）：H个 Query Heads，H个Key Heads，H个 Value Heads
+
+MQA（Multi-Query）：H个 Query Heads，1个 Key Head，1个 Value Head
+
+\textbf{参数量对比}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{MHA}：参数矩阵总大小约为 \(3d_{model}^2\)，因为 \(Q\)、\(K\)、\(V\) 三个投影各占一份。
+\item
+  \textbf{MQA}：参数矩阵 \(W_Q\) 大小仍为 \(d_{model} \times d_{model}\)，但 \(W_K\) 和 \(W_V\) 都缩小为 \(d_{model} \times d_k\)。
+\item
+  因为 MQA 只保留 1 组 Key/Value 头，\(W_K,W_V\) 的参数量相对 MHA 减少 \(H\) 倍。
+\end{itemize}
+
+计算第 \(i\) 个头的注意力分数时，MQA 保持 Query 投影为多头，而 Key/Value 只做单头投影并被所有 Query 头共享。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Query 投影（保持多头）}：
+\end{itemize}
+
+\[
+Q_i = XW_{Q_i}, \quad Q_i \in \mathbb{R}^{B \times L \times d_k}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Key/Value 投影（单头）}：
+\end{itemize}
+
+\[
+K = XW_K, \quad V = XW_V, \quad K,V \in \mathbb{R}^{B \times L \times d_k}
+\]
+
+这里 \(K\) 和 \(V\) 没有下标 \(i\)，表示所有头共用这一组 Key/Value。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{广播（Broadcasting）与计算}：为了逐行点积注意力计算，需要在逻辑上将 \(K\) 和 \(V\) 沿着 Head 维度广播，使其形状与 \(Q_i\) 匹配。
+\end{itemize}
+
+\[
+\mathrm{Attention}_i(Q_i,K,V)=\mathrm{softmax}\left(\frac{Q_iK^T}{\sqrt{d_k}}\right)V
+\]
+
+最后将所有头的输出拼接（Concat），并通过 \(W_O\) 输出层。
+
+\textbf{为什么 MQA 更快？}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{KV Cache 减少 \(H\) 倍}：由于所有头共享 \(K,V\)，需要存储的 KV Cache 数据量直接变为原来的 \(1/H\)；例如 \(H=8\) 时，显存占用约为原来的 \(1/8\)。
+\item
+  \textbf{降低内存带宽压力}：在推理时，GPU 需要从显存搬运的数据量大幅减少，从而缓解 Memory Wall（内存墙）问题。
+\item
+  \textbf{提升 TPS}：显存占用和内存带宽压力下降后，Token 生成速度（TPS）通常会提升。
+\end{itemize}
+
+\hypertarget{ux4e8cgqagrouped-query-attention}{%
+\subsection{二、GQA（Grouped-Query Attention）}\label{ux4e8cgqagrouped-query-attention}}
+
+MQA提高了速度，却容易影响生成质量。为了平衡MHA的高质量和MQA的高速度，现代模型引入了GQA，将Query头分组，每组共享一个Key/Value 头。
+
+如：8个Query头，分为4组，每组 2 个Query头共享1个KV头。
+
+KV Cache大小是MHA的1/2，是MQA的2倍。
+
+效果：速度接近 MQA，质量接近 MHA。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-93}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-93}}
+
+\begin{itemize}
+\tightlist
+\item
+  Shazeer, N. (2019). \href{https://arxiv.org/abs/1911.02150}{Fast Transformer Decoding: One Write-Head is All You Need}. arXiv:1911.02150.
+\item
+  Ainslie, J., Lee-Thorp, J., de Jong, M., Zemlyanskiy, Y., Lebron, F., \& Sanghai, S. (2023). \href{https://arxiv.org/abs/2305.13245}{GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints}. EMNLP 2023.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{multi-head-latent-attention}{%
+\section{Multi-Head Latent Attention}\label{multi-head-latent-attention}}
+
+\hypertarget{ux4e00ux57faux672cux601dux60f3-1}{%
+\subsection{一、基本思想}\label{ux4e00ux57faux672cux601dux60f3-1}}
+
+DeepSeek提出的MLA（Multi-Head Latent Attention）旨在解决现代GPU显存带宽不足的情况下，KV Cache显存占用过大的问题。它通过低秩矩阵分解和矩阵吸收技术，在推理时极大地压缩了KV Cache的体积，又不会出现MQA、GQA的损失问题。
+
+在线性代数中，矩阵的``秩''代表了矩阵中真正独立的、不相关的信息量。假设我们有一个 \(100\times100\) 的矩阵，如果第2行是第1行的2倍，第3行是第1行的3倍\ldots\ldots 那么虽然它100 行，但实际上只有1行是有用的信息。它的秩就是1。
+
+在标准的 Multi-Head Attention 中，我们有 \(H\) 个头（比如32个）。每个头分开反向传播，模型会分别为每个头学习不同的投影矩阵 \(W_K\)、\(W_V\)。事实上，这32个头学到的 Key 和 Value不是完全独立的，它们之间存在极强的相关性。比如处理单词``苹果''：头1关注它的``颜色（红）''，头2关注它的``形状（圆）''，头3关注它的``类别（水果）''，这些特征虽然不同，但它们都源自同一个语义核心``苹果''。\(W_K\) 和 \(W_V\) 矩阵用于特征重组，它们事实上关注的是：头关注的特征向量可以看作原特征向量各个维度怎样的加权，既然特征之间存在强相关性，这些权重向量也就存在强相关性。因而DeepSeek MLA 的核心假设是：多头注意力（MHA）中的 Key-Value 矩阵虽然维度很高，但在数学上是``低秩''（Low-Rank）的。即：大部分参数都是冗余的。
+
+数学上，如果一个大矩阵 \(W_{\mathrm{full}}\) 是低秩的，它就可以被无损（或极低损耗）地分解为两个低秩矩阵 \(W_{\mathrm{down}}W_{\mathrm{up}}\) 的乘积，在MLA中这两个矩阵分别被称为降维矩阵和升维矩阵。从而我们可以进行如下MLA操作。
+
+\hypertarget{ux4e8cux7b2cux4e00ux6b65ux751fux6210-c_kv}{%
+\subsection{\texorpdfstring{二、第一步：生成 \(C_{KV}\)}{二、第一步：生成 C\_\{KV\}}}\label{ux4e8cux7b2cux4e00ux6b65ux751fux6210-c_kv}}
+
+在运用 KV Cache 的标准多头注意力中，我们每次读入一个 token（\(x_t\)），都会生成 \(d_{\mathrm{model}}\) 维（维度较高，如 1024 维）的向量 \(k_t\) 和 \(v_t\)（其中包含了各个头，如第 1-32 维为第 1 个头，以此类推），存入显存：
+
+在标准 MHA 中，当前 token 的 Key 和 Value 由输入向量直接投影得到：
+
+\[
+k_t = x_t W_K,\qquad v_t = x_t W_V
+\]
+
+MLA 认为，由于不同头的向量相关性较高，这里很多维事实上是``浪费''的，我们只需要用一个共用的降维矩阵 \(W_{DKV}\) 将真正有用的信息存入一个极低维度（如 64 维）、所有头共用的向量 \(c_{KV,t}\)，后续每个头再乘以升维矩阵的不同列（保留不同头的多样性）即可。得到 \(c_{KV,t}\) 的表达式：
+
+\[
+c_{KV,t} = x_t W_{DKV}
+\]
+
+位置信息单独储存：
+
+\[
+k_t^R = \mathrm{RoPE}(x_t W_{KR})
+\]
+
+\hypertarget{ux4e09ux7b2cux4e8cux6b65ux8fd0ux7528ux7ed3ux5408ux5f8bux5bf9ux6ce8ux610fux529bux8ba1ux7b97ux8fdbux884cux4f18ux5316}{%
+\subsection{三、第二步：运用结合律对注意力计算进行优化}\label{ux4e09ux7b2cux4e8cux6b65ux8fd0ux7528ux7ed3ux5408ux5f8bux5bf9ux6ce8ux610fux529bux8ba1ux7b97ux8fdbux884cux4f18ux5316}}
+
+原本的注意力分数可以看成 Query 与升维解压后的 Key 做点积：
+
+\[
+\mathrm{Score} \propto q_t \cdot (c_{KV} \cdot W_{UK})^T
+\]
+
+利用矩阵乘法结合律 \((AB)C=A(BC)\)，可以把 Key 侧的升维矩阵 \(W_{UK}\) 移动到 Query 侧：
+
+\[
+\mathrm{Score} \propto (q_t \cdot W_{UK}^T) \cdot c_{KV}^T
+\]
+
+我们先让 Query 去乘固定的参数矩阵 \(W_{UK}^T\)，得到一个新的、被变换过的 Query，记为 \(Q_{\mathrm{absorbed}}\)，则对于第 \(i\) 个注意力头，当前（第 \(t\) 个）Token 和第 \(j\) 个 Token 间的注意力权重为：
+
+\[
+\mathrm{Score}_{t,j}^{(i)}
+=
+\frac{Q_{\mathrm{absorbed}}^{(i)} \cdot (c_{KV,j})^T}{\sqrt{d}}
+\]
+
+由于 \(Q_{\mathrm{absorbed}}\) 是对于当前 Token 而言的，因此这一步只涉及 1 个 Token 的计算，开销极小。接下来乘以 \(C_{KV}^T\)，我们只需要存储 \(t*64\) 维的压缩向量 \(C_{KV}\)，而永远不需要在显存里复原巨大的 \(t*1024\) 维的 K 矩阵。在完成``矩阵吸收''后，这步就变成了 \(Q_{\mathrm{absorbed}}^{(i)}\) 对 \(C_{KV}^T\) 进行类似 MQA 的操作，但保留了 MHA 中不同头的表达能力。
+
+我们还需要加上解耦位置编码，单独计算 RoPE 部分的分数。从而对于第 \(i\) 个注意力头，当前（第 \(t\) 个）Token 和第 \(j\) 个 Token 间的注意力权重为：
+
+\[
+\mathrm{Score}_{t,j}^{(i)}
+=
+\frac{
+\left(q_t^{C,(i)} \cdot (W_{UK}^{(i)})^T\right) \cdot c_{KV,j}
++
+q_t^{R,(i)} \cdot (k_j^R)^T
+}{\sqrt{d}}
+\]
+
+其中，第一项 \(\left(q_t^{C,(i)} \cdot (W_{UK}^{(i)})^T\right) \cdot c_{KV,j}\) 是内容分数，用于比较当前 token 与历史 token 的语义内容；第二项 \(q_t^{R,(i)} \cdot (k_j^R)^T\) 是 RoPE 位置分数，用于比较二者的相对位置信息。
+
+\(R_{lt}^{(i)}\) 是第 \(i\) 个头独有的、携带位置信息的 Query 向量，可理解为上式中的 \(q_t^{R,(i)}\)；\(k_j^R\) 通常是各头共享的 RoPE Key 向量。它们做点积后，相当于在标准注意力中保留位置匹配能力，使模型仍然能判断 token 之间的相对距离。
+
+\hypertarget{ux56dbux8fd0ux7528ux5206ux914dux5f8bux5bf9ux4fe1ux606fux805aux5408ux6ce8ux610fux529bux6743ux91cdvux8fdbux884cux4f18ux5316}{%
+\subsection{四、运用分配律对信息聚合（注意力权重*V）进行优化}\label{ux56dbux8fd0ux7528ux5206ux914dux5f8bux5bf9ux4fe1ux606fux805aux5408ux6ce8ux610fux529bux6743ux91cdvux8fdbux884cux4f18ux5316}}
+
+设 \(c_{KV,j}\) 向量的维度为 \(d_c\)，升维后每个头的特征维度为 \(d_h\)。在第 \(i\) 个头中，注意力分布、压缩潜变量和 Value 升维矩阵分别为：
+
+\[
+P_{t,:}^{(i)} = \mathrm{Softmax}(\mathrm{Score}_{t,:}^{(i)}),\qquad
+P_{t,j}^{(i)} =
+\frac{\exp(\mathrm{Score}_{t,j}^{(i)})}{\sum_{r=1}^{t}\exp(\mathrm{Score}_{t,r}^{(i)})},\qquad
+c_{KV,j}\in \mathbb{R}^{d_c},\qquad
+W_{UV}^{(i)}\in \mathbb{R}^{d_c \times d_h}
+\]
+
+如果按标准路径先把每个历史 token 的压缩潜变量升维成 Value，再做加权求和，则第 \(i\) 个头的输出是：
+
+\[
+y_t^{(i)}
+=
+\sum_{j=1}^{t}
+\left(P_{t,j}^{(i)} \cdot (c_{KV,j} \cdot W_{UV}^{(i)})\right)
+\]
+
+这种写法对每个历史位置 \(j\) 都要执行一次 \(c_{KV,j} \cdot W_{UV}^{(i)}\) 的升维计算，然后再乘以标量权重 \(P_{t,j}^{(i)}\) 并求和。单个头的主要复杂度约为 \(O(t \cdot d_c \cdot d_h)\)。
+
+DeepSeek 利用矩阵乘法的分配律，把固定的升维矩阵 \(W_{UV}^{(i)}\) 移到求和符号之外：
+
+\[
+\begin{aligned}
+y_t^{(i)}
+&= \sum_{j=1}^{t}\left(P_{t,j}^{(i)} \cdot c_{KV,j} \cdot W_{UV}^{(i)}\right) \\
+&= \left(\sum_{j=1}^{t}P_{t,j}^{(i)} \cdot c_{KV,j}\right) \cdot W_{UV}^{(i)}
+\end{aligned}
+\]
+
+于是计算可以拆成两个阶段。第一阶段先在压缩空间内聚合：
+
+\[
+\tilde c_{sum}^{(i)}
+=
+\sum_{j=1}^{t}\left(P_{t,j}^{(i)} \cdot c_{KV,j}\right)
+\]
+
+\(\tilde c_{sum}^{(i)}\) 是一个 \(d_c\) 维低维向量。虽然 \(c_{KV,j}\) 来自共享 KV Cache，但每个头的注意力权重 \(P_{t,j}^{(i)}\) 不同，所以每个头聚合出的 \(\tilde c_{sum}^{(i)}\) 也不同。这个阶段只做标量乘低维向量再求和，复杂度约为 \(O(t \cdot d_c)\)。
+
+第二阶段再做延迟升维：
+
+\[
+y_t^{(i)} = \tilde c_{sum}^{(i)} \cdot W_{UV}^{(i)}
+\]
+
+这一步把聚合后的低维结果映射回第 \(i\) 个头的 \(d_h\) 维特征空间。由于升维只对聚合后的结果做一次，而不是对 \(t\) 个历史 token 分别做 \(t\) 次，单个头这部分复杂度约为 \(O(d_c \cdot d_h)\)。
+
+计算出所有 \(H\) 个头的 \(y_t^{(i)}\) 后，将它们拼接起来，并通过输出投影矩阵 \(W_O\) 得到最终的隐状态输出：
+
+\[
+y_t
+=
+\mathrm{Concat}\left(y_t^{(1)}, y_t^{(2)}, \ldots, y_t^{(H)}\right) \cdot W_O
+\]
+
+总体而言，MLA 把``先逐 token 升维再聚合''改成``先在压缩空间聚合再延迟升维''，主要复杂度从 \(O(t \cdot d_c \cdot d_h)\) 变为 \(O(t \cdot d_c + d_c \cdot d_h)\)，当历史长度 \(t\) 较大时可近似理解为降低约 \(d_h\) 倍。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-94}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-94}}
+
+\begin{itemize}
+\tightlist
+\item
+  DeepSeek-AI. (2024). \href{https://arxiv.org/abs/2405.04434}{DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model}. arXiv:2405.04434.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{kvux538bux7f29ux7684ux5176ux4ed6ux65b9ux6cd5}{%
+\section{KV压缩的其他方法}\label{kvux538bux7f29ux7684ux5176ux4ed6ux65b9ux6cd5}}
+
+\hypertarget{ux4e00kv-cacheux91cfux5316ux65b9ux6cd5ux7cbeux5ea6ux7684ux9002ux5f53ux964dux4f4e}{%
+\subsection{一、KV Cache量化方法：精度的适当降低}\label{ux4e00kv-cacheux91cfux5316ux65b9ux6cd5ux7cbeux5ea6ux7684ux9002ux5f53ux964dux4f4e}}
+
+KV Cache 默认通常使用 FP16（16-bit）存储。量化方法的核心思想，是把 Key/Value 缓存从 FP16 压缩到 INT8，甚至进一步压缩到 INT4，从而用更低精度换取更低显存占用。
+
+以 Key 张量的 INT8 量化为例，可以写为 \(K_{int8}=round(K_{fp16}/scale)\)。其中 \(scale\) 是量化缩放因子，用来把 FP16 数值映射到整数表示范围内。
+
+这种方法的效果很直接：如果从 FP16 压缩到 INT8，KV Cache 的显存占用大约减半；如果进一步压缩到 INT4，显存占用可以接近原来的四分之一。对长文本推理来说，KV Cache 占用越大，量化带来的显存收益越明显；实际使用中通常几乎无感，但会引入很小的精度损失。
+
+\hypertarget{ux4e8cux5b58ux5728ux4fe1ux606fux635fux5931ux7684kvux5e8fux5217ux538bux7f29}{%
+\subsection{二、存在信息损失的K、V序列压缩}\label{ux4e8cux5b58ux5728ux4fe1ux606fux635fux5931ux7684kvux5e8fux5217ux538bux7f29}}
+
+还有一些方法不处理每一个独立的 token，而是将序列总结或聚类成少量原型的``概念''或``块''，然后在这些原型上执行注意力，最后再将结果广播回原始 token。
+
+典型代表：
+
+Pooling/Clustering：对 K 和 V 进行池化或聚类，减少其数量。
+
+这类方法背后的基本假设是：不是所有 token 都同等重要。像``的''``了''``is''``the''这类 token，在生成完成后可能就不再需要完整保留。
+
+\begin{itemize}
+\tightlist
+\item
+  H2O（Heavy Hitter Oracle）：只保留那些注意力分数比较高的 token，也就是 heavy hitter，同时保留最近生成的 recent token，避免模型完全丢失局部上下文。
+\item
+  Token Merging（ToMe）：发现两个 token 向量很像、余弦相似度较高时，就把它们合并成一个 token 表示，减少后续注意力需要处理的 K/V 数量。
+\end{itemize}
+
+这类方法目前更适合中等偏低的应用场景，尤其是超长文本推理或资源受限的端侧设备。不过它也有明显缺点：第一，KV Cache 会随着生成过程动态变稀疏，内存不再连续，很难充分利用 GPU 的并行计算能力，反而可能变慢；第二，在``大海捞针''任务中，如果早期剪掉了看似不重要、但实际包含关键信息的 token，例如一个人名，模型后续就可能永远找不到这个信息。
+
+代表技术包括 StreamingLLM 和 H2O。其中 StreamingLLM 通过保留开头的注意力汇聚 token 与最近 token 来支持长文本流式推理，H2O 则强调保留 heavy hitter 与 recent token。
+
+Learned Compressors：使用一个可学习的网络（如低维投影）来压缩 K 和 V。但有损且不可逆：一旦压缩成摘要，原始的逐字逐句信息就丢了，很难做精确引用。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-95}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-95}}
+
+\begin{itemize}
+\tightlist
+\item
+  Zhang, Z., Sheng, Y., Zhou, T., et al.~(2023). \href{https://arxiv.org/abs/2306.14048}{H2O: Heavy-Hitter Oracle for Efficient Generative Inference of Large Language Models}. NeurIPS 2023.
+\item
+  Xiao, G., Tian, Y., Chen, B., Han, S., \& Lewis, M. (2023). \href{https://arxiv.org/abs/2309.17453}{Efficient Streaming Language Models with Attention Sinks}. ICLR 2024.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux7a00ux758fux6ce8ux610fux529bsparse-attention}{%
+\section{稀疏注意力（Sparse Attention）}\label{ux7a00ux758fux6ce8ux610fux529bsparse-attention}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-8}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-8}}
+
+稀疏注意力的核心思想是：并非所有 token 对之间都需要进行交互。通过引入结构性稀疏模式，只计算注意力矩阵中一部分重要元素，可以把全注意力的 \(O(n^2)\) 复杂度降低到 \(O(n\sqrt{n})\)、\(O(n\log n)\) 或近似线性的级别。
+
+\hypertarget{ux4e8cux5178ux578bux4ee3ux8868}{%
+\subsection{二、典型代表}\label{ux4e8cux5178ux578bux4ee3ux8868}}
+
+Blockwise Attention：将序列分块，只在块内或特定的块之间计算注意力。
+
+Sliding Window Attention（滑动窗口注意力）：每个 token 只关注其前后一定窗口大小内的邻居 token。这在类似 BERT 这样的编码器中很常见。
+
+Dilated Attention：类似于空洞卷积，在滑动窗口的基础上进行跳跃，以扩大感受野。
+
+Global + Local Attention：指定少数 token（如 \texttt{\textless{}s\textgreater{}}）拥有全局注意力，可以关注所有 token，而其他 token 只进行局部注意力。
+
+应用：Longformer、BigBird 等模型就采用了这种思想，能够处理极长文档。
+
+\hypertarget{ux4e09dsadeepseek-sparse-attentiondeepseek-v3.22025}{%
+\subsection{三、DSA（DeepSeek Sparse Attention，DeepSeek-V3.2，2025）}\label{ux4e09dsadeepseek-sparse-attentiondeepseek-v3.22025}}
+
+\hypertarget{ux6838ux5fc3ux601dux60f3ux5148ux7c97ux7b5bux540eux7ec6ux7b97}{%
+\subsubsection{1. 核心思想：``先粗筛，后细算''}\label{ux6838ux5fc3ux601dux60f3ux5148ux7c97ux7b5bux540eux7ec6ux7b97}}
+
+DSA 的目标是在不计算所有 Query-Key 点积的情况下，快速找到高价值的 Key。
+
+输入包括：
+
+\begin{itemize}
+\tightlist
+\item
+  Query 侧索引信号：从 \(c_t^Q\) 衍生出的 \(q^I_{t,j}\)。
+\item
+  Key 侧索引信号：\(k_t^I\)。
+\item
+  权重或偏置项：\(w^I_{t,j}\)。
+\end{itemize}
+
+处理流程包括：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  部分 RoPE（Partially apply RoPE）：为了降低计算量，索引器不需要全精度的位置编码，只对索引向量应用部分 RoPE。
+\item
+  Lightning Indexer（闪电索引器）：这是一个轻量级计算模块。它接收粗粒度的 Query 和 Key 索引向量，快速计算粗略的相关性分数。
+\item
+  Top-k Selector（Top-k 选择器）：基于索引器计算出的分数，动态选出当前 Query 最关注的 \(k\) 个 Key-Value 块。
+\end{enumerate}
+
+\hypertarget{ux63a8ux7406ux5de5ux4f5cux6d41}{%
+\subsubsection{2. 推理工作流}\label{ux63a8ux7406ux5de5ux4f5cux6d41}}
+
+Step 1：投影降维（Down-Projection）。
+
+模型不直接使用高维的 \(h_t\) 或完整的 \(c_t^Q\) 进行检索，而是通过一个轻量级线性层 \(W^I\) 将输入投影到一个低维空间：
+
+\[
+q^I_{t,j} = W^I_Q \cdot c^Q_t
+\]
+
+\[
+k^I_t = W^I_K \cdot c^{KV}_t
+\]
+
+其中，\(q^I_{t,j}\) 是 Query 侧索引向量，\(k^I_t\) 是 Key 侧索引向量。这里的索引向量维度 \(d_{index}\) 远小于正常的 head 维度 \(d_{head}\)。例如，\(d_{head}\) 可能是 128，而 \(d_{index}\) 可能只有 32 或 16，这会显著减少索引阶段的计算量。
+
+Step 2：块级划分（Block-wise Segmentation）。
+
+这里的``粗粒度''不仅指向量维度低，也指时间步的粒度。DSA 通常不会对每一个历史 token 逐个计算分数，而是将 KV Cache 划分为多个固定大小的 Block（块），例如每 64 个 token 为一块。
+
+索引器会为每一个 Block 计算一个代表性的 Key 索引向量，通常可以取该 Block 内所有 \(k^I\) 的均值，也可以对特定位置采样。
+
+Step 3：快速打分（Lightweight Scoring）。
+
+使用点积计算 Query 索引向量与 Block 索引向量之间的相关性分数：
+
+\[
+S_{block} = (q^I_{t,j})^T \cdot k^I_{block}
+\]
+
+图中提到的 ``partially apply RoPE'' 指的是：为了进一步节省算力，同时保留位置信息，索引器只对向量的一小部分维度应用旋转位置编码，或者使用简化版的位置编码。
+
+Step 4：Top-k 筛选（Gating）。
+
+根据 \(S_{block}\) 的大小，选出分数最高的 \(k\) 个 Block。后续真正的``重型''注意力计算（Core Attention）只针对这 \(k\) 个被选中的 Block 进行加载和计算，其余大量无关信息直接忽略。
+
+之所以这种方法更快，是因为原始全注意力的计算量大致为：
+
+\[
+O(L \cdot d_{head})
+\]
+
+而索引器的计算量大致为：
+
+\[
+O\left(\frac{L}{B} \cdot d_{index}\right)
+\]
+
+其中，\(B\) 是块大小。由于 \(B > 1\) 且 \(d_{index} \ll d_{head}\)，索引器开销通常远小于完整注意力计算。
+
+\hypertarget{ux8badux7ec3ux65b9ux6cd5}{%
+\subsubsection{3. 训练方法}\label{ux8badux7ec3ux65b9ux6cd5}}
+
+（1）Lightning Indexer 的训练目标。
+
+由于 Top-K 操作本身是不可导的，也就是无法直接通过 Top-K 选择反向传播主模型的预测误差来更新索引器，DeepSeek 为 Lightning Indexer 设计了独立的监督信号。
+
+Lightning Indexer 被训练来预测每个 token 的 Query 与每个 token 的 Key 之间的注意力权重。训练目标是模仿原始全注意力（Dense Attention）的权重分布，准确说是所有注意力头的权重平均分布。
+
+损失函数可以理解为 \(n\) 个 KL 散度之和。对于第 \(i\) 个 token，它对第 \(j\) 个 token 的注意力分数（\(j = 1, 2, \ldots, n\)）构成概率分布 \(p(j \mid i)\)。再计算索引器分布 \(p_{Indexer}(j \mid i)\) 与稠密注意力分布 \(p_{Dense}(j \mid i)\) 之间的 KL 散度，并对 \(i = 1, 2, \ldots, n\) 累加：
+
+\[
+\mathcal{L}_{indexer}
+= \sum_{i=1}^{n} D_{KL}\left(p_{Dense}(\cdot \mid i) \,\|\, p_{Indexer}(\cdot \mid i)\right)
+\]
+
+（2）整体训练步骤。
+
+第一步：在全注意力（Dense Attention）下，训练主模型。
+
+第二步：冻结主模型，保持全注意力开启，初始化训练 Lightning Indexer，使之与主模型的注意力分布对齐。
+
+第三步：开启稀疏化（Top-K Selection），同步用各自的损失函数训练主模型和 Lightning Indexer。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-96}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-96}}
+
+\begin{itemize}
+\tightlist
+\item
+  Qiu, J., Ma, H., Levy, O., Yih, S. W., Wang, S., \& Tang, J. (2019). \href{https://arxiv.org/abs/1911.02972}{Blockwise Self-Attention for Long Document Understanding}. arXiv:1911.02972.
+\item
+  Child, R., Gray, S., Radford, A., \& Sutskever, I. (2019). \href{https://arxiv.org/abs/1904.10509}{Generating Long Sequences with Sparse Transformers}. arXiv:1904.10509.
+\item
+  Beltagy, I., Peters, M. E., \& Cohan, A. (2020). \href{https://arxiv.org/abs/2004.05150}{Longformer: The Long-Document Transformer}. arXiv:2004.05150.
+\item
+  Zaheer, M., Guruganesh, G., Dubey, K. A., et al.~(2020). \href{https://arxiv.org/abs/2007.14062}{Big Bird: Transformers for Longer Sequences}. NeurIPS 2020.
+\item
+  Ding, J., Ma, S., Dong, L., et al.~(2023). \href{https://arxiv.org/abs/2307.02486}{LongNet: Scaling Transformers to 1,000,000,000 Tokens}. arXiv:2307.02486.
+\item
+  DeepSeek-AI. (2025). \href{https://arxiv.org/abs/2512.02556}{DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models}. arXiv:2512.02556.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux7ebfux6027ux6ce8ux610fux529blinear-attention}{%
+\section{线性注意力（Linear Attention）}\label{ux7ebfux6027ux6ce8ux610fux529blinear-attention}}
+
+\hypertarget{ux4e00ux57faux672cux539fux7406-1}{%
+\subsection{一、基本原理}\label{ux4e00ux57faux672cux539fux7406-1}}
+
+线性化注意力的核心思想是：通过改变计算顺序，避免显式地计算和存储这个 \(n \times n\) 的注意力矩阵 \(A\)。
+
+它的目标是将计算复杂度从 \(O(n^2)\) 降低到 \(O(n)\)。
+
+如何实现？答案是利用矩阵乘法的结合律。
+
+\begin{itemize}
+\tightlist
+\item
+  标准计算顺序：\((QK^T)V\)，先算 \(n \times n\) 矩阵，再与 \(V\)（\(n \times d\)）相乘。
+\item
+  线性化计算顺序：\(Q(K^T V)\)，先算 \(K^T V\)（得到一个 \(d \times d\) 的矩阵），再与 \(Q\)（\(n \times d\)）相乘。
+\end{itemize}
+
+实现线性化并非无条件的，必须去掉 Softmax，这是因为：
+
+标准注意力（Standard Attention）为：
+
+\[
+\mathrm{Output} = \mathrm{Softmax}(QK^T)V
+\]
+
+请注意，这里不仅有乘法，还有一个非线性的 Softmax 包裹在中间。
+
+\[
+\mathrm{Softmax}(QK^T) \ne Q \cdot \mathrm{Softmax}(K^T)
+\]
+
+你不能把 Softmax 拆开，也不能把它挪到后面去先算 \(K^T V\)。因为 \(Q\) 和 \(K\) 的每一项都必须先交互、求和、归一化之后，才能和 \(V\) 相乘。这意味着你必须构建那个巨大的 \(n \times n\) 矩阵。
+
+我们需要一个核函数来近似 Softmax 函数。具体数学推导如下。
+
+首先，我们把标准注意力写成一个按行归一化的形式。对于第 \(i\) 个查询向量 \(q_i\) 的输出 \(o_i\)：
+
+\[
+o_i =
+\frac{
+\sum_{j=1}^{n} \exp\left(\frac{q_i k_j^T}{\sqrt{d_k}}\right)v_j
+}{
+\sum_{j=1}^{n} \exp\left(\frac{q_i k_j^T}{\sqrt{d_k}}\right)
+}
+\]
+
+我们可以将其抽象为一个更通用的相似度函数 \(\mathrm{sim}(\cdot,\cdot)\)：
+
+\[
+o_i =
+\frac{
+\sum_{j=1}^{n} \mathrm{sim}(q_i,k_j)v_j
+}{
+\sum_{j=1}^{n} \mathrm{sim}(q_i,k_j)
+}
+\]
+
+接着引入核函数 \(\phi\)，用特征映射后的内积来表示相似度：
+
+\[
+\mathrm{sim}(q_i,k_j) = \phi(q_i)\cdot\phi(k_j)^T
+\]
+
+其中 \(\phi:\mathbb{R}^{d}\rightarrow\mathbb{R}^{d_{proj}}\) 是一个将原始向量映射到另一个特征空间的函数，它也称为核函数。
+
+现在，把这个核函数代入输出 \(o_i\) 的计算中：
+
+\[
+o_i =
+\frac{
+\sum_{j=1}^{n}[\phi(q_i)\cdot\phi(k_j)^T]v_j
+}{
+\sum_{j=1}^{n}[\phi(q_i)\cdot\phi(k_j)^T]
+}
+\]
+
+由于 \(\phi(q_i)\) 对于求和索引 \(j\) 是常数，我们可以将其提到求和号外面：
+
+\[
+o_i =
+\frac{
+\phi(q_i)\cdot\left[\sum_{j=1}^{n}\phi(k_j)^T \otimes v_j\right]
+}{
+\phi(q_i)\cdot\left[\sum_{j=1}^{n}\phi(k_j)^T\right]
+}
+\]
+
+这里 \(\otimes\) 表示外积；在固定行、列向量方向后，也常写成矩阵乘法。
+
+注：内积表示行向量乘列向量，结果为标量；外积表示列向量（\(m \times 1\)）乘行向量（\(1 \times n\)），结果为矩阵（\(m \times n\)）。
+
+让我们定义两个关键的累积状态矩阵：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \(S\)：键和值的聚合状态。
+\end{enumerate}
+
+\[
+S = \sum_{j=1}^{n}\phi(k_j)^T v_j \in \mathbb{R}^{d_{proj}\times d_v}
+\]
+
+注意：这里的 \(\phi(k_j)\) 是行向量，它转置后是列向量，与 \(v_j\)（行向量）做外积，得到一个矩阵。我们对所有 \(j\) 的这样的矩阵求和。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \(Z\)：归一化因子的聚合状态。
+\end{enumerate}
+
+\[
+Z = \sum_{j=1}^{n}\phi(k_j)^T \in \mathbb{R}^{d_{proj}\times 1}
+\]
+
+现在，对于整个序列的输出 \(O\) 中的第 \(i\) 行 \(o_i\)，可以计算为：
+
+\[
+o_i = \frac{\phi(q_i)S}{\phi(q_i)Z}
+\]
+
+这里的分母 \(\phi(q_i)Z\) 是一个标量（归一化因子），因此输出向量的每个分量都除以同一个归一化值。
+
+\begin{itemize}
+\tightlist
+\item
+  计算 \(S\) 和 \(Z\)：遍历序列中的每个位置 \(j\)，求 \(\phi(k_j)^T v_j\) 和 \(\phi(k_j)^T\)，然后累加。这一步的复杂度是 \(O(n\cdot d_{proj}\cdot d_v)\)。
+\item
+  计算所有输出 \(o_i\)：对于每个位置 \(i\)，计算 \(\phi(q_i)S\) 和 \(\phi(q_i)Z\)。这一步的复杂度也是 \(O(n\cdot d_{proj}\cdot d_v)\)。
+\end{itemize}
+
+总复杂度是 \(O(nd_{proj}d_v)\)。如果我们固定 \(d_{proj}\) 和 \(d_v\)，它们是与序列长度 \(n\) 无关的常数，那么复杂度就是 \(O(n)\)，即线性复杂度。
+
+注：\(K\) 和 \(V\) 本来分别为 \(n \times d_k\) 和 \(n \times d_v\) 维，\(K\) 转置后与 \(V\) 矩阵相乘，矩阵乘法计算复杂度为 \(n\cdot d_k\cdot d_v\)，也就是相对于序列长度的 \(O(n)\)。这里的 \(\phi\) 只改变特征维度，不改变对序列位置逐项累加的线性结构。
+
+\hypertarget{ux4e8cux5982ux4f55ux5bfbux627eux6838ux51fdux6570-phix}{%
+\subsection{\texorpdfstring{二、如何寻找核函数 \(\phi(x)\)？}{二、如何寻找核函数 \textbackslash phi(x)？}}\label{ux4e8cux5982ux4f55ux5bfbux627eux6838ux51fdux6570-phix}}
+
+对于 Softmax 中的指数相似度，我们希望找到某种特征映射，使得：
+
+\[
+\mathrm{sim}(q,k) = \exp(q\cdot k^T) \approx \phi(q)\cdot\phi(k)^T
+\]
+
+在深度学习模型（如 Transformer 的原始注意力机制）中直接使用 Softmax 时，我们是在进行数值计算。对于单个数值 \(x\)，\(\exp(x)\) 是一个成熟的数学函数，计算机可以高效处理。但当 \(q\) 和 \(k\) 是两个向量时，若希望把 \(\exp(q\cdot k)\) 写成两个特征向量的内积，就会自然引出更高维的特征映射。
+
+从泰勒展开开始：
+
+\[
+\exp(q\cdot k)
+= 1 + (q\cdot k) + \frac{(q\cdot k)^2}{2!}
++ \frac{(q\cdot k)^3}{3!}
++ \frac{(q\cdot k)^4}{4!}
++ \cdots
+\]
+
+对于 \(m=1\)：
+
+\[
+(q\cdot k)^1 = \sum_{i=1}^{d}q_i k_i
+\]
+
+这可以看作是向量 \(q\) 和 \(k\) 在原始 \(d\) 维空间中的内积。
+
+对于 \(m=2\)：
+
+\[
+(q\cdot k)^2
+= \left(\sum_{i=1}^{d}q_i k_i\right)^2
+= \sum_{i=1}^{d}\sum_{j=1}^{d}q_i q_j k_i k_j
+\]
+
+注意，这可以重写为两个新向量的内积：
+
+\begin{itemize}
+\tightlist
+\item
+  令 \(\phi_2(q)\) 是一个 \(d^2\) 维的向量，包含所有 \(q_i q_j\) 的组合。
+\item
+  令 \(\phi_2(k)\) 是一个 \(d^2\) 维的向量，包含所有 \(k_i k_j\) 的组合。
+\end{itemize}
+
+那么：
+
+\[
+(q\cdot k)^2 = \phi_2(q)\cdot\phi_2(k)
+\]
+
+现在，我们可以为每个幂次 \(m\) 定义一个特征映射：
+
+\begin{itemize}
+\tightlist
+\item
+  对于 \(m=0\)：\(\phi_0(q)=1\)，是 1 维。
+\item
+  对于 \(m=1\)：\(\phi_1(q)=q\)，是 \(d\) 维。
+\item
+  对于 \(m=2\)：\(\phi_2(q)\) 包含所有 \(q_i q_j\)，是 \(d^2\) 维。
+\item
+  对于 \(m=3\)：\(\phi_3(q)\) 包含所有 \(q_i q_j q_k\)，是 \(d^3\) 维。
+\item
+  依此类推。
+\end{itemize}
+
+将这些不同阶数的特征组合起来，就可以构造一个无限维的超级特征映射 \(\Phi(q)\)：
+
+\[
+\Phi(q)=
+\left(
+1,\;
+q,\;
+\frac{q_i q_j}{\sqrt{2!}},\;
+\frac{q_i q_j q_k}{\sqrt{3!}},\;
+\frac{q_i q_j q_k q_l}{\sqrt{4!}},\;
+\cdots
+\right)
+\]
+
+这里每个分量都除以相应的 \(\sqrt{m!}\)，用于匹配泰勒展开中的系数。
+
+于是：
+
+\[
+\begin{aligned}
+\Phi(q)\cdot\Phi(k)
+&= 1\cdot 1
++ \sum_i q_i k_i
++ \sum_{i,j}\frac{q_i q_j}{\sqrt{2!}}\frac{k_i k_j}{\sqrt{2!}}
++ \sum_{i,j,k}\frac{q_i q_j q_k}{\sqrt{3!}}\frac{k_i k_j k_k}{\sqrt{3!}}
++ \cdots \\
+&= 1 + \sum_i q_i k_i
++ \frac{1}{2!}\sum_{i,j}q_i q_j k_i k_j
++ \frac{1}{3!}\sum_{i,j,k}q_i q_j q_k k_i k_j k_k
++ \cdots
+\end{aligned}
+\]
+
+但注意：
+
+\[
+\sum_i q_i k_i = q\cdot k
+\]
+
+\[
+\sum_{i,j}q_i q_j k_i k_j = (q\cdot k)^2
+\]
+
+\[
+\sum_{i,j,k}q_i q_j q_k k_i k_j k_k = (q\cdot k)^3
+\]
+
+因此：
+
+\[
+\Phi(q)\cdot\Phi(k)
+= 1 + (q\cdot k) + \frac{(q\cdot k)^2}{2!}
++ \frac{(q\cdot k)^3}{3!}
++ \cdots
+= \exp(q\cdot k)
+\]
+
+计算 \(\exp(q\cdot k)\) 这个看似简单的操作，在数学上等价于：将向量 \(q\) 和 \(k\) 映射到一个无限维的特征空间，在这个无限维空间中计算它们的内积。这个无限维空间包含了原始向量所有可能的多项式组合，包括一次项、二次项、三次项等。
+
+线性注意力的出现本身就是为了解决长序列上 \(O(n^2)\) 的问题，但如果直接使用这个无限维特征映射，它自身又会带来趋于无限维的特征空间。在一个本身就可能趋于无限长的序列上，这是计算机无法处理的。
+
+因此，我们必须对这个函数进行近似。常见近似方法如下。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  \(\phi(x)=\mathrm{elu}(x)+1\)。
+
+  ELU 函数：对于 \(x>0\)，输出 \(x\)；对于 \(x\le 0\)，输出 \(\alpha(\exp(x)-1)\)，通常 \(\alpha=1\)。
+
+  \(\mathrm{elu}(x)+1\)：对于 \(x>0\)，约为 \(x+1\)（线性增长）；对于 \(x\le 0\)，变为 \(\exp(x)\)（指数增长）。
+
+  设计动机：这个函数在 \(x\le 0\) 时具有类似指数函数的行为，而在 \(x>0\) 时保持线性，整体上试图模拟指数函数的形状。但它是有限维的，输出维度与输入 \(x\) 相同。
+\item
+  \(\phi(x)=\mathrm{ReLU}(x)^2\)。
+
+  这是一个简单的多项式函数。\(\mathrm{ReLU}(x)\) 将负值置零、正值保留，然后再平方。
+
+  它对应一个二阶多项式核，计算简单，但近似能力相对较弱。
+\item
+  基于随机特征的方法。
+
+  这是一种数学上更严谨的近似方法。它通过随机投影构造一个显式、有限维的特征映射 \(\phi(x)\)，使得 \(\phi(q)\cdot\phi(k)\) 近似于某个目标核函数。
+\item
+  学习得到的核函数。
+
+  不手动设计 \(\phi\)，而是让模型自己学习。可以用一个小型神经网络（如一层 MLP）作为 \(\phi\)，在训练过程中通过梯度下降优化它，使其能更好地配合整个模型完成任务。
+\end{enumerate}
+
+但这些核函数都不能足够好地拟合 Softmax，这是线性注意力性能不如 Full Attention 的核心原因。
+
+\hypertarget{ux4e09ux5728ux81eaux56deux5f52ux4e2dux7684ux4f18ux52bf}{%
+\subsection{三、在自回归中的优势}\label{ux4e09ux5728ux81eaux56deux5f52ux4e2dux7684ux4f18ux52bf}}
+
+线性化注意力还有一个独特优势：它可以被轻松地改写为递归形式，非常适合自回归推理。
+
+令：
+
+\[
+S_t = \sum_{j=1}^{t}\phi(k_j)^T v_j
+= S_{t-1}+\phi(k_t)^T v_t
+\]
+
+\[
+Z_t = \sum_{j=1}^{t}\phi(k_j)^T
+= Z_{t-1}+\phi(k_t)^T
+\]
+
+在生成第 \(t\) 个 token 时：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  我们已经有之前所有 token 的累积状态 \(S_{t-1}\) 和 \(Z_{t-1}\)。
+\item
+  我们计算当前 token 的 \(k_t\)、\(v_t\)，并更新状态：
+\end{enumerate}
+
+\[
+S_t = S_{t-1}+\phi(k_t)^T v_t,\quad
+Z_t = Z_{t-1}+\phi(k_t)^T
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  然后使用当前查询 \(q_t\) 计算输出：
+\end{enumerate}
+
+\[
+o_t = \frac{\phi(q_t)S_t}{\phi(q_t)Z_t}
+\]
+
+这就像一个 RNN。在生成第 \(t\) 个 token 时，我们已经有了前 \(t-1\) 个 token 的完整总结 \(S_{t-1}\) 和 \(Z_{t-1}\)。当新的第 \(t\) 个 token 产生时，我们不需要回溯整个历史，只需要将当前 token 的贡献 \(\phi(k_t)^T v_t\) 加到 \(S_{t-1}\) 上，将 \(\phi(k_t)^T\) 加到 \(Z_{t-1}\) 上，就得到了新的状态 \(S_t\) 和 \(Z_t\)。然后用当前查询 \(q_t\) 与最新状态交互，得到当前时刻的输出。
+
+因此，我们不需要存储整个键值的历史，只需要维护一个固定大小的状态 \(S\) 和 \(Z\)。每一步的计算成本是常数 \(O(1)\)（相对于序列长度），极大地提高了长文本生成的效率。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-97}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-97}}
+
+\begin{itemize}
+\tightlist
+\item
+  Shen, Z., Zhang, M., Zhao, H., Yi, S., \& Li, H. (2021). \href{https://arxiv.org/abs/1812.01243}{Efficient Attention: Attention with Linear Complexities}. WACV 2021.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux95e8ux63a7ux6ce8ux610fux529bgated-attentionux8bbaux6587}{%
+\section{门控注意力（Gated Attention）（论文）}\label{ux95e8ux63a7ux6ce8ux610fux529bgated-attentionux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+和前面的几种改进专注提升效率不同，Qwen团队提出的门控注意力（Gated Attention）更多是性能的提升。
+
+\hypertarget{ux4e00ux9488ux5bf9ux7684ux95eeux9898}{%
+\subsection{一、针对的问题}\label{ux4e00ux9488ux5bf9ux7684ux95eeux9898}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  低秩瓶颈
+\end{enumerate}
+
+在标准的多头注意力机制（Multi-Head Attention, MHA）中，对于任意一个Head，输出Y是按注意力分数对各token的值矩阵加权：
+
+\[
+Y=\mathrm{Softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+\]
+
+其中注意力矩阵为：
+
+\[
+A=\mathrm{Softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)
+\]
+
+也就是说，标准注意力可以写成 \(Y=AV\)。其中V由多个头拼接而成，对于每个头，输出的矩阵的秩受到矩阵尺寸的制约，只能有 \(d_{head}\) 维。在讲DeepSeek的创新时我们提到，各个head的向量是高度相关的，因此实际上仍然分布在一个低秩空间中，会导致V可能丢失了高维数据分布中一些维度的信息。而Softmax之后的Attention层以及输出层都是线性的，V如果没能包含某些维度的信息，就无法通过用非线性操作去``拟合''的方式来恢复这些信息。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  不合理的权重分配
+\end{enumerate}
+
+以前的许多模型在实际运行时，对于所有token的key都和该query相关度都很低的情形，经常会把大量的注意力分数分配给句子的第一个token（比如起始符），即使这个Token没有任何实际语义。这可能是因为所有token的注意力权重之和强制为1，为了保持数值稳定强行把第一个token作为``垃圾桶''。
+
+\hypertarget{ux4e8cux89e3ux51b3ux65b9ux6848-1}{%
+\subsection{二、解决方案}\label{ux4e8cux89e3ux51b3ux65b9ux6848-1}}
+
+在注意力层的输出后面引入门控：
+
+\[
+Y_{\mathrm{gated}}=(AV)\odot\sigma(XW_{\mathrm{gate}})
+\]
+
+令门控矩阵为：
+
+\[
+G=\sigma(XW_{\mathrm{gate}})
+\]
+
+则门控注意力可以写成 \(Y_{\mathrm{gated}}=(AV)\odot G\)。其中 \(\odot\) 表示逐元素乘法，\(G\) 中的每个元素都由输入 \(X\) 经过线性变换和 sigmoid 函数得到。
+
+根据 Schur Product Theorem 的推论，对于秩为 \(r_1\) 的矩阵 \(A\) 和秩为 \(r_2\) 的矩阵 \(B\)，其逐元素乘积 \(A\odot B\) 的秩上界为：
+
+\[
+\mathrm{Rank}(A\odot B)\le \mathrm{Rank}(A)\times \mathrm{Rank}(B)
+\]
+
+注意这里是逐元素乘法关系，不是普通矩阵乘法。可以看出，秩的上界变成了两个矩阵秩的乘积，大大放宽。还可以从几何上理解：
+
+标准Attention的输出本质上是Value向量的凸组合（convex combination）。由于Softmax之后的注意力权重非负且总和为1，输出向量必须落在所有Value向量构成的凸包（convex hull）内部，因此模型无法生成一个位于这些向量外部的点。
+
+Gated Attention在这个输出后再引入门控矩阵 \(G\in(0,1)\)。门控对向量的每一个维度进行独立缩放，相当于对凸包内部的点做非均匀的拉伸或压缩：当某些维度的门控值接近0时，这些维度会被抑制；当不同维度的门控强度不同时，输出点就不再只是原始Value向量的单纯凸组合。这样就打破了``凸组合''的几何限制，使得输出空间更丰富。
+
+实验证明，门控矩阵往往是一个稀疏矩阵，这也解决了上面所述不合理的权重分配问题。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-98}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-98}}
+
+\begin{itemize}
+\tightlist
+\item
+  Qiu, Z., Wang, Z., Zheng, B., et al.~(2025). \href{https://arxiv.org/abs/2505.06708}{Gated Attention for Large Language Models: Non-linearity, Sparsity, and Attention-Sink-Free}. arXiv:2505.06708.
+\end{itemize}
+
+\clearpage

@@ -1,0 +1,1659 @@
+\hypertarget{ux7edfux4e00ux67b6ux6784ux7684ux591aux6a21ux6001ux7406ux89e3-ux751fux6210ux6a21ux578b}{%
+\chapter{统一架构的多模态理解-生成模型}\label{ux7edfux4e00ux67b6ux6784ux7684ux591aux6a21ux6001ux7406ux89e3-ux751fux6210ux6a21ux578b}}
+
+\hypertarget{ux591aux6a21ux6001ux7edfux4e00ux7406ux89e3-ux751fux6210ux6a21ux578bux6982ux8ff0}{%
+\section{多模态统一理解-生成模型概述}\label{ux591aux6a21ux6001ux7edfux4e00ux7406ux89e3-ux751fux6210ux6a21ux578bux6982ux8ff0}}
+
+\hypertarget{ux4e00ux57faux672cux4ecbux7ecd}{%
+\subsection{一、基本介绍}\label{ux4e00ux57faux672cux4ecbux7ecd}}
+
+多模态统一理解-生成模型将语言模型和生成模型/世界模型统一起来，前者处理表征人类逻辑的语言模态，后者处理其他表示世界客观状态的模态。这样，模型既具备了LLM的逻辑推理能力，又具备了对世界的物理认知和规划能力，在没有明显能力短板的情况下根据The Bitter Lesson将可以随着规模扩展而不断提升，乃至涌现出更高级的融合能力。
+
+当然，不是所有目前的多模态统一理解-生成模型都具备世界模型的预测下一状态能力。智源Emu支持世界模型的预测；LongCat-Next能生图、理论上架构可以用于状态预测，但没有按世界模型训练，没有建模跨帧token依赖，没有引入时序压缩或帧间残差编码，没有视频数据预训练；Transfusion没有世界模型能力，静态图像在diffusion生成过程中内部独立去噪，没有跨帧状态传递，联合建模困难；字节BAGEL虽然没有针对世界模型专门训练，但通过大规模图/视频/文本交错训练，涌现了一定的视觉建模能力。
+
+\hypertarget{ux4e8cux6838ux5fc3ux96beux70b9ux4e0eux539fux56e0}{%
+\subsection{二、核心难点与原因}\label{ux4e8cux6838ux5fc3ux96beux70b9ux4e0eux539fux56e0}}
+
+在多模态统一理解-生成模型的训练中，最大的难题在于理解和生成的梯度常出现冲突，而不是形成有效的信息增益和相互促进。大体有以下几种解释。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  图像生成需要复杂的空间规划、物理常识和语义推理，模型在一次前向传播中能执行的逻辑推理步骤是有限的，导致梯度信号太粗糙，理解模型没法给生成模型有效指导，生成模块的失败也无法有效地帮助理解模块进步。可能需要引入CoT等。（阶跃星辰）
+\item
+  图像信息丰富，而单一有限的离散Token词表表征容量太小，结果只能要么丢失整体语义信息，要么丢失细节信息。（字节UniTok）
+\item
+  理解任务的逻辑是从具体到抽象的认知过程，生成任务的逻辑是从抽象到具体的重建过程。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-195}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-195}}
+
+\begin{itemize}
+\tightlist
+\item
+  Team Chameleon. (2024). \href{https://arxiv.org/abs/2405.09818}{Chameleon: Mixed-Modal Early-Fusion Foundation Models}. arXiv:2405.09818.
+\item
+  Xie, J., Mao, W., Bai, Z., Zhang, D. J., Wang, W., Lin, K. Q., Gu, Y., Chen, Z., Yang, Z., \& Shou, M. Z. (2024). \href{https://arxiv.org/abs/2408.12528}{Show-o: One Single Transformer to Unify Multimodal Understanding and Generation}. arXiv:2408.12528.
+\item
+  Wu, C., Chen, X., Wu, Z., Ma, Y., Liu, X., Pan, Z., Liu, W., Xie, Z., Yu, X., Ruan, C., \& Luo, P. (2024). \href{https://arxiv.org/abs/2410.13848}{Janus: Decoupling Visual Encoding for Unified Multimodal Understanding and Generation}. arXiv:2410.13848.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux591aux6a21ux6001ux7edfux4e00ux7406ux89e3-ux751fux6210ux6a21ux578bux7684ux8f93ux5165ux7f16ux7801ux8bbaux6587}{%
+\section{多模态统一理解-生成模型的输入编码（论文）}\label{ux591aux6a21ux6001ux7edfux4e00ux7406ux89e3-ux751fux6210ux6a21ux578bux7684ux8f93ux5165ux7f16ux7801ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux4e3bux8981ux7f16ux7801ux65b9ux6848}{%
+\subsection{一、主要编码方案}\label{ux4e00ux4e3bux8981ux7f16ux7801ux65b9ux6848}}
+
+统一理解与生成模型要处理同一张图像时，通常会先加入一个视觉分词器。视觉分词器可以基于 VQ-VAE 一类架构，把连续图像像素空间压缩成可进行训练的离散空间。换句话说，系统会先把图像切分成一系列离散的视觉标记（Visual Tokens），再让这些视觉标记在格式和维度上与文本标记（Text Tokens）对齐。
+
+\hypertarget{ux4e00ux5206ux5c42ux89c6ux89c9ux6807ux8bb0}{%
+\subsubsection{（一）分层视觉标记}\label{ux4e00ux5206ux5c42ux89c6ux89c9ux6807ux8bb0}}
+
+一种常见思路是用分层残差方式逐级编码图像：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Level 1，\(l=1\)}：模型先用第一层密码本匹配原始图像特征。这一层捕捉的是最核心、最抽象的语义信息，可以理解为图像的目录。
+\item
+  \textbf{计算残差}：第一层匹配并不精确，会产生残差，即原始特征减去第一层特征后的差值。
+\item
+  \textbf{Level 2，\(l=2\)}：模型再用第二层密码本专门量化第一层留下的残差，第二层捕捉的是次一级的细节。
+\item
+  \textbf{循环堆叠}：依此类推，直到第 8 层（\(l=8\)）。每一层都在修补上一层留下的微小误差，最终捕捉更细粒度的高频纹理和边缘信息。
+\end{itemize}
+
+统一模型中的输入通常分为两类：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{文本输入}：直接通过语言模型自带的 Embedding 层查表，转化为文本 Token \(X_{\mathrm{text}}\)。
+\item
+  \textbf{图像输入}：图像会同时复制两份，并分别进入两个视觉编码器：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    喂给 ViT，输出代表高级概念的语义 Token \(X_{\mathrm{ViT}}\)。
+  \item
+    喂给 VAE Encoder，输出代表连续空间结构的隐变量 Token \(X_{\mathrm{VAE}}\)。
+  \end{itemize}
+\end{itemize}
+
+\hypertarget{ux4e8cux7406ux89e3ux7279ux5f81ux4e0eux751fux6210ux7279ux5f81ux7684ux5deeux5f02}{%
+\subsubsection{（二）理解特征与生成特征的差异}\label{ux4e8cux7406ux89e3ux7279ux5f81ux4e0eux751fux6210ux7279ux5f81ux7684ux5deeux5f02}}
+
+在过去的统一多模态模型中，``看''和``画''实际上使用的是两套完全不同的特征语言：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{视觉理解（看）}：大语言模型为了看懂图片，通常使用 CLIP 或 SigLIP 这类表征编码器。这些编码器提取出来的是高维、富含语义的特征，例如 1152 维。这就像是 LLM 的视觉母语。
+\item
+  \textbf{视觉生成（画）}：传统扩散模型为了节省算力，使用 VAE 将像素级图像压缩成低维隐特征，例如几十维，再在这个低维空间里进行去噪生成。
+\end{itemize}
+
+这种分裂会带来一个直接问题：扩散模型生成的是 VAE 低维特征，而 LLM 认识的是 CLIP/SigLIP 的高维语义特征。如果 LLM 想检查扩散模型画得对不对，就必须走一条繁琐链路：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  扩散模型生成 VAE 特征。
+\item
+  VAE 解码器把这些特征还原成像素图片。
+\item
+  CLIP 编码器再把像素图片编码成高维语义特征。
+\item
+  LLM 再基于这些语义特征进行评估。
+\end{enumerate}
+
+这导致模型内部仿佛存在两个不互通的大脑。
+
+\hypertarget{ux4e09rae-ux7684ux8f93ux5165ux7f16ux7801ux601dux8def}{%
+\subsubsection{（三）RAE 的输入编码思路}\label{ux4e09rae-ux7684ux8f93ux5165ux7f16ux7801ux601dux8def}}
+
+RAE 的核心思想非常直接：既然 LLM 习惯看 SigLIP 这类高维语义特征，就不要再让扩散模型生成 VAE 的低维语义特征，而是直接生成 SigLIP 的高维语义特征。
+
+因此，在 RAE 的架构下，模型取消了传统的 VAE 编码器，只使用 SigLIP-2 作为唯一编码器：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{统一生成空间}：扩散模型不再预测 VAE 的低维特征，而是直接在 \(16 \times 16 \times 1152\) 维的 SigLIP-2 语义特征空间中生成。
+\item
+  \textbf{无缝的模态互通}：扩散模型生成的结果本身就是 SigLIP-2 特征，也就是 LLM 的视觉语言。扩散模型刚生成完图像，LLM 不需要经过任何像素解码和重新编码，就能直接读取这些特征序列，并立即判断图像是否符合要求。
+\end{itemize}
+
+RAE 中的编码器和解码器承担不同角色：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{重编码器（Heavy Encoder）}：直接白嫖开源的、大参数量的视觉基础模型，例如数十亿参数的 SigLIP-2、DINOv2 或 MAE。它的任务是深思熟虑地看透真实图像，提取出极其高维、富含语义的特征表示。
+\item
+  \textbf{轻解码器（Light Decoder）}：只是一个层数很少、参数量很小的浅层 ViT。它只负责把高维特征矩阵降维并扩展成人类肉眼可见的 RGB 像素矩阵。
+\end{itemize}
+
+最终，RAE 不是回到了低级像素空间，而是把生成这件事推进到与理解同一级别的高维语义空间。
+
+\hypertarget{ux56dbux9ad8ux7ef4ux8bedux4e49ux7a7aux95f4ux4e2dux7684ux8badux7ec3ux7a33ux5b9aux6027}{%
+\subsubsection{（四）高维语义空间中的训练稳定性}\label{ux56dbux9ad8ux7ef4ux8bedux4e49ux7a7aux95f4ux4e2dux7684ux8badux7ec3ux7a33ux5b9aux6027}}
+
+现代 T2I 模型常采用``大规模预训练加高质量小数据微调''的范式，这会带来冷启动问题：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{VAE 的脆弱性}：实验观察到，基于 VAE 的模型在高质量数据集上微调仅 64 个 Epoch 后，就会遗忘灾难性地过拟合。它的训练损失会迅速暴跌，模型开始死记硬背训练样本，并丧失泛化能力。
+\item
+  \textbf{RAE 的稳健性}：RAE 即使微调到 256 个 Epoch 甚至 512 个 Epoch，性能依然保持坚挺。这说明 RAE 的高维语义空间起到了隐式正则化作用，强迫模型学习真正的特征分布，而不是记住训练集细节。
+\end{itemize}
+
+其中一个必须保留的核心机制是\textbf{维度感知噪声调度（Dimension-aware noise scheduling）}。因为高维隐空间与低维隐空间特性不同，模型需要根据有效数据维度 \(m\) 和 Token 数乘以特征维度 \(n\) 对时间步进行偏移缩放。时间步偏移公式为：
+
+\[
+t_m = \frac{\alpha t_n}{1 + (\alpha - 1)t_n}
+\]
+
+其中 \(n\) 为基准维度，并且：
+
+\[
+\alpha = \frac{m}{n}
+\]
+
+\hypertarget{ux4e8cembedding-ux8badux7ec3ux65b9ux6cd5}{%
+\subsection{二、Embedding 训练方法}\label{ux4e8cembedding-ux8badux7ec3ux65b9ux6cd5}}
+
+视觉表征也常借助图文对比学习对齐图像和文本，其典型损失为：
+
+\[
+\mathcal{L}_{\mathrm{contrastive}} = -\log \frac{\exp(s(I,T)/\tau)}{\sum_j \exp(s(I,T_j)/\tau)}
+\]
+
+在 VQ 架构中，编码器输出连续向量 \(z_e\)，量化器从密码本中查找最接近的离散向量 \(z_q\)，最后解码器将 \(z_q\) 还原为图像。最近邻量化可写为：
+
+\[
+k = \arg\min_j \lVert z_e - e_j \rVert_2
+\]
+
+\[
+z_q = e_k
+\]
+
+梯度的关键问题在于 \(\arg\min\) 函数的数学性质：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  大多数情况下，当前 \(e_k\) 依然是最近项，索引 \(k\) 不变，\(z_q\) 也不变，此时导数为 0。
+\item
+  极少数情况下，\(z_e\) 恰好跨过边界，索引 \(k\) 突然改变，此时导数为无穷大。
+\end{enumerate}
+
+因此，模型通常使用直通估计器（Stop-Gradient / Straight-Through）让梯度绕过不可导的离散选择：
+
+\[
+z_q = z_e + \mathrm{sg}[e_k - z_e]
+\]
+
+解码器传回来的梯度不仅没有变成 0，反而以 1:1 的比例直接穿透量化层，交给编码器。
+
+\hypertarget{ux4e09ux79bbux6563ux7f16ux7801ux65b9ux6848ux4e2dux7684ux7279ux6b8aux8badux7ec3ux65b9ux6cd5}{%
+\subsection{三、离散编码方案中的特殊训练方法}\label{ux4e09ux79bbux6563ux7f16ux7801ux65b9ux6848ux4e2dux7684ux7279ux6b8aux8badux7ec3ux65b9ux6cd5}}
+
+VQ 模型常加入承诺损失（Commitment Loss）约束编码器输出：
+
+\[
+\alpha \lVert U_G - \mathrm{sg}[Q] \rVert^2
+\]
+
+这里 \(U_G\) 是编码器输出的连续潜变量，\(Q\) 是离散化后的量化特征。\(\mathrm{sg}[\cdot]\) 表示停止梯度操作。由于量化过程中存在信息丢失，这一项会迫使编码器输出的连续特征主动靠近被选定的离散特征 \(Q\)，避免连续特征在潜空间中随意游走。
+
+密码本本身也需要更新，常见做法包括三类。
+
+\hypertarget{ux4e00ux57faux4e8eux68afux5ea6ux7684-codebook-loss}{%
+\subsubsection{（一）基于梯度的 Codebook Loss}\label{ux4e00ux57faux4e8eux68afux5ea6ux7684-codebook-loss}}
+
+在总损失中人为加入额外惩罚项，对每次前向传播中被选中的码本向量 \(e_k\) 和对应编码器连续特征 \(z_e\) 计算均方误差：
+
+\[
+\mathcal{L}_{\mathrm{codebook}} = \lVert \mathrm{sg}[z_e] - e_k \rVert_2^2
+\]
+
+这里的 \(\mathrm{sg}[\cdot]\) 仍表示停止梯度。在这个损失项中，编码器输出 \(z_e\) 被视为固定目标点，优化器只会更新码本向量 \(e_k\)，使其在连续空间中一步步靠近编码器输出。
+
+为了防止编码器乱跑，通常还会配套加入对应的承诺损失：
+
+\[
+\lVert z_e - \mathrm{sg}[e_k] \rVert_2^2
+\]
+
+\hypertarget{ux4e8cux6307ux6570ux79fbux52a8ux5e73ux5747ema}{%
+\subsubsection{（二）指数移动平均（EMA）}\label{ux4e8cux6307ux6570ux79fbux52a8ux5e73ux5747ema}}
+
+在实际训练大规模 VQ-VAE 或 VQ-GAN，包括 UniTok 底层时，使用梯度下降更新码本往往非常不稳定。因此更常用 EMA 来更新码本：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  在每个 Batch 中，记录哪些连续特征 \(z_e\) 被分配给当前码本向量 \(e_k\)。
+\item
+  计算这个 Batch 中分配给 \(e_k\) 的所有 \(z_e\) 的均值，记为 \(\bar z\)。
+\item
+  用移动平均更新 \(e_k\) 的权重：
+\end{enumerate}
+
+\[
+e_k^{(\mathrm{new})} = \gamma \cdot e_k^{(\mathrm{old})} + (1 - \gamma)\cdot \bar z
+\]
+
+其中 \(\gamma\) 是衰减系数，例如 0.99。EMA 不需要计算梯度，相当于动态执行在线 K-Means，让码本向量能非常平滑、稳定地追踪编码器特征分布的变化。
+
+\hypertarget{ux4e09unitok-ux7684ux7279ux6b8aux66f4ux65b0}{%
+\subsubsection{（三）UniTok 的特殊更新}\label{ux4e09unitok-ux7684ux7279ux6b8aux66f4ux65b0}}
+
+UniTok 除了普通视觉特征，还需要让码本更贴近图像特征对应的语义对齐位置。在图文对比学习目标中，被激活的离散 Token 对应的码本向量 \(e_k\) 会与对应文本连续向量计算余弦相似度。这个额外梯度不会只聚焦原图 Patch，还会推动码本向量移向与文本描述对齐的位置。
+
+系统会定期扫描码本。如果某个向量 \(e_k\) 使用频率低于阈值，就会直接将它抛弃，并从当前 Batch 的编码器特征 \(z_e\) 中随机抽取一个活跃向量作为新的 \(e_k\)。这样做能避免死码本反复参与后续 EMA 或梯度更新。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-196}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-196}}
+
+\begin{itemize}
+\tightlist
+\item
+  Meituan LongCat Team. (2026). \href{https://arxiv.org/abs/2603.27538}{LongCat-Next: Lexicalizing Modalities as Discrete Tokens}. arXiv:2603.27538.
+\item
+  Wu, C., Chen, X., Wu, Z., Ma, Y., Liu, X., Pan, Z., Liu, W., Xie, Z., Yu, X., Ruan, C., \& Luo, P. (2024). \href{https://arxiv.org/abs/2410.13848}{Janus: Decoupling Visual Encoding for Unified Multimodal Understanding and Generation}. arXiv:2410.13848.
+\item
+  Ma, C., Jiang, Y., Wu, J., Yang, J., Yu, X., Yuan, Z., Peng, B., \& Qi, X. (2025). \href{https://arxiv.org/abs/2502.20321}{UniTok: A Unified Tokenizer for Visual Generation and Understanding}. arXiv:2502.20321.
+\item
+  Zheng, B., Ma, N., Tong, S., \& Xie, S. (2025). \href{https://arxiv.org/abs/2510.11690}{Diffusion Transformers with Representation Autoencoders}. arXiv:2510.11690.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux591aux6a21ux6001ux7edfux4e00ux7406ux89e3-ux751fux6210ux6a21ux578bux7684ux4e3bux5e72ux67b6ux6784ux4e0eux8badux7ec3ux8bbaux6587}{%
+\section{多模态统一理解-生成模型的主干架构与训练（论文）}\label{ux591aux6a21ux6001ux7edfux4e00ux7406ux89e3-ux751fux6210ux6a21ux578bux7684ux4e3bux5e72ux67b6ux6784ux4e0eux8badux7ec3ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux4e3bux5e72ux7f51ux7edcux7684ux8f93ux51faux8303ux5f0f}{%
+\subsection{一、主干网络的输出范式}\label{ux4e00ux4e3bux5e72ux7f51ux7edcux7684ux8f93ux51faux8303ux5f0f}}
+
+统一多模态理解与生成模型通常需要同时支持文本输出和视觉输出：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{文本输出}：延续大语言模型的 Next-Token-Prediction 自回归范式，逐词输出文本。
+\item
+  \textbf{视觉输出}：不再是自回归文本，而是通过类似扩散模型或修正流的去噪过程，在连续隐空间中生成分布，最后由专门的图像 Decoder 渲染成高保真像素图像。
+\end{itemize}
+
+\hypertarget{ux4e00ux89c6ux89c9ux8f93ux51faux7684ux4e24ux6761ux89e3ux7801ux8f68ux9053}{%
+\subsubsection{（一）视觉输出的两条解码轨道}\label{ux4e00ux89c6ux89c9ux8f93ux51faux7684ux4e24ux6761ux89e3ux7801ux8f68ux9053}}
+
+当模型基于当前文本意图在序列中继续输出视觉 Token 时，会先生成一段 Visual Tokens。系统底层的视觉解码器（VAE Decoder）会拟合这些 Token，生成一个模态结束符后，再依靠图像解码器把这些内部视觉代码翻译成连续 RGB 像素网格，并在物理层面渲染出中间图像状态 \(V_t\)。
+
+典型的视觉输出可以分成两条轨道。
+
+\hypertarget{ux8f68ux9053ux4e00ux7ed3ux6784ux50cfux7d20ux89e3ux7801ux5668}{%
+\paragraph{轨道一：结构像素解码器}\label{ux8f68ux9053ux4e00ux7ed3ux6784ux50cfux7d20ux89e3ux7801ux5668}}
+
+结构像素解码器（Structural Pixel Decoder）接收离散视觉 Token \(Z\)，通过高效卷积和 Transformer 反卷积网络，优先重构图像骨架、物体边界和文本布局 \(I_{\mathrm{struct}}\)：
+
+\[
+I_{\mathrm{struct}} = D_{\mathrm{struct}}(Z)
+\]
+
+\hypertarget{ux8f68ux9053ux4e8cux6269ux6563ux50cfux7d20ux7ec6ux5316ux5668}{%
+\paragraph{轨道二：扩散像素细化器}\label{ux8f68ux9053ux4e8cux6269ux6563ux50cfux7d20ux7ec6ux5316ux5668}}
+
+扩散像素细化器（Diffusion Pixel Refiner）把第一轨道的输出 \(I_{\mathrm{struct}}\) 作为强条件约束，再用轻量级扩散模型迭代去噪，向图像中注入逼真的光影、材质和超高频纹理细节：
+
+\[
+x_{t-1} = \mu_{\theta}(x_t, I_{\mathrm{struct}}, t) + \Sigma_{\theta}(x_t,t)\epsilon
+\]
+
+最终输出高保真图像 \(x_0\)。
+
+从推理过程看，视觉生成通常包含四步：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{等待生成文本}：系统识别到当前需要生成文本时，按照常规自回归模式逐个 Token 输出文字。
+\item
+  \textbf{并行生成图像}：当模型进入图像指令时，FSM 调度器立即切换状态。系统一次性为整张图像分配足够的噪声 Token，例如 \(1024 \times 1024\) 图像对应约 4000 个 Token。
+\item
+  \textbf{离散去噪}：模型利用 DiDA 双向注意力，通过少量离散去噪步骤对噪声 Token 细化，并将其还原成最终的图像 Token。
+\item
+  \textbf{解码器输出}：视觉分词器的解码器（Vanilla 或 Diffusion-based）把这些离散 Token 还原成人类可见的像素图像。
+\end{enumerate}
+
+\hypertarget{ux4e8cux7edfux4e00ux79bbux6563ux6269ux6563ux67b6ux6784}{%
+\subsubsection{（二）统一离散扩散架构}\label{ux4e8cux7edfux4e00ux79bbux6563ux6269ux6563ux67b6ux6784}}
+
+在同一个 Transformer 架构和同一种解码范式下处理图文双向生成，是统一多模态模型的关键。Muddit 采用``视觉优先''策略，使多模态扩散 Transformer（MM-DiT）的主干网络先使用 Meissonic 进行初始化。Meissonic 是一个经过充分训练的高分辨率文本到图像离散扩散模型。
+
+在共享的 MM-DiT 主干上，模型只额外增加一个极其轻量的线性头（Linear Head）作为文本解码器，把共享潜空间映射回文本 Token。
+
+一般扩散生成模型会把大多数模态仅专注于单一模态，例如纯文本生成图、Transformer 仅生成图文到图文，或自回归 LLM 处理文本再连接扩散模型画图。Muddit 的真正统一在于：
+
+\begin{itemize}
+\tightlist
+\item
+  文本和图像全部被量化为\textbf{同等地位的离散 Token}。
+\item
+  无论生成文本还是生成图像，Muddit 使用的是完全相同的数学公式、同一个扩散 Transformer 主干网络以及同一套损失函数。
+\item
+  训练时以语言先验为主导，推理时文本到图像任务会受到更强的结构感知加持。
+\end{itemize}
+
+\hypertarget{ux4e8cux6df7ux5408-transformer-ux4e13ux5bb6}{%
+\subsection{二、混合 Transformer 专家}\label{ux4e8cux6df7ux5408-transformer-ux4e13ux5bb6}}
+
+为了提升统一扩散模型的容量和可扩展性，模型会引入更细的专家划分与稀疏路由：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{高颗粒度专家划分}：设置较多专家数量，例如 \(G=16\)，对多模态任务进行更细粒度分工。Active Compute 恒定时，细粒度专家能减少参数量，同时提升文本困惑度和图像生成质量。
+\item
+  \textbf{自然模态转化}：路由器在没有人为规则干预的情况下，会让大多数专家自然分配到更擅长的``文本''、更擅长的``视觉''或图文共享特定专家。模型在浅层主要混合模态特征，深层则进一步做模态融合。
+\item
+  \textbf{抹平缩放鸿沟}：引入 MoE 后，语言的缩放指数 \(D_{\mathrm{opt}} \propto C^{0.59}\) 会向视觉缩放指数 \(D_{\mathrm{opt}} \propto C^{0.64}\) 靠拢，极大缩小两者在扩展时的需求鸿沟。
+\end{itemize}
+
+解耦专家前馈层（Decoupled Expert FFNs）在计算完全局部注意力后，根据 Token 自身模态属性把 Token 路由到不同专家：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{多模态理解专家（Understanding Expert）}：专门处理文本 Token 和理解型编码器传来的语义 Token，主要承担语义理解。
+\item
+  \textbf{多模态生成专家（Generation Expert）}：专门处理用于图像生成的隐变量 Token，主要面向写物理规律和视觉模拟。
+\end{itemize}
+
+\hypertarget{ux4e09ux8badux7ec3ux65b9ux6cd5ux4e0eux6570ux636e}{%
+\subsection{三、训练方法与数据}\label{ux4e09ux8badux7ec3ux65b9ux6cd5ux4e0eux6570ux636e}}
+
+\hypertarget{ux4e00emu3-ux4e0eux89c6ux89c9ux79bbux6563-token-ux9884ux6d4b}{%
+\subsubsection{（一）Emu3 与视觉离散 Token 预测}\label{ux4e00emu3-ux4e0eux89c6ux89c9ux79bbux6563-token-ux9884ux6d4b}}
+
+为了让模型学习现实世界的时间连续性和因果关系，Emu3.5 的预训练强度依赖从互联网视频中提取的视觉-语言交错数据，共计约 790 年的视频素材。
+
+其算法工作流分为两个阶段。
+
+\hypertarget{ux7b2cux4e00ux9636ux6bb5ux5927ux89c4ux6a21ux901aux7528ux5bf9ux9f50}{%
+\subsubsection{第一阶段：大规模通用对齐}\label{ux7b2cux4e00ux9636ux6bb5ux5927ux89c4ux6a21ux901aux7528ux5bf9ux9f50}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{数据组装}：将视频关键帧与语音识别（ASR）转录文本按时间戳对齐，交错拼接成长序列，规模约 32,768 Token。
+\item
+  \textbf{优化目标}：模型在 10 万亿 Token 上执行标准交叉熵损失优化。为了防止海量视觉 Token 淹没文本损失，视觉 Token 的损失权重被调整为 0.5。优化器使用 AdamW，参数设置为 \(\beta_1=0.9\)、\(\beta_2=0.95\)、\(\epsilon=1.0\times 10^{-8}\)。
+\end{itemize}
+
+\hypertarget{ux7b2cux4e8cux9636ux6bb5ux9ad8ux8d28ux91cfux589eux5f3aux5b66ux4e60}{%
+\subsubsection{第二阶段：高质量增强学习}\label{ux7b2cux4e8cux9636ux6bb5ux9ad8ux8d28ux91cfux589eux5f3aux5b66ux4e60}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{数据提纯}：继续在 3 万亿个高质量 Token 上训练，引入语义分割、视觉描述（Captioning）等丰富的多模态标注。
+\item
+  \textbf{分辨率提升}：图像动态分辨率上限从第一阶段的 \(512\times512\) 提升到 \(1024\times1024\)，促使模型捕捉更细粒度的视觉细节。
+\end{itemize}
+
+模型还能围绕视觉叙事、视觉引导和具身操作进行推理：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{视觉叙事（Visual Narrative）}：根据上下文生成色彩连续、故事情节高度一致的多图多文混合输出。
+\item
+  \textbf{视觉引导（Visual Guidance）}：理解复杂多步过程，例如烹饪、手工，并生成图文并茂的逐步操作指南。
+\item
+  \textbf{世界探索与具身操作（Embodied Manipulation）}：在机器人操作中把视觉任务分解为多个子任务。每个子任务由语言指令、已有观测序列和当前视觉输入共同约束，模型通过滚动物理规律的演变，例如物品抓取、折叠衣服时的形变等，展示世界模型潜力。
+\end{itemize}
+
+预测过程可以概括为：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  第 0 步以一次性初始化所有视觉 Token 为 \texttt{MASK} Token 或者结尾 Token。
+\item
+  模型通过双向注意力一次性预测 4096 个位置的所有 Token 概率。
+\item
+  模型不会直接采用这 4096 个预测结果，而是根据输出概率分布计算置信度。按照预设调度策略，在这一轮只锁定置信度最高的极少一部分 Token，例如 10\%。
+\item
+  剩余 90\% 仍保持 \texttt{MASK} Token 状态。下一轮再把已锁定 Token 和仍被遮蔽的 Token 输入模型，继续预测。
+\item
+  经过约 7 次迭代，所有 Token 被逐步锁定，最终拼出完整高清图像。
+\end{enumerate}
+
+DiDA 的训练过程需要专门构建包含图文对和交错图文序列的高质量数据集。自然熵的逻辑前提是，必须先有一个能力极强、输出质量极高的教师模型，提供对齐标准和生成轨迹。因此，教师模型往往经历完整 SFT 与 RL 阶段，生成能力达到峰值，例如纯自回归版 Emu3.5。如果跳过前面的步骤直接练 DiDA，模型缺少高质量自监督张量指导，并行解码学习会变差。
+
+\hypertarget{ux56dbgrpo-ux8badux7ec3ux65b9ux6cd5}{%
+\subsection{四、GRPO 训练方法}\label{ux56dbgrpo-ux8badux7ec3ux65b9ux6cd5}}
+
+\hypertarget{ux4e00unigrpoux9762ux5411ux63a8ux7406ux9a71ux52a8ux89c6ux89c9ux751fux6210ux7684ux5f3aux5316ux5b66ux4e60}{%
+\subsubsection{（一）UniGRPO：面向推理驱动视觉生成的强化学习}\label{ux4e00unigrpoux9762ux5411ux63a8ux7406ux9a71ux52a8ux89c6ux89c9ux751fux6210ux7684ux5f3aux5316ux5b66ux4e60}}
+
+UniGRPO 将多模态交错生成视为一个序列化的 MDP：
+
+\[
+\mathcal{M}=(S,A,P,R)
+\]
+
+其中每一步都对应文本阶段的单次 Token 预测，或图像阶段的单步去噪过程：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{状态空间 \(S\)}：文本阶段的状态 \(s_k^{\mathrm{txt}}=(c,y_{\lt k})\) 包含提示词和已生成的推理 Token；图像阶段的状态 \(s_{t,k}^{\mathrm{img}}=(c,y,x_t,t_k)\) 包含提示词、完整推理文本序列、当前带噪声图像潜变量 \(x_t\) 以及时间步 \(t_k\)。
+\item
+  \textbf{动作空间 \(A\)}：文本阶段的动作 \(a_k^{\mathrm{txt}}\in V\) 是从词表中采样的单个 Token；图像阶段的动作 \(a_k^{\mathrm{img}}=x_{t_k-\Delta t}\in \mathbb{R}^d\) 是模型要预测的下一个流匹配步骤的去噪变量。
+\item
+  \textbf{状态转移 \(P\)}：文本部分把动作追加到序列末尾，图像部分推进生成变量 \(x_t \rightarrow x_{t-\Delta t}\)。
+\item
+  \textbf{奖励机制 \(R\)}：如果在图像潜变量被完全去噪为终端状态 \(x_0\) 时，模型获得最终奖励 \(R(x_0,c)\)，中间推理和去噪步骤奖励为 0。
+\end{itemize}
+
+策略初始化时，会先加载具备交错生成能力的统一多模态大模型基座，例如经过监督微调的 Bagel 模型，并把它记为初始策略 \(\pi_{\theta_0}\)。
+
+文本推理采样时，针对给定用户提示词 \(c\)，模型调用自回归策略 \(\pi_{\theta}(a_k^{\mathrm{txt}}\mid s_k^{\mathrm{txt}})\)，并生成 \(G\) 个不同推理思考链，记为 \(\{y_i\}_{i=1}^{G}\)。
+
+图像流匹配采样时，随后把 \(G\) 个推理链分别作为条件上下文，引导模型通过混合 SDE-ODE 积分器策略 \(\pi_{\theta}(a_k^{\mathrm{img}}\mid s_k^{\mathrm{img}})\) 生成 \(G\) 条对应图像去噪轨迹 \(\{x_i\}_{i=1}^{G}\)。
+
+计算终端视觉奖励时，针对最终生成的 \(G\) 张图像，使用基于 InternVL 微调的奖励模型进行评估，衡量视觉质量以及与用户提示词的一致性，从而获得标量终端奖励 \(R_i\)。
+
+相对优势不用传统价值模型，而是在生成组内部直接计算每个样本的相对优势：
+
+\[
+\hat A_i = \frac{R_i - \mathrm{mean}(\{R_j\}_{j=1}^{G})}{\mathrm{std}(\{R_j\}_{j=1}^{G})}
+\]
+
+文本和图像策略目标分为两部分：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{TextGRPO}：使用标准 GRPO 目标函数计算文本损失 \(J_{\mathrm{text}}(\theta)\)，其中包含重要性采样裁剪和 KL 散度惩罚。
+\item
+  \textbf{FlowGRPO}：为了在确定性常微分方程（ODE）中引入强化学习所需的探索性，将采样转化为随机微分方程（SDE），并用比例归一化（RatioNorm）按序列数量级校准重要性比值，得到图像部分的目标函数 \(J_{\mathrm{flow}}(\theta)\)。
+\end{itemize}
+
+两个目标通过梯度联合更新模型权重：
+
+\[
+J = J_{\mathrm{text}} + \lambda J_{\mathrm{flow}}
+\]
+
+\hypertarget{ux4e8cunigrpo-ux7684ux7a33ux5b9aux5316ux6280ux5de7}{%
+\subsubsection{（二）UniGRPO 的稳定化技巧}\label{ux4e8cunigrpo-ux7684ux7a33ux5b9aux5316ux6280ux5de7}}
+
+标准 GRPO 目标函数可以写为：
+
+\[
+J_{\mathrm{GRPO}}(\theta)
+= \mathbb{E}\left[
+\frac{1}{G}\sum_{i=1}^{G}\frac{1}{|o_i|}
+\sum_{t=1}^{|o_i|}
+\min\left(
+r_{i,t}(\theta)\hat A_{i,t},
+\mathrm{clip}(r_{i,t}(\theta),1-\epsilon,1+\epsilon)\hat A_{i,t}
+\right)
+-\beta\mathrm{KL}
+\right]
+\]
+
+其中优势估计、PPO 裁剪和 KL 散度惩罚与标准 GRPO 保持一致：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{优势计算}：同一组回答的最终得分会被组内均值和标准差标准化：
+\end{itemize}
+
+\[
+\hat A_{i,t}=\frac{r_i-\mathrm{mean}}{\mathrm{std}}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{PPO 裁剪}：使用 \(1-\epsilon\) 和 \(1+\epsilon\) 限制单次策略更新幅度，防止模型崩溃。
+\item
+  \textbf{KL 散度惩罚}：防止新策略偏离参考模型太远。
+\end{itemize}
+
+唯一的差异在概率比率 \(r_{i,t}(\theta)\) 的定义。对文本 Token，GRPO 的离散空间直接使用新旧策略概率比：
+
+\[
+r_{i,t}(\theta)=\frac{\pi_{\theta}(o_{i,t}\mid\cdots)}{\pi_{\theta_{\mathrm{old}}}(o_{i,t}\mid\cdots)}
+\]
+
+对连续潜变量，VLPO 不能使用 softmax 概率。它假设潜变量服从高斯分布，推出等效连续概率比率：
+
+\[
+r_{i,t}(\theta)=\exp\left(-\frac{1}{2\sigma^2}\lVert h_{i,t}^{\mathrm{old}}-h_{i,t}^{\theta}\rVert^2\right)
+\]
+
+其中 \(h_{i,t}^{\mathrm{old}}\) 是 Rollout 阶段收集的冻结特征，\(h_{i,t}^{\theta}\) 是当前正在优化的网络生成的特征。强化学习阶段如果某条包含潜变量的思维链确实获得了正优势，VLPO 会利用相同 GRPO 公式框架放大 \(r_{i,t}(\theta)\)，把网络推向更接近旧特征的点，同时用参考模型 KL 防止坍塌。
+
+训练还需要额外的稳定性约束：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{CFG 的计算成本}：扩散 CFG 在推理中好用，但若在训练中加入，复杂条件生成会让一个样本变成多轮生成，显著增加计算量。
+\item
+  \textbf{梯度遮盖}：在强化学习阶段，模型不仅要学习结果和努力顺序，更重要的是构造有用分支，使有价值的长思维链有机会得到鼓励。
+\item
+  \textbf{无分类器自由度展开}：UniGRPO 直接在条件分布上评估策略，避免无条件分支展开带来的额外计算成本。
+\item
+  \textbf{奖励存在性}：训练中如果奖励函数本来就在评估``图文是否对齐''，通过最大化这个奖励，模型会主动把对齐能力压入神经网络。
+\end{itemize}
+
+传统潜空间 KL 散度膨胀的原因包括：前向预测和反向去噪模型之间的 KL 散度上升、数学推导导致最上层预测速度平方项累积、以及均匀方差项带来的优化恶化。UniGRPO 的做法是\textbf{无加权速度场 MSE}，直接在两组矢量场之间计算误差：
+
+\[
+\mathcal{L}_{\mathrm{MSE}}(\theta)=\lVert v_{\theta}(z_t,t,k,y)-v_{\mathrm{ref}}(z_t,t,k,y)\rVert^2
+\]
+
+\hypertarget{ux4e94ux4e16ux754cux6a21ux578bux80fdux529bux7684ux6d8cux73b0}{%
+\subsection{五、世界模型能力的涌现}\label{ux4e94ux4e16ux754cux6a21ux578bux80fdux529bux7684ux6d8cux73b0}}
+
+\hypertarget{ux4e00ux5bfcux822aux4e16ux754cux6a21ux578bux4e0eux53efux89c2ux6d4bux51b3ux7b56ux8fc7ux7a0b}{%
+\subsubsection{（一）导航世界模型与可观测决策过程}\label{ux4e00ux5bfcux822aux4e16ux754cux6a21ux578bux4e0eux53efux89c2ux6d4bux51b3ux7b56ux8fc7ux7a0b}}
+
+导航世界模型（Navigation World Model, NWM）的实验直接把导航机器人的动作指令编码为离散自然语言文本 Token，例如 \(dx=+1.338\) 或 \texttt{go\ on\ the\ road}。
+
+结果显示，模型无需对架构做任何特殊修改，只需输入上下文帧和文本指令，就能准确预测未来视觉状态画面。更重要的是，这种物理规律学习甚至早于前期海量无标注视频预训练，仅需约 1\% 的训练比例就能获得即时性能。
+
+论文把任务中的世界严谨建模为多可观测马尔可夫决策过程（MOMDP）：
+
+\[
+\mathcal{M}=(S,A,p,\Phi,O,\epsilon,\delta)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{状态与观测}：底层真实状态 \(s\in S\) 通常不可见，但可通过不同观测视角感知，即 \(o=\epsilon_{\phi}(s)\in O_{\phi}\)。
+\item
+  \textbf{动作与转移}：当采取动作 \(a\in A\) 后，世界状态按转移概率 \(s'\sim p(s'\mid s,a)\) 演进，并产生新的观测。
+\end{itemize}
+
+为了在 AI 中实现类似人类的心智模拟，世界模型需要两种核心能力：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{世界重建（World Reconstruction）}：从部分观测中推断完整环境结构，并合成新视角。在生成模型中，这体现为端到端的新视角生成：
+\end{itemize}
+
+\[
+p_{\theta}(o_{H+1}\mid o_1,\ldots,o_H)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{世界模拟（World Simulation）}：对动态过程进行建模并预测未来的观测结果：
+\end{itemize}
+
+\[
+p_{\theta}(o_{t+1}\mid o_{\leq t},a_{\leq t})
+\]
+
+一个完整推理过程包括：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{输入初始化}：接收问题 \(Q\) 和输入图像 \(I\)，将图像设为推理初始观测状态 \(o_0=I\)。
+\item
+  \textbf{交替推理与生成}：对推理轨迹 \(R=((r_1,o_1),(r_2,o_2),\ldots,(r_H,o_H))\) 中的每一步，先生成逻辑推理步骤 \(r_i\)，再调用世界模型生成新的观测 \(o_i\)。观测可以是视觉世界建模、文本世界建模，也可以是完全依赖内部表征的隐式世界建模。
+\item
+  \textbf{输出结果}：根据生成的推理轨迹输出最终答案 \(A\)。
+\end{enumerate}
+
+逻辑推理步骤 \(r_i\) 表示当前累积上下文下的逻辑演绎、动作规划或解释说明；观测状态 \(o_i\) 表示推理后新的显式观测结果。一个典型例子是，在折纸任务中，\(r_i\) 会说明``接下来，我们翻转第一次折叠，这是一个水平折叠''，而 \(o_i\) 则展示折叠后纸张的形状。
+
+\hypertarget{ux4e8cux4e16ux754cux6a21ux578bux7684-sft-ux4e0e-rlvr}{%
+\subsubsection{（二）世界模型的 SFT 与 RLVR}\label{ux4e8cux4e16ux754cux6a21ux578bux7684-sft-ux4e0e-rlvr}}
+
+在 SFT 阶段，模型目标是模仿数据集中交替出现的文本思考 \(r_i\) 和中间图像观测 \(o_i\)。其损失同时包含用于文本的交叉熵损失，以及用于图像生成的流匹配损失：
+
+\[
+\begin{aligned}
+L_{\theta}(Q,I,R,A)
+=&-\sum_{i=1}^{H+1}\sum_{j=1}^{|r_i|}
+\log p_{\theta}(r_{i,j}\mid r_{i,\lt j},R_i) \\
+&+\sum_{i=1}^{H}\mathbb{E}_{t,\epsilon}
+\left\lVert
+v_{\theta}(o_i^t,t\mid \tilde R_i)-( \epsilon-o_i )
+\right\rVert_2^2
+\end{aligned}
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  文本损失针对问题 \(Q\) 和初始图像 \(I\)，在当前推理前缀 \(R_i\) 下预测每个推理词 \(r_{i,j}\)。
+\item
+  视觉损失对生成的中间图像观测 \(o_i\) 执行流匹配。先对其加噪得到 \(o_i^t\)，再让模型预测流场向量 \(v_{\theta}\) 与真实噪声方向 \((\epsilon-o_i)\) 之间的方差。
+\end{itemize}
+
+先规划、再操作、最后总结的模板可以写成：
+
+\begin{itemize}
+\tightlist
+\item
+  先规划文本解释当前推理瓶颈，例如``这里的路线太复杂，我需要在地图上画出从 A 到 B 的路径来验证连通性''。
+\item
+  再操作：紧接着插入特殊的视觉起始 Token，例如 \texttt{\textless{}vision\_start\textgreater{}}，随后是一串视觉 Tokens，用于在原图上生成红色导航线。
+\item
+  最后总结：视觉 Tokens 结束后，接上特殊视觉结束 Token，例如 \texttt{\textless{}vision\_end\textgreater{}}，文本继续基于刚才画出的线进行结论推导。
+\end{itemize}
+
+SFT 后，论文引入 RLVR 阶段。由于很难为中间生成的图像定义准确奖励函数，该阶段采用``优化文本、正则化视觉''的策略：即仅使用 GRPO 算法优化文本生成部分，而对视觉生成部分施加相对参考模型的 KL 散度约束。
+
+统一奖励系统会构建多个维度的奖励函数，例如文本渲染任务使用 OCR 准确率奖励，图像生成使用美学评分和 CLIP 相似度奖励。为了平衡不同任务间异构奖励分布，所有奖励信号在反向传播前都会统一归一化到 \([1,10]\) 区间，避免模型在单一任务上出现奖励作弊。
+
+令 \(p\) 为最优链式思考与答案的真实分布，即 Oracle，\(p_{\theta}\) 为当前模型学到的联合分布。模型端到端生成答案的误差可以通过 KL 散度衡量：
+
+\[
+\begin{aligned}
+&\sum_{i=1}^{H+1}
+\mathbb{E}_{p}\left[
+\mathrm{KL}\big(p(r_i\mid R_i)\,\Vert\,p_{\theta}(r_i\mid R_i)\big)
+\right] \\
+&\quad+
+\sum_{i=1}^{H}
+\mathbb{E}_{p}\left[
+\mathrm{KL}\big(p(o_i\mid \tilde R_i)\,\Vert\,p_{\theta}(o_i\mid \tilde R_i)\big)
+\right]
+\end{aligned}
+\]
+
+其中 \(s_i\) 为隐藏的真实物理世界状态。显式世界建模对推理不确定性的降低满足两个性质。
+
+\textbf{性质 1：不确定性不增原则}
+
+引入过去观测 \(o_{1:i-1}\) 不会增加当前推理步骤 \(r_i\) 的熵，其降低量等于两者之间的条件互信息：
+
+\[
+H(r_i\mid o_0,r_{0:i-1}) - H(r_i\mid R_i)
+= I(o_{1:i-1};r_i\mid o_0,r_{0:i-1}) \geq 0
+\]
+
+\textbf{性质 2：不确定性降低的理论上界}
+
+这种不确定性降低量受到两个因素严格制约：
+
+\[
+I(o_{1:i-1};r_i\mid o_0,r_{0:i-1})
+\leq
+\min\left(I(o_{1:i-1};s_{1:i-1}), I(r_i;s_{0:i-1},r_{0:i-1})\right)
+\]
+
+这个最小值函数解释了视觉优势假说的适用边界：
+
+\begin{itemize}
+\tightlist
+\item
+  第一项 \(I(o;s)\) 表示观测的丰富度。视觉生成的观测必须能充分反映底层真实状态，在空间物理任务中通常较高，因此能大幅提高这个上界。
+\item
+  第二项 \(I(r;s)\) 表示任务需求度。观测中包含的信息必须是下一步推理真正用得上的。
+\item
+  对试错任务，如果只需要跟踪简单二维坐标，第二项很小，视觉生成带来的观测价值有限；如果任务需要复杂视觉细节，第一项很大，整项最小值也会增大。此时生成的视觉细节不仅是无必要的，反而会错误地提升推理中的世界建模误差。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-197}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-197}}
+
+\begin{itemize}
+\tightlist
+\item
+  Meituan LongCat Team. (2026). \href{https://arxiv.org/abs/2603.27538}{LongCat-Next: Lexicalizing Modalities as Discrete Tokens}. arXiv:2603.27538.
+\item
+  Wu, C., Chen, X., Wu, Z., Ma, Y., Liu, X., Pan, Z., Liu, W., Xie, Z., Yu, X., Ruan, C., \& Luo, P. (2024). \href{https://arxiv.org/abs/2410.13848}{Janus: Decoupling Visual Encoding for Unified Multimodal Understanding and Generation}. arXiv:2410.13848.
+\item
+  Shi, Q., Bai, J., Zhao, Z., Chai, W., Yu, K., Wu, J., Song, S., Tong, Y., Li, X., Li, X., \& Yan, S. (2025). \href{https://arxiv.org/abs/2505.23606}{Muddit: Liberating Generation Beyond Text-to-Image with a Unified Discrete Diffusion Model}. arXiv:2505.23606.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux5c06ux89c6ux89c9ux878dux5165cotux7684ux63a8ux7406ux8bbaux6587}{%
+\section{将视觉融入CoT的推理（论文）}\label{ux5c06ux89c6ux89c9ux878dux5165cotux7684ux63a8ux7406ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux57faux672cux5047ux8bbe}{%
+\subsection{一、基本假设}\label{ux4e00ux57faux672cux5047ux8bbe}}
+
+传统 Chain-of-Thought 主要把推理过程表示成文本序列。将视觉融入 CoT 的关键变化，是让模型在推理过程中不仅生成文本思维，还能生成、更新或对齐视觉中间状态。
+
+\hypertarget{ux4e8cux7b97ux6cd5ux5de5ux4f5cux6d41-1}{%
+\subsection{二、算法工作流}\label{ux4e8cux7b97ux6cd5ux5de5ux4f5cux6d41-1}}
+
+\hypertarget{ux4e00ux6587ux672cux601dux8003ux4e0eux89c6ux89c9ux8349ux56fe}{%
+\subsubsection{（一）文本思考与视觉草图}\label{ux4e00ux6587ux672cux601dux8003ux4e0eux89c6ux89c9ux8349ux56fe}}
+
+视觉推理可以被拆成两类互补信号：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{文本思考模式}：模型通过标准下一个 Token 预测机制生成离散文本 Token，作为文本思维。
+\item
+  \textbf{视觉草图模式}：模型生成连续的潜在草图 Token，作为视觉思维。为了确保这些草图 Token 具有真实的视觉语义，论文在训练阶段引入由中间图编码器和投影仪组成的草图模块，用于提取中间真实草图图像的视觉嵌入，作为模型重建目标。
+\end{itemize}
+
+传统文本 CoT，例如 Think about Images，通常在文本序列中显式写出视觉动作：
+
+\begin{verbatim}
+<think> 提取向量投影为词 The -> 提取向量投影为词 hat -> 提取向量投影为词 is -> ... -> </think>
+\end{verbatim}
+
+这种写法记录使用的是\textbf{离散的文本 Token}。相比之下，潜在视觉推理（LVR）让模型输出连续向量：
+
+\begin{verbatim}
+<lvr_start> -> 计算出向量 h_{t,1}^{latent} -> 计算出向量 h_{t,2}^{latent} -> ... -> 计算出向量 h_{t,L}^{latent} -> <lvr_end>
+\end{verbatim}
+
+模型在这个过程中没有说出任何一个具体的词。它的``思考过程''完全以连续向量形式表达，可以理解为对视觉语义的重构。
+
+\hypertarget{ux4e09ux635fux5931ux6216ux76eeux6807ux51fdux6570}{%
+\subsection{三、损失或目标函数}\label{ux4e09ux635fux5931ux6216ux76eeux6807ux51fdux6570}}
+
+\hypertarget{ux4e00ux57faux7840ux8badux7ec3ux635fux5931}{%
+\subsubsection{（一）基础训练损失}\label{ux4e00ux57faux7840ux8badux7ec3ux635fux5931}}
+
+文本部分仍使用 NTP 损失：
+
+\[
+\mathcal{L}_{\mathrm{NTP}} = -\frac{1}{T_y}\sum_{t=1}^{T_y}\log p_{\theta}(y_t\mid y_{\lt t},h_{1:T_x})
+\]
+
+潜在视觉推理部分使用向量回归损失：
+
+\[
+\mathcal{L}_{\mathrm{LVR}} = \frac{1}{T_e}\sum_{t=1}^{T_e}\lVert h_t - v_t\rVert_2^2
+\]
+
+当模型需要在画布或中间视觉状态上保持连续一致时，还会使用 canvas 损失：
+
+\[
+\mathcal{L}_{\mathrm{canvas}} = \frac{1}{|S|}\sum_{t\in S}\lVert h_t - e_{t+1}\rVert_2^2
+\]
+
+这三类目标分别约束文本预测、潜在视觉表示和视觉状态连续性。
+
+\hypertarget{ux4e8cux6df7ux5408ux52a8ux4f5cux7a7aux95f4}{%
+\subsubsection{（二）混合动作空间}\label{ux4e8cux6df7ux5408ux52a8ux4f5cux7a7aux95f4}}
+
+如果把模型策略写成 \(\pi_{\theta}(a_t\mid s_t)\)，它会同时包含离散文本动作和连续视觉动作：
+
+\[
+\pi_{\theta}(a_t\mid s_t)=
+\begin{cases}
+\mathrm{softmax}(W_m h_t)_{a_t}, & a_t\in V \\
+C_D(\kappa)\exp(\kappa\mu_t^\top \hat z_t), & a_t\in S^{D-1}
+\end{cases}
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(V\) 是词表。
+\item
+  \(S^{D-1}\) 是单位超球面。
+\item
+  \(W_m\) 是输出投影矩阵。
+\item
+  \(h_t\) 是第 \(t\) 步隐藏状态。
+\item
+  \(\mu_t\) 是归一化后的隐藏状态。
+\item
+  \(\hat z_t\) 是旧策略下采样的 latent 参考向量。
+\item
+  \(\kappa\) 是浓度参数。
+\item
+  \(C_D(\kappa)\) 是 vMF 的归一化常数。
+\end{itemize}
+
+这里的连续视觉动作不是普通高斯，而是定义在单位球面上的 von Mises-Fisher（vMF）分布。新策略的 vMF 分布为：
+
+\[
+\pi_{\theta}(x\mid s_t)=C_D(\kappa)\exp(\kappa\mu_t^\top x)
+\]
+
+把旧 latent action 代入 \(x=\hat z_t\)，得到：
+
+\[
+\pi_{\theta}(\hat z_t\mid s_t)=C_D(\kappa)\exp(\kappa\mu_t^\top \hat z_t)
+\]
+
+如果新策略方向 \(\mu_t\) 接近旧 latent \(\hat z_t\)，密度就高；如果偏离，密度就低。
+
+因此连续动作的概率比可以写成：
+
+\[
+r_t=
+\frac{\pi_{\theta}(\hat z_t\mid s_t)}
+{\pi_{\theta_{\mathrm{old}}}(\hat z_t\mid s_t)} =
+\exp\left(\kappa(\mu_t^\top \hat z_t - 1)\right)
+\]
+
+若 \(\hat z_t\) 是单位向量，则：
+
+\[
+\mu_t^\top \hat z_t = \cos(\mu_t,\hat z_t)
+\]
+
+所以：
+
+\[
+r_t=\exp\left(\kappa(\cos(\mu_t,\hat z_t)-1)\right)
+\]
+
+\hypertarget{ux4e09ppo-ux76eeux6807ux4e0e-kl-ux7ea6ux675f}{%
+\subsubsection{（三）PPO 目标与 KL 约束}\label{ux4e09ppo-ux76eeux6807ux4e0e-kl-ux7ea6ux675f}}
+
+混合文本与 latent 的 PPO 目标可以写成：
+
+\[
+\begin{aligned}
+\mathcal{L}_{\mathrm{PPO}}(\theta)
+&= \mathcal{L}_{\mathrm{tok}}(\theta;z,\epsilon_{\ell}^{\mathrm{tok}},\epsilon_h^{\mathrm{tok}})
+\\
+&\quad + \alpha \mathcal{L}_{\mathrm{lat}}(\theta;S,\epsilon_{\ell}^{\mathrm{lat}},\epsilon_h^{\mathrm{lat}})
+\end{aligned}
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(\mathcal{L}_{\mathrm{tok}}\) 是文本 Token 的 PPO 目标。
+\item
+  \(\mathcal{L}_{\mathrm{lat}}\) 是 latent 位置的 PPO 目标。
+\item
+  \(\alpha\) 用来平衡两者。
+\item
+  \(\epsilon_{\ell}\) 和 \(\epsilon_h\) 是 clipping 边界。
+\end{itemize}
+
+latent 部分还需要 KL 约束：
+
+\[
+\mathcal{L}_{\mathrm{KL}}^{\mathrm{lat}}
+=\frac{1}{|S|}\sum_{t\in S} W_{\kappa}(1-\cos(\mu_t,\hat z_t))
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(W_{\kappa}\) 是由 \(\kappa\) 推出来的常数。
+\item
+  \(\cos(\mu_t,\hat z_t)\) 是当前 latent 与旧策略 latent 的余弦相似度。
+\end{itemize}
+
+总目标为：
+
+\[
+\begin{aligned}
+\mathcal{L}_{\mathrm{total}}
+&=\mathcal{L}_{\mathrm{PPO}}
+\\
+&\quad+\beta_{\mathrm{tok}}\mathcal{L}_{\mathrm{KL}}^{\mathrm{tok}}
++\beta_{\mathrm{lat}}\mathcal{L}_{\mathrm{KL}}^{\mathrm{lat}}
+\end{aligned}
+\]
+
+其中 \(\beta_{\mathrm{tok}}\) 是文本 KL 的权重，\(\beta_{\mathrm{lat}}\) 是 latent KL 的权重。
+
+\hypertarget{ux56dbux4fe1ux606fux8bbaux80ccux666f}{%
+\subsection{四、信息论背景}\label{ux56dbux4fe1ux606fux8bbaux80ccux666f}}
+
+\hypertarget{ux4e00vmf-ux5206ux5e03ux4e0bux7684-kl-ux63a8ux5bfc}{%
+\subsubsection{（一）vMF 分布下的 KL 推导}\label{ux4e00vmf-ux5206ux5e03ux4e0bux7684-kl-ux63a8ux5bfc}}
+
+为了约束连续 latent，论文使用两个浓度参数相同、均值中心不同的 vMF 分布：
+
+\[
+p(x)=\mathrm{vMF}(\mu_{\mathrm{new}},\kappa)
+\]
+
+\[
+q(x)=\mathrm{vMF}(\mu_{\mathrm{old}},\kappa)
+\]
+
+它们浓度参数 \(\kappa\) 相同，只是中心方向不同。KL 散度为：
+
+\[
+D_{\mathrm{KL}}(p\Vert q)
+=\mathbb{E}_{x\sim p}\left[\log\frac{p(x)}{q(x)}\right]
+\]
+
+代入 vMF 密度：
+
+\[
+p(x)=C_D(\kappa)\exp(\kappa\mu_{\mathrm{new}}^\top x)
+\]
+
+\[
+q(x)=C_D(\kappa)\exp(\kappa\mu_{\mathrm{old}}^\top x)
+\]
+
+归一化常数 \(C_D(\kappa)\) 会抵消，因此：
+
+\[
+D_{\mathrm{KL}}(p\Vert q)
+=\kappa(\mu_{\mathrm{new}}-\mu_{\mathrm{old}})^\top
+\mathbb{E}_{x\sim p}[x]
+\]
+
+vMF 分布有一个性质：
+
+\[
+\mathbb{E}_{x\sim p}[x]=A_D(\kappa)\mu_{\mathrm{new}}
+\]
+
+其中 \(A_D(\kappa)\) 是 mean resultant length，可以理解成只和维度 \(D\)、浓度 \(\kappa\) 有关的常数。代入后得到：
+
+\[
+D_{\mathrm{KL}}(p\Vert q)
+=\kappa A_D(\kappa)
+(\mu_{\mathrm{new}}-\mu_{\mathrm{old}})^\top\mu_{\mathrm{new}}
+\]
+
+也就是：
+
+\[
+D_{\mathrm{KL}}(p\Vert q)
+=\kappa A_D(\kappa)
+(\mu_{\mathrm{new}}^\top\mu_{\mathrm{new}}-\mu_{\mathrm{old}}^\top\mu_{\mathrm{new}})
+\]
+
+因为 \(\mu_{\mathrm{new}}\) 是单位向量：
+
+\[
+\mu_{\mathrm{new}}^\top\mu_{\mathrm{new}}=1
+\]
+
+所以：
+
+\[
+D_{\mathrm{KL}}(p\Vert q)
+=\kappa A_D(\kappa)(1-\mu_{\mathrm{old}}^\top\mu_{\mathrm{new}})
+\]
+
+单位向量内积就是余弦相似度：
+
+\[
+\mu_{\mathrm{old}}^\top\mu_{\mathrm{new}}
+=\cos(\mu_{\mathrm{old}},\mu_{\mathrm{new}})
+\]
+
+于是：
+
+\[
+D_{\mathrm{KL}}(p\Vert q)
+=W_{\kappa}(1-\cos(\mu_{\mathrm{old}},\mu_{\mathrm{new}}))
+\]
+
+其中：
+
+\[
+W_{\kappa}=\kappa A_D(\kappa)
+\]
+
+\hypertarget{ux4e94ux57faux51c6ux6d4bux8bd5}{%
+\subsection{五、基准测试}\label{ux4e94ux57faux51c6ux6d4bux8bd5}}
+
+需要空间想象的文本生成推理，可以用高度空间性和结构性的问题评估模型在需要生成或利用中间视觉图像时的真实推理能力，例如欧几里得几何、抽象空间与逻辑谜题、物理推理、因果变换等问题。
+
+目前基准测试显示，纯文本架构在多步复杂空间视觉任务上得分较低；强行提供一系列人工标注的中间视觉线索图像后，模型表现会明显提升。同时支持文本输出和基于世界模型图像输出的模型，通常具备更好的物理推理能力。
+
+但 ROVER 等测试也指出，即便多模态输出模型能够生成中间图像，在把抽象逻辑推理转换为视觉符号表示时仍存在明显缺陷，例如自主绘制有效几何辅助线的能力仍不足。这可能与当前世界模型主要受限于像素空间输出、尚未充分进入抽象结构空间有关。
+
+对于需要文本逻辑的视觉生成推理，评测可关注模型是否能使用文本提示和逻辑推理链指导复杂图像生成，例如时间变换、空间变换、因果推理、定量变换和几何原理应用等问题。支持文本与图像交错生成的模型，在这类视觉生成任务上通常优于单轮单模态输出模型；单纯把语言推理模型与专门图像生成模型级联组合，难以复现这种跨模态交互能力。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-198}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-198}}
+
+\begin{itemize}
+\tightlist
+\item
+  Team Seed. (2026). \href{https://arxiv.org/abs/2604.21921}{Context Unrolling in Omni Models}. arXiv:2604.21921.
+\item
+  Lin, Z., Liu, Z., Chen, H., Wang, L., Wang, J., Zhao, Q., Zhou, H., Li, Z., \& Wang, W. (2026). \href{https://arxiv.org/abs/2601.19834}{Visual Generation Unlocks Human-Like Reasoning through Multimodal World Models}. arXiv:2601.19834.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux5c06ux89c6ux89c9ux9690ux72b6ux6001ux878dux5165cotux7684ux63a8ux7406ux8bbaux6587}{%
+\section{将视觉隐状态融入CoT的推理（论文）}\label{ux5c06ux89c6ux89c9ux9690ux72b6ux6001ux878dux5165cotux7684ux63a8ux7406ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6587ux672c-token-ux89c6ux89c9ux9690ux72b6ux6001ux4ea4ux66ffux7684-cot}{%
+\subsection{一、文本 token-视觉隐状态交替的 CoT}\label{ux4e00ux6587ux672c-token-ux89c6ux89c9ux9690ux72b6ux6001ux4ea4ux66ffux7684-cot}}
+
+将视觉隐状态融入 CoT 的核心，是不再只依赖外部工具生成图像，而是在模型内部显式维护一段连续的潜变量表示，让推理过程能够携带视觉空间、物体结构和中间观察。
+
+\hypertarget{ux4e00ux4e3aux4ec0ux4e48ux9700ux8981ux89c6ux89c9ux9690ux72b6ux6001}{%
+\subsubsection{（一）为什么需要视觉隐状态}\label{ux4e00ux4e3aux4ec0ux4e48ux9700ux8981ux89c6ux89c9ux9690ux72b6ux6001}}
+
+传统方法通常依赖模型调用外部工具，例如边界框预测、代码解释器或深度估计模型，来生成中间视觉图像。这类方式过于死板，无法像人类一样进行灵活的抽象视觉思考。
+
+MoNet 的解决方案是把视觉隐状态作为中间视觉思维。模型不再通过外部工具生成连续中间图像，而是学习生成连续的潜变量嵌入（Latent Embeddings），用它们表达对外部图像生成工具的依赖。
+
+视觉隐状态主要服务三类能力：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{空间想象力（Spatial Imagination）}：在遇到将 2D 展开图折叠成 3D 形状的任务时，模型可以在潜在空间内想象出完整 3D 物体，从而准确匹配答案。
+\item
+  \textbf{缓解幻觉与视觉定位（Hallucination Mitigation \& Visual Grounding）}：模型能在内部放大并聚焦图像关键区域，例如放大一片白色枕头或杯子里是否有水，从而获取细粒度信息，避免传统模型常见的细节幻觉。
+\item
+  \textbf{多轮视觉精炼（Multi-Round Visual Refinement）}：对于细微视觉特征，例如比较两个区域的颜色深浅，模型能够通过多次交替生成视觉思维，逐步聚焦并综合观察结果，最终给出准确判断。
+\end{itemize}
+
+传统 latent 方式面临两个挑战：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  直接对齐成千上万的图像 Token 会带来极高的计算和内存成本，简单平均池化（Mean Pooling）又会破坏视觉特征细节。
+\item
+  监督微调阶段的下一个 Token 预测目标很容易过拟合，日常强化学习方法只优化离散文本 Token，无法充分优化视觉隐状态。
+\end{enumerate}
+
+\hypertarget{ux4e8cmonetux7528ux9690ux53d8ux91cfux4ee3ux66ffux89c6ux89c9-cot-ux7684ux6a21ux578bux53caux5176ux8badux7ec3}{%
+\subsection{二、Monet：用隐变量代替视觉 CoT 的模型及其训练}\label{ux4e8cmonetux7528ux9690ux53d8ux91cfux4ee3ux66ffux89c6ux89c9-cot-ux7684ux6a21ux578bux53caux5176ux8badux7ec3}}
+
+\hypertarget{ux4e00monet-ux63a8ux7406ux5de5ux4f5cux6d41}{%
+\subsubsection{（一）MoNet 推理工作流}\label{ux4e00monet-ux63a8ux7406ux5de5ux4f5cux6d41}}
+
+MoNet 的底层基础架构是 Qwen2.5-VL-7B，工作流分为推理阶段和训练阶段。
+
+在推理阶段：
+
+\begin{itemize}
+\tightlist
+\item
+  给定图像和问题后，MoNet 会自动决定何时生成一个特殊起始 Token \texttt{\textless{}latent\textgreater{}}，以启动潜视觉推理模式。
+\item
+  一旦进入潜空间模式，模型解码器最后一层的隐藏表示会被反馈回网络，作为下一步输入嵌入。
+\item
+  在生成固定数量 \(K\) 的潜变量嵌入后，模型输出结束 Token \texttt{\textless{}/latent\textgreater{}}，然后自动切换回常规文本推理模式。
+\end{itemize}
+
+用于对齐观察与潜变量的损失可以写成：
+
+\[
+L_{\text{align-obs}}
+=\frac{1}{N}\sum_i\sum_l
+\left(
+1-\cos\left(h_{\text{obs}}^{d(i,l)}.\mathrm{detach}(),h_{\text{obs}}^{s(i,l)}\right)
+\right)
+\]
+
+这里通过 \texttt{detach} 阻断教师观察特征一侧的梯度，让学生潜变量去对齐观察特征。
+
+\hypertarget{ux4e8cux5e8fux5217ux7ed3ux6784ux4e0eux53efux89c1ux6027ux89c4ux5219}{%
+\subsubsection{（二）序列结构与可见性规则}\label{ux4e8cux5e8fux5217ux7ed3ux6784ux4e0eux53efux89c1ux6027ux89c4ux5219}}
+
+在 Student 模型的上下文中，序列排列方式如下：
+
+\begin{verbatim}
+[问题] -> [原始图片] -> [部分推理文本] -> [辅助图像 (Aux Img)] -> [<latent> 潜变量 1...K </latent>] -> [关键观察文本 (Obs Text)]
+\end{verbatim}
+
+为了强制信息流进行漏斗式压缩，MoNet 修改了标准因果注意力掩码（Causal Attention Mask），定义了严格的可见性规则：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{潜变量（Latent）对辅助图像（Aux Img）：可见}。生成的潜变量可以直接通过交叉或自注意力机制看见当前辅助图像特征。
+\item
+  \textbf{关键观察文本（Obs Text）对辅助图像（Aux Img）：不可见}。这一路径被 Mask 掉，防止文本直接读取辅助图像。
+\item
+  \textbf{关键观察文本（Obs Text）对潜变量（Latent）：可见}。文本只能通过潜变量间接获取视觉信息。
+\end{enumerate}
+
+这种掩码设计的巧妙之处在于，它切断了后续文本直接读取辅助图像的捷径。后续文本如果想准确预测出观察内容，就必须从前面的潜变量中提取信息。这会迫使前面的潜变量中显式编码关键观察，成为连接显式视觉信息与文本推理的唯一桥梁。
+
+潜变量的数量固定，例如 \(K=8\)。模型会用这 8 个潜变量辅助图像中成百上千的 Patch Tokens 做浓缩和特征提取。
+
+\hypertarget{ux4e09sft-stage-2-ux4e0e-stage-3}{%
+\subsubsection{（三）SFT Stage 2 与 Stage 3}\label{ux4e09sft-stage-2-ux4e0e-stage-3}}
+
+MoNet 在 SFT 中区分两个阶段。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Stage 2：有辅助图像的知识蒸馏}。序列中包含真实辅助图像。模型在开卷考试中直接观察辅助图像生成特征，目标是从教师处获得细致视觉信息的目标潜变量 \(h_{\text{latent}}^{(i)}\)。
+\item
+  \textbf{Stage 3：无辅助图像的潜变量生成}。序列中彻底删除真实辅助图像，改成类似：
+\end{itemize}
+
+\begin{verbatim}
+[问题图片] -> [部分推理文本] -> [<latent> 潜变量 </latent>] -> [关键观察文本]
+\end{verbatim}
+
+此时模型进入闭卷考试，必须基于前文理解，自回归生成潜变量。训练目标是最小化此时生成的潜变量 \(\hat h_{\text{latent}}^{(i)}\) 与 Stage 2 中保存的学霸笔记，即目标潜变量 \(h_{\text{latent}}^{(i)}\) 之间的余弦距离。
+
+为了支持复杂视觉空间蒸馏，作者构建了包含 12.5 万条图文交错思维链的高质量数据集。其筛选流程分为三阶段：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{过滤无关样本}：只保留那些原始 Qwen2.5-VL-7B 在没有辅助图像时会回答错误的问题样本，确保辅助图像确实能提供关键增益。
+\item
+  \textbf{验证辅助图像}：使用更大规模模型，例如 Qwen2.5-VL-72B，验证引入辅助图像后问题能够被正确解答，排除无效图像。
+\item
+  \textbf{扩展精确监督信号}：利用 DeepSeek-V3.1、Gemini 2.5 Pro 等前沿大语言模型生成完整判断，精细提取出文本中直接依赖中间视觉观察的关键 Token，将其包裹在 \texttt{\textless{}observation\textgreater{}} 标签中，用于在 SFT Stage 2 中作为潜空间对齐监督信号。
+\end{enumerate}
+
+\hypertarget{ux56dbux5f3aux5316ux5b66ux4e60ux4e2dux7684ux8fdeux7eedux6f5cux7a7aux95f4ux66f4ux65b0}{%
+\subsubsection{（四）强化学习中的连续潜空间更新}\label{ux56dbux5f3aux5316ux5b66ux4e60ux4e2dux7684ux8fdeux7eedux6f5cux7a7aux95f4ux66f4ux65b0}}
+
+标准 GRPO 目标函数被扩展为策略更新目标：
+
+\[
+J_{\text{GRPO}}(\theta) =
+\mathbb{E}\left[
+\frac{1}{G}\sum_{i=1}^{G}\frac{1}{|o_i|}
+\sum_{t=1}^{|o_i|}
+\min\left(
+r_{i,t}(\theta)\hat A_{i,t},
+\mathrm{clip}(r_{i,t}(\theta),1-\epsilon,1+\epsilon)\hat A_{i,t}
+\right)
+-\beta\mathrm{KL}
+\right]
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{优势计算}：对同一问题，模型生成一组回答，组内最终得分用均值和标准差归一化，得到相对优势 \(\hat A_{i,t}\)。
+\item
+  \textbf{PPO 裁剪}：使用 \(1-\epsilon\) 和 \(1+\epsilon\) 限制单次策略更新幅度，防止模型崩溃。
+\item
+  \textbf{KL 散度惩罚}：防止新策略偏离参考模型太远。
+\end{itemize}
+
+唯一差异在概率比率 \(r_{i,t}(\theta)\) 的定义。
+
+对文本 Token，由于文本有明确的词表分布，可以使用新旧策略概率比：
+
+\[
+r_{i,t}(\theta) =
+\frac{\pi_{\theta}(o_{i,t}\mid\cdots)}
+{\pi_{\theta_{\text{old}}}(o_{i,t}\mid\cdots)}
+\]
+
+对连续潜变量，则没有 softmax 概率。MoNet 采用 VLPO 的连续空间做法，假设潜变量服从高斯分布，推导出等效连续概率比：
+
+\[
+r_{i,t}(\theta) =
+\exp\left(
+-\frac{1}{2\sigma^2}
+\left\lVert h_{i,t}^{\text{old}}-h_{i,t}^{\theta}\right\rVert^2
+\right)
+\]
+
+其中 \(h_{i,t}^{\text{old}}\) 是 Rollout 阶段收集的冻结特征，\(h_{i,t}^{\theta}\) 是当前正在优化的网络生成特征。
+
+强化学习阶段，如果某条包含潜变量的思维链确实获得正优势，VLPO 会利用相同 GRPO 公式框架，通过最大化 \(r_{i,t}(\theta)\)，在欧氏空间中驱动 \(h_{i,t}^{\theta}\) 向正向样本靠近，也就是缩小两者之间的 \(L_2\) 距离。这使得 MLLM 首次能够利用最终 Reward 信号来直接微调内部连续视觉特征空间。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-199}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-199}}
+
+\begin{itemize}
+\tightlist
+\item
+  Li, B., Sun, X., Liu, J., Wang, Z., Wu, J., Yu, X., Barsoum, E., Chen, M., Liu, Z., \& Yang, F. (2025). \href{https://arxiv.org/abs/2509.24251}{Latent Visual Reasoning}. arXiv:2509.24251.
+\item
+  Tong, J., Gu, J., Lou, Y., Fan, L., Zou, Y., Wu, Y., Ye, J., \& Li, R. (2025). \href{https://arxiv.org/abs/2512.16584}{Sketch-in-Latents: Eliciting Unified Reasoning in MLLMs}. arXiv:2512.16584.
+\item
+  Chen, J., Zhang, Y., Li, H., \& Wang, Q. (2025). \href{https://arxiv.org/abs/2511.21395}{Monet: Reasoning in Latent Visual Space Beyond Images and Language}. arXiv:2511.21395.
+\item
+  Cheng, T., Chen, S.-Z., Zhang, H., Qin, Y., Luo, J., \& Wei, Z. (2026). \href{https://arxiv.org/abs/2604.20328}{Hybrid Latent Reasoning with Decoupled Policy Optimization}. arXiv:2604.20328.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{uaeux8badux7ec3ux4e2dux7406ux89e3ux4e0eux751fux6210ux5408ux4e3aux81eaux7f16ux7801ux5668ux8bbaux6587}{%
+\section{UAE：训练中理解与生成合为自编码器（论文）}\label{uaeux8badux7ec3ux4e2dux7406ux89e3ux4e0eux751fux6210ux5408ux4e3aux81eaux7f16ux7801ux5668ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666fux4e0eux6838ux5fc3ux601dux60f3-2}{%
+\subsection{一、问题背景与核心思想}\label{ux4e00ux95eeux9898ux80ccux666fux4e0eux6838ux5fc3ux601dux60f3-2}}
+
+在多模态统一理解-生成模型中，在训练中常发生理解与生成的冲突，语义抽象的准确性和像素还原的保真度不仅不互相促进，反而可能互相造成负面影响。一些研究通过架构上的调整，实现了二者的共存，但两个任务本质上仍然是割裂的，没有明显的相互促进效应。
+
+北大等提出了UAE，其具体训练方式即Unified-GRPO。这种方法重新定义了任务本身，利用自编码器的思想，将同一个模型视为编码器和解码器，对于每一个样本，让理解和生成成为同一条训练``流水线''的两个环节，二者的目标完全相同：保证``流水线''终端产出的``重建图像''能够完美还原最初投入的原始图像。这样，二者就可以通过训练真正相互促进，而不仅仅是共存。
+
+在这一训练``流水线''中，编码阶段先将图像和Prompt输入主干自回归模型，得到文本描述；解码阶段将文本描述输入Diffusion Transformer（对于UMM-1类即生成文本用自回归、生成图像用扩散的模型）或同一个自回归模型（对于UMM-2类即纯自回归模型），得到重建的图像。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics{images/image-0054.png}
+\caption{UAE 将图像理解与图像生成串成自编码器式训练流水线}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics{images/image-0055.png}
+\caption{UAE 中 UMM-1 与 UMM-2 两类统一多模态模型的编码和解码方式}
+\end{figure}
+
+\hypertarget{ux4e8cux8badux7ec3ux6d41ux7a0b}{%
+\subsection{二、训练流程}\label{ux4e8cux8badux7ec3ux6d41ux7a0b}}
+
+\hypertarget{ux4e00umm-1ux7c7bux6a21ux578b}{%
+\subsubsection{（一）UMM-1类模型}\label{ux4e00umm-1ux7c7bux6a21ux578b}}
+
+冻结Decoder（即Diffusion Transformer），将其作为RL环境的一部分，只用GRPO训练Encoder（即自回归模型）。Encoder中的ViT也要冻结，因为ViT负责把原始图像像素转化为视觉 token，是LLM的``眼睛''，一旦视觉特征在RL中发生漂移，整个系统将失去稳定基准。消融实验表明，如果对视觉编码器（ViT）或DiT也做梯度更新，RL的随机性和高方差梯度会导致生成崩溃，表现为语义信息丢失、结构坍塌、出现异常伪影等。
+
+在训练的过程中，针对Encoder生成的每一条文本，提取其最后一个隐状态向量，通过一个投影层将其映射为扩散模型的条件输入。模型会学会在表示文段生成结束的最后一个 token中蕴含丰富的全局语义信息。
+
+\hypertarget{ux4e8cumm-2ux7c7bux6a21ux578b}{%
+\subsubsection{（二）UMM-2类模型}\label{ux4e8cumm-2ux7c7bux6a21ux578b}}
+
+Encoder和Decoder完全相同，故同步训练。梯度（或相对优势估计）不仅会指导模型如何更好地提取语义，还会直接指导模型如何更精准地将文本翻译回视觉token。这样可以真正实现协同进化：理解能力的提升为生成提供了更密集的先验信号，而生成过程为了达到极高的还原度，反过来促使模型在统一的权重空间内完善其细粒度的视觉感知能力（例如对小目标或细微属性的捕捉）。
+
+Encoder中的ViT也需要冻结，原因与前面所述相同。
+
+\hypertarget{ux4e09ux4f7fux7528rlux7684ux539fux56e0ux548cux5956ux52b1ux51fdux6570}{%
+\subsection{三、使用RL的原因和奖励函数}\label{ux4e09ux4f7fux7528rlux7684ux539fux56e0ux548cux5956ux52b1ux51fdux6570}}
+
+由于``模型需要生成怎样的文本''没有可学习的Ground Truth，只通过图像生成情况好坏来评判，故这里使用强化学习中的GRPO算法，而不是监督学习或无监督学习。奖励计算方式如下：
+
+具体操作是：使用预训练的 CLIP 模型分别提取原始输入图像 \(x\) 和重建图像 \(\tilde{x}^{(i)}\) 的视觉特征向量，并计算二者之间的余弦相似度作为单次采样的奖励值 \(\mathcal{R}\)：
+
+\[
+\mathcal{R}(x, \tilde{x}) = \cos\left(f_{\mathrm{CLIP}}(x), f_{\mathrm{CLIP}}(\tilde{x})\right)
+\]
+
+这样做有两个原因：
+
+\begin{itemize}
+\tightlist
+\item
+  不使用传统的像素级均方误差（MSE），是因为该框架中的``中间隐空间''是纯文本字典，文本只能保留语义级特征，例如物体、颜色和位置，无法保留光照、噪点、微小纹理等底层像素变化。如果强制用 MSE 作为奖励，算法会严重惩罚新图像和原图在底层像素上的变化，违背评估``语义一致性''的初衷。
+\item
+  使用 CLIP，是因为 CLIP 擅长在高维空间对齐高级语义。最大化 CLIP 相似度只要求重建图像和原图在核心属性与空间关系上吻合，这更接近``模型是否全面理解图像''的评估目标。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-200}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-200}}
+
+\begin{itemize}
+\tightlist
+\item
+  Yan, Z., Lin, K., Li, Z., Ye, J., Han, H., Wang, Z., Liu, H., Lin, B., Li, H., Xu, X., Xiao, X., Wang, J., Wang, H., \& Yuan, L. (2025). \href{https://arxiv.org/abs/2509.09666}{Unified Multimodal Models as Auto-Encoders}. arXiv:2509.09666.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{visionbananaux7528ux89c6ux89c9ux751fux6210ux7edfux4e00ux7406ux89e3ux4efbux52a1ux8bbaux6587}{%
+\section{VisionBanana：用视觉生成统一理解任务（论文）}\label{visionbananaux7528ux89c6ux89c9ux751fux6210ux7edfux4e00ux7406ux89e3ux4efbux52a1ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-15}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-15}}
+
+目前的图像生成和图像理解还难以统一到一个模型中，实践中常常会发现二者的梯度是冲突的。但这和我们的直觉是相悖的：图像生成模型在训练时需要学会物体、场景、几何、语义、材质、空间关系等，这已经包含了对图像的理解。
+
+对于分割、深度、法线这些视觉理解任务，过去也有人观察到生成模型偶尔能画出类似``深度图''``分割图''的东西，但这些输出格式不稳定，不能可靠解码成标准视觉任务结果，也很难拿去和专用模型公平评测。
+
+\hypertarget{ux4e8cux6838ux5fc3ux601dux60f3-7}{%
+\subsection{二、核心思想}\label{ux4e8cux6838ux5fc3ux601dux60f3-7}}
+
+论文《Image Generators are Generalist Vision Learners》的核心贡献在于把所有视觉理解任务都重新表述成``生成一张RGB图像''，然后让图像生成器按照指令生成可解码的视觉结果。作者基于图像生成模型~Nano Banana Pro，做轻量级指令微调，得到~Vision Banana，输入原始图像+自然语言指令，输出一张RGB图像，再转换回标准视觉任务结果，例如mask、深度值、法线方向。例如，语义分割不再让模型输出类别logits，而是让模型生成一张彩色分割图：``请生成这张图的语义分割可视化图： 道路用红色，天空用蓝色，行人用黄色，背景用黑色。''模型生成RGB图后，系统根据颜色把每个像素解码成类别。这样，分割任务就被转换成了图像生成任务。
+
+这和大语言模型的范式很像，LLM通过文本生成统一处理翻译、问答、推理、代码等任务；这篇论文则试图证明，图像生成也可以成为视觉理解任务的统一接口。分割图、深度图、法线图都可以编码成RGB图，让一个生成模型用同一种输出形式处理多种任务。Vision Banana没有为每个任务单独设计新头部、新网络或新损失，而是共享同一个生成模型，只换prompt和输出颜色编码规则。论文指出，Vision Banana在多个任务上达到或接近专用模型的水平。
+
+\hypertarget{ux4e09ux4efbux52a1ux7c7bux522b}{%
+\subsection{三、任务类别}\label{ux4e09ux4efbux52a1ux7c7bux522b}}
+
+\hypertarget{ux4e002dux8bedux4e49ux7406ux89e3}{%
+\subsubsection{（一）2D语义理解}\label{ux4e002dux8bedux4e49ux7406ux89e3}}
+
+语义分割：给每个像素分配语义类别，例如路、人、天空、车。
+实例分割：同一类别的不同物体实例要分开，例如五只狗要有五个不同mask。
+指代表达分割：根据自然语言描述找出目标区域，例如``穿粉色T恤的男人''``正在伸懒腰的猫''``菜单上中英文厨师名字''。
+
+\hypertarget{ux4e8c3dux51e0ux4f55ux7406ux89e3}{%
+\subsubsection{（二）3D几何理解}\label{ux4e8c3dux51e0ux4f55ux7406ux89e3}}
+
+单目metric depth estimation：从一张RGB图估计每个像素到相机的真实物理距离，单位是米。
+surface normal estimation：估计每个像素所在表面的朝向，也就是局部3D几何方向。
+
+\hypertarget{ux56dbux8badux7ec3ux65b9ux5f0f}{%
+\subsection{四、训练方式}\label{ux56dbux8badux7ec3ux65b9ux5f0f}}
+
+Vision Banana是在Nano Banana Pro上做轻量级指令微调。训练数据混合两部分：
+
+原始图像生成训练数据：保持模型原本的图像生成能力。
+
+少量视觉任务数据：教模型把视觉任务输出成指定格式的RGB图。
+
+论文特别强调视觉任务数据比例很低，目的不是从头训练一个分割/深度模型，而是教生成器``听懂任务格式''，把它内部已有的视觉表示转成可测量输出。作者想证明的是：视觉理解能力主要来自生成式预训练，而不是来自大量任务专用微调。
+
+\hypertarget{ux4e94ux7f16ux7801ux89c4ux5219}{%
+\subsection{五、编码规则}\label{ux4e94ux7f16ux7801ux89c4ux5219}}
+
+最简单的是分割任务。假设模型生成的图像为：
+
+\[
+G(x, y) \in [0, 255]^3
+\]
+
+其中 \(G(x, y)\) 表示像素 \((x, y)\) 的 RGB 颜色。prompt 里规定类别 \(c\) 对应颜色 \(q_c\)，那么解码时可以用最近颜色匹配：
+
+\[
+\hat{c}(x, y) = \arg\min_c \left\|G(x, y) - q_c\right\|_2
+\]
+
+意思是：对每个像素，找它生成颜色最接近哪个类别颜色，就把它归到那个类别。
+
+实例分割稍微不同，因为实例数量事先未知，不能提前在 prompt 里指定每个实例的颜色。论文采用 per-class inference：每次只让模型分割某一类，例如``每个 garlic instance 用不同颜色表示''。模型自己给不同实例分配颜色，后处理时再根据颜色聚类，把不同颜色区域拆成不同实例。
+
+深度估计更复杂，因为深度是实数：
+
+\[
+d \in [0, \infty)
+\]
+
+而 RGB 是有限范围：
+
+\[
+RGB \in [0, 1]^3
+\]
+
+因此作者设计了一个可逆映射，把真实深度 \(d\) 编码成 RGB 颜色。论文使用 Barron 的 power transform 先把深度压缩到 \([0, 1)\)：
+
+\[
+f(d, \lambda, c) = 1 - \left(1 - \frac{d}{\lambda c}\right)^{\lambda + 1}
+\]
+
+其中，\(d\) 是真实 metric depth，单位是米；\(\lambda\) 是形状参数，论文实验中取 \(-3\)；\(c\) 是尺度参数，论文实验中取 \(10/3\)；\(f(d,\lambda,c)\) 是归一化后的深度值，用来映射到 RGB 色彩路径上。
+
+这样做的原因是：近处物体的深度误差通常更重要，所以映射会给近距离分配更高分辨率，远距离则被压缩。随后，论文把这个归一化深度沿 RGB 立方体边缘映射成颜色。推理时，模型生成彩色深度图，再通过反函数把颜色解码回米制深度。
+
+表面法线更直接。法线是单位向量：
+
+\[
+\mathbf{n} = (x, y, z), \quad x, y, z \in [-1, 1]
+\]
+
+RGB 通道是 \([0, 1]\)，所以可以使用线性变换：
+
+\[
+RGB = \frac{\mathbf{n} + 1}{2}
+\]
+
+也就是：
+
+\[
+R = \frac{x + 1}{2}, \quad G = \frac{y + 1}{2}, \quad B = \frac{z + 1}{2}
+\]
+
+生成图像后再反解：
+
+\[
+\mathbf{n} = 2RGB - 1
+\]
+
+这样 RGB 图就可以表示每个像素的表面朝向。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-201}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-201}}
+
+\begin{itemize}
+\tightlist
+\item
+  Gabeur, V., Long, S., Peng, S., Voigtlaender, P., Sun, S., Bao, Y., Truong, K., Wang, Z., Zhou, W., Barron, J. T., Genova, K., Kannen, N., Ben, S., Li, Y., Guo, M., Yogin, S., Gu, Y., Chen, H., Wang, O., Xie, S., Zhou, H., He, K., Funkhouser, T., Alayrac, J.-B., \& Soricut, R. (2026). \href{https://arxiv.org/abs/2604.20329}{Image Generators are Generalist Vision Learners}. arXiv:2604.20329.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{uni-3darux8de8ux5c3aux5ea63dux7ed3ux6784ux7684ux7edfux4e00ux7406ux89e3ux4e0eux751fux6210ux8bbaux6587}{%
+\section{Uni-3DAR：跨尺度3D结构的统一理解与生成（论文）}\label{uni-3darux8de8ux5c3aux5ea63dux7ed3ux6784ux7684ux7edfux4e00ux7406ux89e3ux4e0eux751fux6210ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-16}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-16}}
+
+长期以来，3D 结构建模在不同尺度上是割裂的：
+
+\begin{itemize}
+\tightlist
+\item
+  宏观与微观的壁垒：宏观模型，例如用于 3D 重建、流体力学的模型，无法直接应用于微观领域，例如蛋白质折叠、晶体生成。
+\item
+  任务特异性：即使在相似的尺度下，为晶体生成设计的模型也无法直接用于蛋白质折叠。这导致模型高度专业化、存在大量冗余，且无法实现数据的有效复用。
+\item
+  现有生成模型的局限性：主流扩散模型在微观生成中需要预先设定原子数量，而且原子类型是离散的类别分布，扩散模型难以定义完美的得分函数。
+\end{itemize}
+
+Uni-3DAR将不同尺度的3D结构用统一的通用方法表示，并统一到自回归的Next token prediction框架下，为将3D结构模态融入统一多模态理解-生成模型奠定基础。
+
+\hypertarget{ux4e8c3dux7ed3ux6784ux8868ux793aux65b9ux6cd5}{%
+\subsection{二、3D结构表示方法}\label{ux4e8c3dux7ed3ux6784ux8868ux793aux65b9ux6cd5}}
+
+\hypertarget{ux4e00ux52a8ux6001ux7531ux7c97ux5230ux7ec6ux7684ux516bux53c9ux6811-token-ux5316}{%
+\subsubsection{（一）动态由粗到细的八叉树 Token 化}\label{ux4e00ux52a8ux6001ux7531ux7c97ux5230ux7ec6ux7684ux516bux53c9ux6811-token-ux5316}}
+
+3D 空间本质上是高度稀疏的，无论是微观分子还是宏观物体表面。如果直接使用完整的 3D 体素网格（Voxel Grid），计算量会呈指数级爆炸。Uni-3DAR 采用了基于八叉树（Octree）的无损压缩方法：
+
+\begin{itemize}
+\tightlist
+\item
+  空间划分：从包含整个结构的单一根节点细胞开始，递归地将空间等分为 \(2^3 = 8\) 个子细胞。
+\item
+  数学推导：假设根节点的边长为 \(c_0\)，则在第 \(L\) 层（深度为 \(L\)）的叶子节点边长为：
+\end{itemize}
+
+\[
+c_{L-1} = \frac{c_0}{2^{L-1}}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  自适应剪枝：只有包含实体（如原子或物体表面）的区域才会被继续划分，空的区域分支会被直接剪枝。这使得最高层最多只有 \(8^{L-1}\) 个叶子节点，而且绝大部分节点会因为稀疏性被剪去。
+\end{itemize}
+
+\hypertarget{ux4e8cux7ec6ux7c92ux5ea6ux7ed3ux6784ux8868ux793a}{%
+\subsubsection{（二）细粒度结构表示}\label{ux4e8cux7ec6ux7c92ux5ea6ux7ed3ux6784ux8868ux793a}}
+
+八叉树只能确定``哪里有东西''（占据状态），但无法描述细节。因此，在八叉树的最底层，非空叶子节点被视为 3D Patch：
+
+\begin{itemize}
+\tightlist
+\item
+  微观尺度（如分子）：将 Patch 大小设置为 \(c_{L-1}=0.24\,\mathrm{\mathring{A}}\)，确保每个 Patch 最多只包含一个原子。Token 包含原子类型 \(t_i\) 和在细胞内的精确连续坐标 \(e_i=(e_i^0,e_i^1,e_i^2)\)。坐标通过分辨率 \(c_r=0.01\,\mathrm{\mathring{A}}\) 离散化为 \(N_p=c_{L-1}/c_r\) 个区间。
+\item
+  宏观尺度：使用 VQ-VAE 将体素块量化为离散的字典 Token。
+\end{itemize}
+
+\hypertarget{ux4e09ux6838ux5fc3ux539fux7406}{%
+\subsection{三、核心原理}\label{ux4e09ux6838ux5fc3ux539fux7406}}
+
+第一阶段是动态展开``脚手架''，也就是预测空间占据。模型并不是一上来就直接预测原子，而是从宏观到微观，逐层预测空间的占据情况：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  模型一开始面对的是一个包含整个分子的巨大``根节点''细胞。
+\item
+  模型预测这个大细胞的 8 个子区块中哪几个有东西，这相当于前面提到的两层子树压缩的 256 分类任务。
+\item
+  对于预测``有东西''的子区块，模型继续往下细分，直到到达最底层（第 \(L-1\) 层，也就是边长为 \(0.24\,\mathrm{\mathring{A}}\) 的微小细胞）。
+\item
+  关键点在于，这一层层的细胞是模型自己刚刚自回归预测出来的，所以当它预测出``最底层的某个微小细胞 A 被占据''时，细胞 A 的中心坐标对模型来说已经是绝对已知的。
+\end{enumerate}
+
+第二阶段是在已知位置放置 \texttt{MASK} Token 并预测``细节''，也就是填补内容。此时，模型已经在空间中划分出一系列已知坐标、微小且被占据的``叶子细胞''：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  放置掩码：模型在刚才推导出的细胞 A 的中心坐标处，放置一个 \texttt{MASK} Token。因此，这个 \texttt{MASK} Token 的位置是已知的，它代表``这个极其微小的空间块''。
+\item
+  预测对象：既然位置已经固定在细胞 A，模型接下来要预测的内容就是这个细胞里装的是什么，包括类型 \(t_i\)，以及原子在细胞 A 内部的具体相对偏移量 \(e_i\)。
+\end{enumerate}
+
+为什么要这么做：
+
+如果让模型直接在虚空中预测一个原子的绝对坐标，例如 \(x = 12.34, y = 5.67, z = 8.90\)，就相当于让模型``盲猜''，没有任何空间参照系。这在自回归模型中表现很差，因为上一个生成的原子和下一个生成的原子在空间上可能毫无规律可言。
+
+Uni-3DAR 通过 MNTP（掩码下个 Token 预测）配合八叉树，把``盲猜''变成一道``填空题''：
+
+\begin{itemize}
+\tightlist
+\item
+  传统方式问的是：``下一个原子是什么？它在宇宙中的哪里？''这很难。
+\item
+  Uni-3DAR 的方式问的是：``根据刚才生成的空间轮廓，我知道坐标 \((x,y,z)\) 这里的微小细胞里一定有个东西，也就是已知位置的 \texttt{MASK} Token。请告诉我，它具体是什么原子？在这个微小细胞的哪个精确角落？''这大幅降低了预测难度。
+\end{itemize}
+
+\hypertarget{ux56dbux63a8ux7406ux5de5ux4f5cux6d41}{%
+\subsection{四、推理工作流}\label{ux56dbux63a8ux7406ux5de5ux4f5cux6d41}}
+
+推理时可以理解为以下循环：
+
+\begin{itemize}
+\tightlist
+\item
+  第 0 步（起点）：系统在 3D 宇宙中心放置一个代表最高层（Root）的 \texttt{MASK} Token，位置绝对已知。
+\item
+  第 1 步（预测第 0 层）：模型看着这个 \texttt{MASK} Token，结合条件（例如分子化学式），预测出它的内容，例如 \texttt{10000001}（假设转换为十进制是 129）。
+\item
+  第 2 步（几何推导位置）：系统读取 \texttt{10000001}，立刻知道这个大空间的第 1 号角落和第 8 号角落有东西。系统随即通过几何公式计算出这两个子角落的精确中心坐标。
+\item
+  第 3 步（放置新的 \texttt{MASK} Token）：系统在刚刚算出的两个精确坐标处，放置两个属于第 1 层的 \texttt{MASK} Token。
+\item
+  第 4 步（预测第 1 层）：模型再去预测这两个新 \texttt{MASK} Token 的内容（0 到 255）。
+\item
+  循环往复：预测内容、解码出子节点占据情况、算出子节点确切坐标、在新坐标放置 \texttt{MASK} Token、继续预测新内容。
+\item
+  终局（到达最底层）：当这个过程循环到预设的八叉树最底层，例如第 6 层、细胞边长 \(0.24\,\mathrm{\mathring{A}}\) 时，系统放置的 \texttt{MASK} Token 就不再是 0 到 255 的分类任务，而是切换成原子级预测头。模型在这个微小细胞的 \texttt{MASK} Token 处，预测具体的原子类型（碳、氢、氧等）和在细胞内的微调坐标 \(e_i\)。
+\end{itemize}
+
+\hypertarget{ux4e94ux8badux7ec3ux65b9ux6cd5}{%
+\subsection{五、训练方法}\label{ux4e94ux8badux7ec3ux65b9ux6cd5}}
+
+\hypertarget{ux4e00ux6574ux4f53ux8badux7ec3ux8303ux5f0fteacher-forcing-ux4e0bux7684ux586bux7a7aux9898}{%
+\subsubsection{（一）整体训练范式：Teacher Forcing 下的``填空题''}\label{ux4e00ux6574ux4f53ux8badux7ec3ux8303ux5f0fteacher-forcing-ux4e0bux7684ux586bux7a7aux9898}}
+
+和 GPT 等大语言模型的训练方式类似，Uni-3DAR 在训练时采用 Teacher Forcing（教师强制）机制。在训练阶段，模型其实是在``看着正确答案''学习。系统会将真实的 3D 结构完整地转换为八叉树加原子的 Token 序列，并在所有应该预测的位置打上 \texttt{MASK} Token。模型需要同时对序列中的所有 \texttt{MASK} Token 进行预测，计算预测分布与真实内容之间的差距（Loss），然后反向传播更新权重。
+
+\hypertarget{ux4e8cux5b8fux89c2ux9aa8ux67b6ux7684ux8badux7ec3ux516bux53c9ux6811-token-ux9884ux6d4b}{%
+\subsubsection{（二）宏观骨架的训练：八叉树 Token 预测}\label{ux4e8cux5b8fux89c2ux9aa8ux67b6ux7684ux8badux7ec3ux516bux53c9ux6811-token-ux9884ux6d4b}}
+
+对于八叉树中间节点的 \texttt{MASK} Token，模型的训练目标是预测它的 8 个子节点是否存在：
+
+\begin{itemize}
+\tightlist
+\item
+  损失函数：标准的 256 分类交叉熵损失（Cross-Entropy Loss）。
+\item
+  这一阶段让模型学习如何根据化学式或整体轮廓，正确地``开疆拓土''。
+\end{itemize}
+
+\hypertarget{ux4e09ux5e95ux90e8ux539fux5b50ux7684ux8badux7ec3ux7ec6ux8282ux5faeux89c2ux7ec6ux7c92ux5ea6ux9884ux6d4b}{%
+\subsubsection{（三）底部原子的训练细节：微观细粒度预测}\label{ux4e09ux5e95ux90e8ux539fux5b50ux7684ux8badux7ec3ux7ec6ux8282ux5faeux89c2ux7ec6ux7c92ux5ea6ux9884ux6d4b}}
+
+当序列推进到八叉树的最底层，也就是叶子节点细胞、边长 \(0.24\,\mathrm{\mathring{A}}\) 时，这里的 \texttt{MASK} Token 对应的真实内容是一个具体原子。对这个底层 \texttt{MASK} Token 的训练被拆解为更细的步骤：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  预测原子类型 \(t_i\)：模型首先看着底层 \texttt{MASK} Token，预测这个微小细胞里装的是什么原子，例如碳、氢、氧等。这仍然是标准分类任务，使用交叉熵损失。
+\item
+  预测细胞内连续坐标 \(e_i\)：确定原子类型后，还要确定它在这个极小细胞内的精确相对位置。因为坐标是连续值，直接回归比较难，Uni-3DAR 采用更像语言模型的做法：先将连续坐标按照 \(0.01\,\mathrm{\mathring{A}}\) 的高分辨率离散化，切分成整数索引 \(0\) 到 \(N_p-1\)；再采用内部自回归方式预测坐标，先预测 \(x\) 坐标分类概率，再用真实的 \(x\) 坐标作为条件预测 \(y\) 坐标，最后用真实的 \(x,y\) 坐标作为条件预测 \(z\) 坐标。
+\end{enumerate}
+
+\(x,y,z\) 的预测也被视为离散分类任务，会产生 3 个交叉熵损失。论文也提到，可以使用 Token 级别的 Diffusion 扩散损失来预测连续坐标，但由于自回归分类的方式更高效且效果相当，所以默认采用自回归预测坐标。
+
+这样，就可以将3D结构生成统一到Next token prediction的框架下。
+
+\hypertarget{ux56dbux635fux5931ux7684ux6c47ux805a}{%
+\subsubsection{（四）损失的汇聚}\label{ux56dbux635fux5931ux7684ux6c47ux805a}}
+
+在一次训练迭代中，模型实际会计算整个序列中所有掩码的损失之和：
+
+\textbf{总损失 = 所有八叉树节点的 256 分类 Loss + 所有底部原子的类型 Loss + 所有底部原子的 X、Y、Z 坐标 Loss。}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-202}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-202}}
+
+\begin{itemize}
+\tightlist
+\item
+  Lu, S., Lin, H., Yao, L., Gao, Z., Ji, X., E, W., Zhang, L., \& Ke, G. (2025). \href{https://arxiv.org/abs/2503.16278}{Uni-3DAR: Unified 3D Generation and Understanding via Autoregression on Compressed Spatial Tokens}. arXiv:2503.16278.
+\end{itemize}
+
+\clearpage

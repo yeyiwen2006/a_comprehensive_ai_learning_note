@@ -1,0 +1,1164 @@
+\hypertarget{ux795eux7ecfux7f51ux7edcux8badux7ec3ux7684ux5e38ux7528ux65b9ux6cd5}{%
+\chapter{神经网络训练的常用方法}\label{ux795eux7ecfux7f51ux7edcux8badux7ec3ux7684ux5e38ux7528ux65b9ux6cd5}}
+
+\hypertarget{ux6a21ux578bux6b63ux5219ux5316}{%
+\section{模型正则化}\label{ux6a21ux578bux6b63ux5219ux5316}}
+
+\hypertarget{ux4e00ux6a21ux578bux6b63ux5219ux5316ux7684ux6570ux5b66ux57faux7840}{%
+\subsection{一、模型正则化的数学基础}\label{ux4e00ux6a21ux578bux6b63ux5219ux5316ux7684ux6570ux5b66ux57faux7840}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  偏差与方差
+\end{enumerate}
+
+偏差大：预测数据均值偏离实际均值，欠拟合。
+
+方差大：预测数据学到了太多噪声，过拟合。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  贝叶斯公式
+\end{enumerate}
+
+先验概率p(A)是对一个事件概率如疾病发病率的初始估计；
+
+p(B\textbar A)是A发生的情况下，能观测到证据B如阳性的概率；
+
+p(B)是A发生与否两种情况下观测到证据B的概率和；
+
+p(A\textbar B)是观测到证据B的情况下，对概率估计的进一步更新。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  贝叶斯公式在正则化中的应用
+\end{enumerate}
+
+（1）基本量
+
+p(参数)：先验项，也就是对``参数值为X''这一事件发生概率的初始估计，若无正则化项则可忽略本项。
+
+p(输出\textbar 参数)：这里的``输出''指的是，在已知``参数值为X''的条件下，出现输出Y的概率；损失函数最小时，p(输出\textbar 参数)最大（最大似然估计得到）。
+
+p(输出)：尝试过所有参数后，得到该输出Y的平均概率，一般认为是常数（从可输出的词的列表中完全随机抽取）。
+
+（2）基本解释
+
+p(参数\textbar 输出)=p(输出\textbar 参数)\emph{p(参数)/p(输出)，或者说认为p(参数\textbar 输出)正比于p(输出\textbar 参数)}p(参数)，我们的目的是在给定输出的情况下，求出最可能产生这样输出的参数，也就是p(参数\textbar 输出)最大，在设计损失函数时，会把这种情形定义为损失函数最小（如loss=-logp(参数\textbar 输出)），一轮轮训练中通过梯度下降一步步接近该参数组合，每次训练的过程就是把参数初始概率分布变成考虑输出后的概率分布，并通过梯度下降让参数接近概率最大似然估计的参数值。
+
+（3）正常情况
+
+没有加入正则化项时，我们对p(参数)没有任何事先估计【初始权重值从高斯分布取样是为了能进行梯度操作而不至于全0，仅为优化起点，不代表先验估计】，这时p(参数\textbar 输出)正比于p(输出\textbar 参数)，也就是我们认为，当某个给定参数的模型最可能产生某个输出时，想要让另一个模型实现该输出的最好方法就是拟合该模型的参数。
+
+（4）过拟合
+
+训练时有时会落入一个p(输出\textbar 参数)很大的参数组合，但其实出现了过拟合，在测试集中p(输出\textbar 参数)反而小【注意计算贝叶斯后验不能用测试集，只能用训练集，原因前面讲过】，为了我们抑制过拟合，必须手动调整p(参数)的分布，让p(参数\textbar 输出)最大的情形同时受训练时得出正确输出概率p(输出\textbar 参数)和先验分布p(参数)的影响。
+
+（5）加入正则化后
+
+在loss中加入正则化项，也就等价于通过控制初始概率分布函数p(参数)，使其不为定值，从而在估计中加入我们的额外偏好，p(输出\textbar 参数)大不一定代表loss小（如一些正则化项会给予复杂模型惩罚），让包含实现对参数最终分布的调整。
+
+\hypertarget{ux4e8cl2ux6b63ux5219ux5316ux6743ux91cdux8870ux51cf}{%
+\subsection{二、L2正则化（权重衰减）}\label{ux4e8cl2ux6b63ux5219ux5316ux6743ux91cdux8870ux51cf}}
+
+即给损失函数加上``lamda\emph{1/2}参数平方和''项。lamda为正则化强度；1/2是为了在求正则项关于参数向量W的梯度时求导等于lamda*W而没有其他系数。
+
+概率本质：由前面损失函数是取log得到的可知，p(参数)其实就是该参数下的高斯函数的值，等价于高斯先验，默认各参数接近0的概率大。
+
+收敛方式：由于在0附近导数约为0，接近0时收敛极慢（收敛速度趋于0），一般不会收敛到0；但不会出现很大的参数（惩罚比L1大）。
+
+对减小模型复杂度的作用：
+
+（1）所有参数向零收缩，显著削弱高阶项，类似于限制多项式中高阶项系数。
+
+（2）避免特征共线性带来的权重抵消问题（这种情形的惩罚值会很大）。
+
+权重抵消效应的产生机制：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  参数解的不确定性
+\end{enumerate}
+
+当特征高度相关时（如 \(X_1\approx kX_2\)），模型无法区分每个特征的独立贡献。例如：
+
+\begin{itemize}
+\tightlist
+\item
+  真实关系：\(Y=2X_1+3X_2\)。
+\item
+  若 \(X_1\) 与 \(X_2\) 强相关（如 \(X_2\approx 0.5X_1\)），则以下解均可能成立：\(Y=4X_1+0\cdot X_2\)、\(Y=0\cdot X_1+6X_2\)、\(Y=5000X_1-4998X_2\)。
+\end{itemize}
+
+其中最后一种情况就是权重抵消：\(X_1\) 和 \(X_2\) 的系数符号相反且绝对值极大，它们的贡献相互抵消。最终组合结果仍接近真实值，但单个系数的可解释性较差。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  梯度更新的不稳定性
+\end{enumerate}
+
+在梯度下降优化过程中，高度相关特征的梯度方向可能冲突。若特征 \(X_1\) 和 \(X_2\) 相关且量级差异大（如 \(X_2=100X_1\)），则权重 \(w_2\) 的微小变化会导致 \(w_1\) 剧烈震荡，最终可能收敛到 \(w_1\) 为负、\(w_2\) 为正的抵消状态。
+
+权重抵消效应会带来三类影响：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  模型可解释性降低。例如在房价预测中，若``房间数量''和``房间数量平方''同时作为特征，模型可能赋予前者正权重、后者负权重，导致``房间数量增加反而降低房价''的反常误读。
+\item
+  参数估计方差增大。共线性会使权重方差膨胀，样本中的微小扰动可能导致系数剧烈波动，使模型稳定性下降。
+\item
+  特征重要性失真。在线性模型中，权重符号和大小常用于判断特征与目标的关系，权重抵消可能使实际正相关的特征在模型中表现为负相关。
+\end{enumerate}
+
+其他好处：避免梯度爆炸，避免矩阵病态。
+
+\hypertarget{ux4e09l1ux6b63ux5219ux5316}{%
+\subsection{三、L1正则化}\label{ux4e09l1ux6b63ux5219ux5316}}
+
+给损失函数加上``lamda*参数绝对值和''项，等价于对参数的初始估计为拉普拉斯先验，由于一次函数处处斜率相等，部分参数会被归零（L2在参数接近0的时候梯度也接近0，参数再向0的更新几乎停滞），剩余参数接近0的程度没有L2那么大（L2对偏离较大的值惩罚更强烈）。
+
+\hypertarget{ux56dbux77e9ux9635ux75c5ux6001ux95eeux9898ux7684ux4f18ux5316}{%
+\subsection{四、矩阵病态问题的优化}\label{ux56dbux77e9ux9635ux75c5ux6001ux95eeux9898ux7684ux4f18ux5316}}
+
+用拟合方式求解正规方程：输入矩阵（已知）A×参数矩阵（待求解）X＝输出矩阵（已知）b，由之前的分析知这也就是最小化目标函数：\textbar\textbar AX-b\textbar\textbar\^{}2。
+
+用线性变换思想：参数矩阵由多个原向量（每列都是一个即将被变换的向量）构成，参数矩阵代表线性变换，输出矩阵代表各个原向量分别变换后的向量。
+
+若输入矩阵X列相关程度大，相当于这个矩阵代表的线性变换把空间``压缩到一起''，这时参数矩阵即矩阵方程的解即原向量就会因变换后向量的微小波动而变化巨大，正则化效果在数学上等价于通过改变线性变换矩阵来解决病态问题：（岭回归就是L2正则化，下面是由目标函数推导正规方程的过程；在维数匹配的前提下，矩阵乘法对加法满足分配律）
+
+岭回归的目标函数为：
+
+\[
+J(\mathbf{x})=\lVert A\mathbf{x}-\mathbf{b}\rVert^2+\lambda^2\lVert\mathbf{x}\rVert^2
+\]
+
+其中，\(A\) 是 \(m\times n\) 的设计矩阵（\(m\) 个样本、\(n\) 个特征），\(\mathbf{x}\) 是 \(n\times 1\) 的待求参数向量，\(\mathbf{b}\) 是 \(m\times 1\) 的观测值向量，\(\lambda>0\) 是正则化参数。
+
+将目标函数展开为矩阵形式：
+
+\[
+\begin{aligned}
+J(\mathbf{x})
+&=(A\mathbf{x}-\mathbf{b})^\top(A\mathbf{x}-\mathbf{b})
++\lambda^2\mathbf{x}^\top\mathbf{x}\\
+&=\mathbf{x}^\top A^\top A\mathbf{x}
+-2\mathbf{b}^\top A\mathbf{x}
++\mathbf{b}^\top\mathbf{b}
++\lambda^2\mathbf{x}^\top\mathbf{x}.
+\end{aligned}
+\]
+
+对目标函数求梯度，并使用矩阵求导法则 \(\nabla_{\mathbf{x}}(\mathbf{x}^\top B\mathbf{x})=2B\mathbf{x}\)（当 \(B\) 对称时）和 \(\nabla_{\mathbf{x}}(\mathbf{c}^\top\mathbf{x})=\mathbf{c}\)，可得：
+
+\[
+\nabla_{\mathbf{x}}J(\mathbf{x})
+=2A^\top A\mathbf{x}-2A^\top\mathbf{b}+2\lambda^2\mathbf{x}
+\]
+
+令梯度为零以最小化目标函数：
+
+\[
+2A^\top A\mathbf{x}-2A^\top\mathbf{b}+2\lambda^2\mathbf{x}=0
+\]
+
+提取公因子 \(\mathbf{x}\)，并引入单位矩阵 \(I\)：
+
+\[
+(A^\top A+\lambda^2I)\mathbf{x}=A^\top\mathbf{b}
+\]
+
+这就是岭回归的正规方程。额外项 \(\lambda^2I\) 加到 \(A^\top A\) 上，能确保矩阵 \(A^\top A+\lambda^2I\) 更接近严格正定，从而缓解 \(A^\top A\) 不可逆或病态的问题。若该矩阵可逆，则有唯一解：
+
+\[
+\mathbf{x}=(A^\top A+\lambda^2I)^{-1}A^\top\mathbf{b}
+\]
+
+\hypertarget{ux4e94ux6682ux9000ux6cd5dropout}{%
+\subsection{五、暂退法（Dropout）}\label{ux4e94ux6682ux9000ux6cd5dropout}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  基本思想
+\end{enumerate}
+
+Dropout 在训练阶段以概率 \(p\) 随机将神经元的激活值置零（称为``丢弃''），迫使网络不依赖特定神经元或特征组合，从而提升鲁棒性。其数学表达为：
+
+\[
+h'=
+\begin{cases}
+0, & \mathcjk{概率为 }p,\\
+\dfrac{h}{1-p}, & \mathcjk{否则}
+\end{cases}
+\]
+
+其中缩放操作 \(\dfrac{h}{1-p}\) 确保激活值的期望不变，即 \(E[h']=h\)，避免训练与测试时的数据尺度不一致。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  作用机制
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  打破共适应性：神经元无法依赖固定组合，需要独立学习有效特征，减少对噪声的敏感度。
+\item
+  集成学习效应：每次迭代训练不同的子网络，最终模型相当于多个子网络的集成，提升泛化性。
+\end{itemize}
+
+暂退法通过随机丢弃神经元来打破神经网络中的``共适应性''（Co-adaptation）。共适应性指神经元之间形成过度依赖的固定组合，导致模型对训练数据的噪声敏感而泛化能力下降。
+
+共适应性的本质是神经网络的脆弱依赖。若某些神经元通过复杂权重组合学习特定特征时过度依赖其他神经元的输出，例如神经元 A 仅在神经元 B 激活时才有效，两者就形成``共生关系''。这种依赖会带来过拟合、脆弱性和冗余性降低：模型可能过度依赖训练数据中的噪声或偶然特征组合；当测试数据中部分特征缺失时，依赖链断裂会导致预测失效；模型也难以学习多组独立特征表示。
+
+暂退法通过动态随机丢弃神经元，强制网络避免固定依赖路径。每次迭代会随机屏蔽部分神经元，剩余神经元组成新的子网络，这迫使每个神经元必须独立有效、减少特定伙伴依赖，也让相同功能由多组神经元分散承担。训练时还会把保留神经元的输出放大 \(\dfrac{1}{1-p}\) 倍，测试时直接输出原值，保证整体激活强度稳定，避免因丢弃导致信号衰减。
+
+注：可以认为比如每个特征由一个神经元负责，一个识别动物的神经网络中，老虎这个输出和黄色、条纹等特征虽然需要相关，但不能过度依赖这些表层特征（也就是对这些特征过拟合，形成比较固定的神经元之间的组合），也不能一个特征只有一个神经元负责（风险大且数字只能上下调，灵活性差），这会使模型在训练数据略有变化时（如例子里说的黄色缺失）泛化性、鲁棒性差。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-4}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-4}}
+
+\begin{itemize}
+\tightlist
+\item
+  Aston Zhang, Zachary C. Lipton, Mu Li, Alexander J. Smola. (2023). \href{https://zh.d2l.ai/}{《动手学深度学习》}. Cambridge University Press.
+\item
+  Srivastava, N., Hinton, G., Krizhevsky, A., Sutskever, I., \& Salakhutdinov, R. (2014). \href{https://jmlr.org/papers/v15/srivastava14a.html}{Dropout: A Simple Way to Prevent Neural Networks from Overfitting}. Journal of Machine Learning Research.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux8d85ux53c2ux6570ux4f18ux5316ux4e0eux9a8cux8bc1ux96c6}{%
+\section{超参数优化与验证集}\label{ux8d85ux53c2ux6570ux4f18ux5316ux4e0eux9a8cux8bc1ux96c6}}
+
+在训练集上对参数进行优化时，我们是不能把超参数作为优化变量的，它属于优化的目标函数，超参数不同的情况下是不同的优化问题。
+
+那我们怎么调整超参数呢？我们不能使用测试集，因为如果我们过拟合了训练数据，还可以在测试数据上的评估来判断过拟合。但是如果我们过拟合了测试数据，我们又该怎么知道呢？因此，我们决不能依靠测试数据进行模型超参数的选择。然而，我们也不能仅仅依靠训练数据来选择超参数，因为我们无法估计训练数据的泛化误差。
+
+在实际应用中，情况变得更加复杂。虽然理想情况下我们只会使用测试数据一次，以评估最好的模型或比较一些模型效果，但现实是测试数据很少在使用一次后被丢弃。我们很少能有充足的数据来对每一轮实验采用全新测试集。
+
+解决此问题的常见做法是将我们的数据分成三份，除了训练和测试数据集之外，还增加一个验证数据集（validation dataset），也叫验证集（validation set）。我们一般会根据在验证集上的表现来优化模型（超参数等），但也不能调整过猛，防止过拟合验证集。
+
+但是麻烦的是，超参数无法用常规的梯度下降法进行优化。直接暴力搜索空间巨大，如果自动化优化，意味着每次对超参数组合的尝试（每一步）都要重新训练一个新模型，计算开销巨大。因此，我们往往会``手动调参''，也就是基于经验，通过在验证集上尝试来调整超参数。
+
+另外，当训练数据稀缺时，我们甚至可能无法提供足够的数据来构成一个合适的验证集。这个问题的一个流行的解决方案是采用K折交叉验证。这里，原始训练数据被分成K个不重叠的子集。 然后执行次模型训练和验证，每次在K-1个子集上进行训练，并在剩余的一个子集（在该轮中没有用于训练的子集）上进行验证。最后，通过对K次实验的结果取平均来估计训练和验证误差。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-5}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-5}}
+
+\begin{itemize}
+\tightlist
+\item
+  Aston Zhang, Zachary C. Lipton, Mu Li, Alexander J. Smola. (2023). \href{https://zh.d2l.ai/}{《动手学深度学习》}. Cambridge University Press.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6279ux91cfux89c4ux8303ux5316bn}{%
+\section{批量规范化（BN）}\label{ux6279ux91cfux89c4ux8303ux5316bn}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3ux7a33ux5b9aux5b66ux4e60ux8fc7ux7a0b}{%
+\subsection{一、核心思想：稳定学习过程}\label{ux4e00ux6838ux5fc3ux601dux60f3ux7a33ux5b9aux5b66ux4e60ux8fc7ux7a0b}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  问题：内部协变量偏移（Internal Covariate Shift）
+  这是BN论文作者提出的核心概念。通俗来讲，对于一个深度网络：
+\end{enumerate}
+
+训练时：~网络的每一层参数都在不断更新。
+
+这意味着，对于第~k~层来说，它的输入数据的分布（即第~k-1~层的输出），会随着前一层参数的更新而剧烈地、不可预测地发生变化，就是内部协变量偏移。它导致：
+
+网络难以训练：~后续层需要不断适应新的数据分布，收敛缓慢。
+
+需要极小心地设置学习率：~学习率太高，分布变化太剧烈，容易梯度爆炸/消失；学习率太低，训练速度过慢。
+
+此外：
+
+\begin{itemize}
+\item
+  若某单一特征数值非常大且方差小，模型会过度依赖该特征（``偷懒''），导致过拟合。
+\item
+  BN 抑制了这种数值优势，迫使模型综合多个特征（例如形状、结构）来做判断，从而提升泛化能力。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  解决方案：批量规范化（Batch Normalization，BN）
+  BN的思路非常直观：既然问题是因为分布变化太剧烈，那我们在每一层的输入之后、激活函数之前，强行把它的数据分布拉回到一个标准正态分布（均值为0，方差为1）的样子，稳定其分布。这也可以加速模型的训练
+\end{enumerate}
+
+\hypertarget{ux4e8cux6570ux5b66ux539fux7406ux4e0eux64cdux4f5c}{%
+\subsection{二、数学原理与操作}\label{ux4e8cux6570ux5b66ux539fux7406ux4e0eux64cdux4f5c}}
+
+BN层的操作可以分解为以下几步。假设我们有一个 mini-batch 的数据 \(B=\{x_1,x_2,\ldots,x_m\}\)，其中每个 \(x\) 可以是一个样本，也可以是网络某一层的输出（通常是一个向量或特征图）。
+
+第一步：计算Mini-Batch的均值和方差
+对于当前 mini-batch，计算该批次数据在每个特征维度上的均值 \(\mu_B\) 和方差 \(\sigma_B^2\)。
+
+\[
+\mu_B=\frac{1}{m}\sum_{i=1}^{m}x_i
+\]
+
+\[
+\sigma_B^2=\frac{1}{m}\sum_{i=1}^{m}(x_i-\mu_B)^2
+\]
+
+实践中，方差计算通常会加上一个极小常数 \(\epsilon\) 防止除零错，即 \(\sigma_B^2+\epsilon\)。
+
+第二步：标准化（Normalize）
+利用上面计算出的均值和方差，将 mini-batch 中的每个样本 \(x_i\) 标准化为 \(\hat{x}_i\)，使其均值为 0，方差为 1。
+
+\[
+\hat{x}_i=\frac{x_i-\mu_B}{\sqrt{\sigma_B^2+\epsilon}}
+\]
+
+注：这里不会采用全局平均。除了计算开销问题外，还因为mini-batch统计量的随机波动（不同批次间的分布差异）类似于对网络参数的噪声注入，迫使模型学习更鲁棒的特征，抑制过拟合。这种隐式正则化是BN提升泛化能力的关键。
+
+第三步：缩放与平移（Scale and Shift）
+这是BN层最关键的一步。它引入了两个可学习的参数：缩放参数 \(\gamma\) 和平移参数 \(\beta\)，分别能调整数据的方差和均值。
+
+\[
+y_i=\gamma\hat{x}_i+\beta
+\]
+
+为什么需要第三步？
+标准化操作虽然稳定了分布，但却限制了层的表达能力。比如，如果使用Sigmoid激活函数，标准化后的数据会全部集中在线性区域（0附近），使得Sigmoid变得近似线性，非线性能力消失。
+
+\(\gamma\) 和 \(\beta\) 的引入，让BN层拥有了``恢复''数据原本分布的能力。
+
+如果网络认为原始分布是最优的，它可以通过学习得到 \(\gamma=\sqrt{\sigma^2}\)、\(\beta=\mu\)，从而完美恢复标准化前的分布。当然，它也可以学习到任何其他均值和方差的分布，让网络自己决定什么样的分布是最有利于训练的。
+
+总结公式：
+
+\[
+\mathrm{BN}(x_i)=\gamma\frac{x_i-\mu_B}{\sqrt{\sigma_B^2+\epsilon}}+\beta
+\]
+
+\hypertarget{ux4e09bnux5728ux8badux7ec3ux548cux63a8ux7406ux65f6ux7684ux533aux522b}{%
+\subsection{三、BN在训练和推理时的区别}\label{ux4e09bnux5728ux8badux7ec3ux548cux63a8ux7406ux65f6ux7684ux533aux522b}}
+
+这是一个非常重要的细节。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  训练阶段（Training）：
+\end{enumerate}
+
+均值和方差 \((\mu_B,\sigma_B^2)\) 是从当前 mini-batch 中实时计算的。
+
+同时，网络会持续计算移动平均（Running Average）~的全局均值和方差，为推理阶段做准备。
+
+\[
+\mu_{\mathrm{global,new}}
+= \mathrm{momentum}\cdot\mu_{\mathrm{global,old}}
++ (1-\mathrm{momentum})\cdot\mu_B
+\]
+
+\[
+\sigma_{\mathrm{global,new}}^2
+= \mathrm{momentum}\cdot\sigma_{\mathrm{global,old}}^2
++ (1-\mathrm{momentum})\cdot\sigma_B^2
+\]
+
+其中 \(\mathrm{momentum}\) 是一个接近 \(1\) 的值，如 \(0.9\)。
+
+为什么不直接用所有批次全局平均，而是用移动平均？
+
+（1）数学角度：这时让新批次权重更高，使统计量快速响应近期数据分布变化，若数据分布随时间渐变（如在线学习），移动平均能动态跟踪变化，避免初始不稳定阶段的噪声影响全局估计。
+
+（2）工程实现角度：时间上，全局平均需要累加完所有批次才能计算出来，移动平均可以实时计算；空间上，移动平均可嵌入训练迭代中同步完成，无需额外流程，全局平均需额外开发统计量存储、累加和最终计算的模块，增加代码复杂度与调试成本。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  推理阶段（Inference/Testing）：
+\end{enumerate}
+
+我们不再使用mini-batch的统计量，因为可能只有一个样本，或者batch的统计量不稳定。
+
+而是直接使用训练阶段最终得到的移动平均的全局均值和方差 \((\mu_{\text{global}},\sigma_{\text{global}}^2)\) 来进行标准化。
+
+\[
+y_i=\gamma\frac{x_i-\mu_{\text{global}}}{\sqrt{\sigma_{\text{global}}^2+\epsilon}}+\beta
+\]
+
+这样做的好处是，推理过程是确定的，与batch无关，且非常高效。
+
+\hypertarget{ux56dbbnux7684ux4f4dux7f6e}{%
+\subsection{四、BN的位置}\label{ux56dbbnux7684ux4f4dux7f6e}}
+
+通常，BN层被插入到全连接层或卷积层之后，激活函数（如ReLU）之前。
+-\textgreater{} CONV/FC -\textgreater{} BN -\textgreater{} ReLU -\textgreater{} \ldots{}
+
+这是因为我们希望将输入激活函数的数据先进行规范化，使其分布稳定，从而让激活函数更有效的工作。
+
+\hypertarget{ux4e94bnux5e26ux6765ux7684ux5de8ux5927ux597dux5904}{%
+\subsection{五、BN带来的巨大好处}\label{ux4e94bnux5e26ux6765ux7684ux5de8ux5927ux597dux5904}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  允许使用更高的学习率：神经网络中，参数更新步长（学习率×梯度）受输入数据尺度影响。若某层输入突然增大，梯度幅值骤增，固定学习率下可能导致更新步长过大（爆炸）。~BN通过稳定梯度，使得我们可以使用更大的学习率而不用担心梯度爆炸或消失，从而大大加快收敛速度。
+\item
+  减少对初始化的强烈依赖：~网络对权重初始化的敏感度显著降低，因为BN已经保证了数据分布的稳定性。
+\item
+  充当正则化器（Regularizer）：~每个mini-batch的均值和方差都不同，这种轻微噪声为模型训练带来了正则化效果，可以在一定程度上减少过拟合（Dropout的使用有时可以降低或移除）。
+\end{enumerate}
+
+噪声如何``逼迫''模型变强？\hspace{0pt}\hspace{0pt}
+
+（1）打破死记硬背（抑制过拟合）\hspace{0pt}\hspace{0pt}
+
+问题：模型容易记住训练数据的细节（如某张图片的噪点），而非本质特征（如猫的耳朵形状）。
+
+噪声的作用：每个批次的统计量（均值/方差）像轻微扭曲的滤镜。同一只猫的图片，在不同批次中会被标准化成``略亮''或``略暗''的版本。模型无法依赖像素的绝对亮度判断``猫''，被迫学习更稳定的特征（如轮廓、纹理）。
+
+（2）模拟现实世界的多样性（提升泛化）\hspace{0pt}\hspace{0pt}
+
+现实世界规律：猫在不同光线、角度下看起来不同，但本质特征不变。
+
+噪声的模拟：批次统计量的波动，相当于自动生成数据变体。比如：批次1：猫在暗光下→模型学到``猫在暗处也有胡须''。批次2：猫在强光下→模型学到``强光下猫眼反光的特征''。
+（3）强制``多角度练习''（平衡特征依赖）\hspace{0pt}\hspace{0pt}
+
+问题：模型可能过度依赖某些特征（如``所有猫都是黄色的''）。
+
+噪声的干预：某批次全是黑猫（统计量偏暗），另一批次全是白猫（统计量偏亮）。模型发现``颜色不靠谱''，转而学习形状、动作等更普适的特征。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  缓解梯度消失问题：~通过将激活函数的输入控制在一个更优的分布上（避免饱和区），使得梯度更大、更稳定。
+\end{enumerate}
+
+\hypertarget{ux516dux6ce8ux610fux4e8bux9879ux4e0eux53d8ux4f53}{%
+\subsection{六、注意事项与变体}\label{ux516dux6ce8ux610fux4e8bux9879ux4e0eux53d8ux4f53}}
+
+Batch Size依赖：~BN的效果严重依赖于Batch Size。如果Batch Size太小（如1或2），计算的均值和方差噪声会非常大，反而会损害性能。这促使了后续Layer Normalization (LN), Instance Normalization (IN), Group Normalization (GN)~等技术的发展，它们在不同维度上计算统计量，适用于小批量或特定任务（如NLP、图像生成）。
+
+不适合所有场景：~在RNN等动态网络中，直接使用BN比较困难。对于一些生成模型，BN可能会引入不必要的batch内依赖。
+
+\hypertarget{ux4e03ux603bux7ed3}{%
+\subsection{七、总结}\label{ux4e03ux603bux7ed3}}
+
+批量规范化（BN）是一项革命性的技术，它通过标准化层输入并辅以可学习的缩放和平移，极大地解决了深度网络训练中的内部协变量偏移问题。其带来的更快收敛、更高学习率、更稳定训练等优势，使其成为构建现代深度神经网络几乎不可或缺的标准组件，并直接推动了更深度、更强大网络模型的设计和发展。
+
+它深刻地体现了深度学习中的一个重要思想：不仅要对数据做变换，更要让网络自己学会如何控制这个变换，以达到最优的性能。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-6}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-6}}
+
+\begin{itemize}
+\tightlist
+\item
+  Aston Zhang, Zachary C. Lipton, Mu Li, Alexander J. Smola. (2023). \href{https://zh.d2l.ai/}{《动手学深度学习》}. Cambridge University Press.
+\item
+  Ioffe, S., \& Szegedy, C. (2015). \href{https://arxiv.org/abs/1502.03167}{Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift}. ICML 2015.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux53c2ux6570ux521dux59cbux5316}{%
+\section{参数初始化}\label{ux53c2ux6570ux521dux59cbux5316}}
+
+\hypertarget{ux4e00xavierglorotux521dux59cbux5316}{%
+\subsection{一、Xavier（Glorot）初始化}\label{ux4e00xavierglorotux521dux59cbux5316}}
+
+为了避免梯度消失或爆炸，我们希望每一层输出的方差与输入的方差大致相等。除了在每次计算结束后用批量规范化``拉回来''之外，我们还希望计算过程本身就能保证这一点。在线性网络中，如y\_j=sigma(x\_i*w\_ij)+b\_j，输入与输出方差的关系取决于参数的取值，因此参数如何初始化至关重要。
+
+假设权重和输入独立同分布，且它们的均值都为 0。权重的方差为sigma\^{}2，这是我们要解的。输入的方差为Var(x\_i)=Var(X)。
+
+考虑一个简单的线性层，输出y\_j=sigma(x\_i\emph{w\_ij)（忽略偏置），对任意j，Var(y\_j)=sigma(Var(x\_i}w\_ij))=n\_in\emph{Var(x\_i}w\_ij)（n\_in为输入数量）
+
+根据方差公式：
+
+\[
+\mathrm{Var}(Z)=E[Z^2]-(E[Z])^2
+\]
+
+有：
+
+\[
+E[W_iX_i]=E[W_i]E[X_i]=0\cdot 0=0
+\]
+
+\[
+\mathrm{Var}(W_iX_i)
+=E[(W_iX_i)^2]-0
+=E[W_i^2]E[X_i^2]
+\]
+
+因为 \(E[W]=0\)，所以：
+
+\[
+\mathrm{Var}(W)=E[W^2]-(E[W])^2=E[W^2]
+\]
+
+同理：
+
+\[
+\mathrm{Var}(X)=E[X^2]
+\]
+
+将这些代入，可以得到：
+
+\[
+\mathrm{Var}(Y)=n_{\mathrm{in}}\cdot E[W_i^2]E[X_i^2]
+\]
+
+即：
+
+\[
+\mathrm{Var}(Y)=n_{\mathrm{in}}\cdot \mathrm{Var}(W)\cdot \mathrm{Var}(X)
+\]
+
+前向传播的目标是保持方差不变，即~Var(Y) = Var(X)，故Var(W)=1/n\_in
+
+同理，对于反向传播，为了保持梯度不变性，我们希望：
+
+\[
+\mathrm{Var}\left(\frac{\partial L}{\partial z^{l-1}}\right)
+=\mathrm{Var}\left(\frac{\partial L}{\partial z^l}\right)
+\]
+
+这里z\_l是第l层的输出（尚未经过激活函数）。接下来进行推导：
+
+为了推导出 \(\dfrac{1}{n_{\mathrm{out}}}\)，我们使用 Xavier（Glorot）初始化的假设：激活函数是 \(\tanh\) 或 sigmoid，并且输入 \(z\) 大部分位于其线性区域（\(z\approx 0\)）。在这个区域内，\(f(z)\approx z\)，更重要的是导数 \(f'(z)\approx 1\)。同时假设权重 \(W\)、输入 \(a\) 以及梯度 \(\dfrac{\partial L}{\partial z}\) 的均值都为 0：
+
+\[
+E[W]=0,\qquad E\left[\frac{\partial L}{\partial z^l}\right]=0
+\]
+
+并假设 \(W\)、\(\dfrac{\partial L}{\partial z^l}\) 和 \(a^{l-1}\) 相互独立。
+
+分析梯度如何从第 \(l\) 层反向传播到第 \(l-1\) 层。令：
+
+\[
+z^l=W^la^{l-1}+b^l,\qquad a^l=f(z^l)
+\]
+
+其中 \(W^l\) 的形状为 \((n_l,n_{l-1})\)，\(n_{l-1}\) 是第 \(l-1\) 层的神经元数量（fan-in），\(n_l\) 是第 \(l\) 层的神经元数量（fan-out）。根据链式法则：
+
+\[
+\frac{\partial L}{\partial z^{l-1}}
+=\frac{\partial L}{\partial z^l}\cdot
+\frac{\partial z^l}{\partial a^{l-1}}\cdot
+\frac{\partial a^{l-1}}{\partial z^{l-1}}
+\]
+
+写成逐元素形式：
+
+\[
+\frac{\partial L}{\partial z^{l-1}}
+=\left((W^l)^\top\cdot\frac{\partial L}{\partial z^l}\right)
+\odot f'(z^{l-1})
+\]
+
+看 \(\dfrac{\partial L}{\partial z_j^{l-1}}\) 中任意一个神经元 \(j\)：
+
+\[
+\frac{\partial L}{\partial z_j^{l-1}}
+=\left(\sum_{k=1}^{n_l}W^l_{k,j}\frac{\partial L}{\partial z_k^l}\right)\cdot f'(z_j^{l-1})
+\]
+
+这个求和是对第 \(l\) 层所有 \(k\) 个神经元进行的，因此 \(n_l\) 正是第 \(l-1\) 层的 fan-out，记作 \(n_{\mathrm{out}}\)。
+
+反向传播中，对于前一层（第l-1层）的一个神经元j，L对它的梯度是第l层的全部（第1至n\_out个）神经元传播而来的梯度的总和。故需要Var(W)=Var(w\_k,j)=1/n\_out.
+
+实际操作中，取二者的调和平均数2/(n\_in+n\_out)作为方差。
+
+\hypertarget{ux4e8ckaimingux521dux59cbux5316}{%
+\subsection{二、Kaiming初始化}\label{ux4e8ckaimingux521dux59cbux5316}}
+
+若激活函数使用ReLU，f'(z)在z\textgreater0时为 1，在z\textless0时为 0，其方差：
+
+先使用独立随机变量乘积的方差公式：
+
+\[
+\mathrm{Var}(AB)
+=\mathrm{Var}(A)\mathrm{Var}(B)
++\mathrm{Var}(A)E[B]^2
++\mathrm{Var}(B)E[A]^2
+\]
+
+令 \(A=W^l\) 且 \(B=a^{l-1}\)：
+
+\[
+\begin{aligned}
+\mathrm{Var}(W^la^{l-1})
+&=\mathrm{Var}(W^l)\mathrm{Var}(a^{l-1})
++\mathrm{Var}(W^l)(E[a^{l-1}])^2\\
+&\quad+\mathrm{Var}(a^{l-1})(E[W^l])^2
+\end{aligned}
+\]
+
+应用假设 \(E[W^l]=0\)：
+
+\[
+\mathrm{Var}(W^la^{l-1})
+=\mathrm{Var}(W^l)\left(\mathrm{Var}(a^{l-1})+(E[a^{l-1}])^2\right)
+\]
+
+根据方差定义 \(E[X^2]=\mathrm{Var}(X)+(E[X])^2\)，可将上式简化为：
+
+\[
+\mathrm{Var}(W^la^{l-1})
+=\mathrm{Var}(W^l)\cdot E[(a^{l-1})^2]
+\]
+
+代回 \(\mathrm{Var}(Z^l)\) 的公式，得到前向传播主公式：
+
+\[
+\mathrm{Var}(Z^l)=n_{\mathrm{in}}\cdot \mathrm{Var}(W^l)\cdot E[(a^{l-1})^2]
+\]
+
+接下来需要 \(E[(a^l)^2]\) 和 \(\mathrm{Var}(Z^l)\) 之间的关系。由于 ReLU 满足 \(a^l=\max(0,Z^l)\)，有：
+
+\[
+E[(a^l)^2]=E[(\max(0,Z^l))^2]
+\]
+
+假设 \(Z^l\) 是均值为 0 的对称分布，例如高斯分布，则：
+
+\[
+\begin{aligned}
+E[(a^l)^2]
+&=\int_{-\infty}^{\infty}(\max(0,z))^2p(z)\,dz\\
+&=\int_{-\infty}^{0}0^2p(z)\,dz+\int_{0}^{\infty}z^2p(z)\,dz\\
+&=\int_{0}^{\infty}z^2p(z)\,dz
+\end{aligned}
+\]
+
+因为 \(p(z)\) 是对称的，所以 \(\int_0^\infty z^2p(z)\,dz\) 恰好是 \(\int_{-\infty}^{\infty}z^2p(z)\,dz\) 的一半。而：
+
+\[
+E[(Z^l)^2]=\int_{-\infty}^{\infty}z^2p(z)\,dz
+\]
+
+又因为 \(E[Z^l]=0\)，所以 \(\mathrm{Var}(Z^l)=E[(Z^l)^2]\)。因此：
+
+\[
+E[(a^l)^2]=\frac{1}{2}\mathrm{Var}(Z^l)
+\]
+
+将这个关系代入前向传播主公式，并要求信号稳定：
+
+\[
+E[(a^l)^2]=E[(a^{l-1})^2]
+\]
+
+可得：
+
+\[
+E[(a^{l-1})^2]
+=\frac{1}{2}\cdot n_{\mathrm{in}}\cdot \mathrm{Var}(W^l)\cdot E[(a^{l-1})^2]
+\]
+
+得到W的方差应为2/n\_in.
+
+反向传播：
+
+设sum是L对第l层输入a的梯度（包含了第l层n\_out个神经元传来的梯度之和），f'(z)是激活函数的梯度，则由独立随机变量乘积方差公式：
+
+\[
+\mathrm{Var}\left(\frac{\partial L}{\partial z_j^{l-1}}\right)
+=\mathrm{Var}(\mathrm{sum})\mathrm{Var}(f')
++\mathrm{Var}(\mathrm{sum})(E[f'])^2
++\mathrm{Var}(f')(E[\mathrm{sum}])^2
+\]
+
+假设 \(E[\mathrm{sum}]=0\)：
+
+\[
+\mathrm{Var}\left(\frac{\partial L}{\partial z_j^{l-1}}\right)
+=\mathrm{Var}(\mathrm{sum})\left(\mathrm{Var}(f')+(E[f'])^2\right)
+\]
+
+即：
+
+\[
+\mathrm{Var}\left(\frac{\partial L}{\partial z_j^{l-1}}\right)
+=\mathrm{Var}(\mathrm{sum})\cdot E[(f')^2]
+\]
+
+已经推出：
+
+\[
+\mathrm{Var}(\mathrm{sum})
+=n_{\mathrm{out}}\cdot\mathrm{Var}(W)\cdot
+\mathrm{Var}\left(\frac{\partial L}{\partial z}\right)
+\]
+
+并且对 ReLU 有 \(E[(f')^2]=0.5\)，代入：
+
+\[
+\mathrm{Var}\left(\frac{\partial L}{\partial z^{l-1}}\right)
+=\left(n_{\mathrm{out}}\cdot\mathrm{Var}(W)\cdot
+\mathrm{Var}\left(\frac{\partial L}{\partial z}\right)\right)\cdot\frac{1}{2}
+\]
+
+则W的方差应为2/n\_out.
+
+一般来说，取前向传播对应的方差2/n\_in即可达到足够好的效果（一般用2/n\_in和2/n\_out初始化差别也不大）。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-7}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-7}}
+
+\begin{itemize}
+\tightlist
+\item
+  Glorot, X., \& Bengio, Y. (2010). \href{https://proceedings.mlr.press/v9/glorot10a.html}{Understanding the difficulty of training deep feedforward neural networks}. AISTATS 2010.
+\item
+  He, K., Zhang, X., Ren, S., \& Sun, J. (2015). \href{https://arxiv.org/abs/1502.01852}{Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification}. ICCV 2015.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6570ux636eux5206ux5e03ux504fux79fbux7684ux89e3ux51b3ux65b9ux6848}{%
+\section{数据分布偏移的解决方案}\label{ux6570ux636eux5206ux5e03ux504fux79fbux7684ux89e3ux51b3ux65b9ux6848}}
+
+\hypertarget{ux4e00ux6570ux636eux5206ux5e03ux504fux79fbux5e26ux6765ux7684ux95eeux9898}{%
+\subsection{一、数据分布偏移带来的问题}\label{ux4e00ux6570ux636eux5206ux5e03ux504fux79fbux5e26ux6765ux7684ux95eeux9898}}
+
+在机器学习中，我们希望的优化目标是Loss=(1/N)\emph{sigma(L(y,f(x)))=E\_p(x,y){[}L(y,f(x)){]}，这代表所有真实数据的平均损失，也可以视为真实数据按其概率（密度）加权的损失。而我们实际上能优化的是Loss\_train=(1/n)}sigma(L(y,f(x)))=E\_p\_train(x,y){[}L(y,f(x)){]}，这代表样本数据的平均损失，也可以视为样本数据按其概率（密度）加权的损失。我们希望Loss\_train尽量接近Loss，这样我们就能通过优化Loss\_train来实现优化Loss，这也就意味着我们希望真实数据概率分布和样本概率分布一致，这样按概率（密度）加权的损失才会一致。
+
+当输入维度很高、特征量很大时（如图片），我们说的``概率分布p''默认为概率密度函数。这个概率密度一般无法直接求解，后续会介绍拟合方法。
+
+如果这两者不一致，如样本中暗色的图片特别多，亮色的图片特别少，那么在优化Loss\_train时，暗色的图片在期望中的权重大，梯度下降方向就会被``让暗色的图片的Loss\_train下降''主导，亮色的图片就很难得到充分训练，使得模型识别图片对光照的鲁棒性下降。
+
+这种偏移可能带来灾难性的后果。~假设我们训练了一个贷款申请人违约风险模型，用来预测谁将偿还贷款或违约。这个模型发现申请人的鞋子与违约风险相关（穿牛津鞋申请人会偿还，穿运动鞋申请人会违约）。此后，这个模型可能倾向于向所有穿着牛津鞋的申请人发放贷款，并拒绝所有穿着运动鞋的申请人。一旦模型开始根据鞋类做出决定，顾客就会理解并改变他们的行为。不久，所有的申请者都会穿牛津鞋，而信用度却没有相应的提高。通过将基于模型的决策引入环境，我们可能会破坏模型。当模型的输出被直接（且不加批判地）用作下一轮的输入时，任何微小的偏见都会被无限放大，最终导致系统``失控''。
+
+\hypertarget{ux4e8cux5206ux5e03ux504fux79fbux7684ux5206ux7c7b}{%
+\subsection{二、分布偏移的分类}\label{ux4e8cux5206ux5e03ux504fux79fbux7684ux5206ux7c7b}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  协变量偏移
+\end{enumerate}
+
+特征x的分布p(x)变了，但规则p(y\textbar x)不变。
+
+这基于``x导致y''的假设（如因素 x决定公司股价y）。
+
+例如：
+
+\begin{itemize}
+\tightlist
+\item
+  训练集 \(P_{\mathrm{train}}(\mathbf{x})\)：真实的猫狗照片。
+\item
+  测试集 \(P_{\mathrm{test}}(\mathbf{x})\)：猫狗卡通画。
+\item
+  \(\mathbf{x}\) 变了：``照片''的像素分布和``卡通''的像素分布完全不同。
+\item
+  \(P(y\mid \mathbf{x})\) 不变：``卡通猫''的标签仍然是``猫''（\(y=1\)），``卡通狗''的标签仍然是``狗''（\(y=0\)），分类规则是稳定的。
+\item
+  为什么会失败：模型在训练时可能学习了依赖``照片''特有的特征，如毛发纹理、真实光影，而这些特征在``卡通''测试集中完全不存在。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  标签偏移
+\end{enumerate}
+
+标签y在样本标签中出现的概率p(y)变了，但同样的标签对应的特征p(x\textbar y)不变。
+
+这基于``y导致x''的假设（如疾病y导致症状x）。
+
+例如：
+
+\begin{itemize}
+\tightlist
+\item
+  训练集（夏季）：\(P(\mathcjk{流感})=1\%\)，\(P(\mathcjk{普通感冒})=10\%\)。
+\item
+  测试集（冬季）：\(P(\mathcjk{流感})=20\%\)，\(P(\mathcjk{普通感冒})=40\%\)。
+\item
+  \(P(y)\) 变了：``流感''这个标签本身变得更常见。
+\item
+  \(P(\mathbf{x}\mid y)\) 不变：``流感''在夏天和冬天引起的症状（如发烧、咳嗽）是一样的。
+\end{itemize}
+
+为什么有利：标签 \(y\) 通常是低维的，例如 10 个类别；而特征 \(\mathbf{x}\) 是高维的，例如 100 万个像素。纠正 \(P(y)\) 的偏移，远比纠正 \(P(\mathbf{x})\) 的偏移更容易。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  概念偏移
+\end{enumerate}
+
+x和y的对应关系，即规则本身P(y\textbar x)变了。
+
+例如：
+
+\begin{itemize}
+\tightlist
+\item
+  输入 \(\mathbf{x}\)：``一种甜的碳酸饮料''。
+\item
+  规则 \(P(y\mid\mathbf{x})\) 取决于地理位置：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    在纽约，规则是 \(P(y=\text{“soda”}\mid\mathbf{x})\approx 1\)。
+  \item
+    在芝加哥，规则是 \(P(y=\text{“pop”}\mid\mathbf{x})\approx 1\)。
+  \item
+    在亚特兰大，规则是 \(P(y=\text{“coke”}\mid\mathbf{x})\approx 1\)。
+  \end{itemize}
+\end{itemize}
+
+这是最难的问题。如果规则瞬息万变，模型就必须从头开始学。但幸运的是，在实践中，概念偏移通常是缓慢渐进的。
+
+\hypertarget{ux4e09ux5b9eux4f8bux5206ux6790}{%
+\subsection{三、实例分析}\label{ux4e09ux5b9eux4f8bux5206ux6790}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  医学诊断
+\end{enumerate}
+
+问题： 癌症检测器。
+
+数据： 病人 = 老年男性；健康人 = 大学生（健康对照组）。
+
+偏移类型： 极端的协变量偏移。
+
+失败原因： 模型根本没有学习``癌症 vs 健康''。它学习的是``老年人 vs 年轻人''。它会捕捉任何相关的虚假相关性（激素水平、体力活动、饮食），导致它在真正的老年健康人（它从未见过的群体）身上 100\% 失败。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  自动驾驶汽车 \& 坦克：
+\end{enumerate}
+
+``路沿检测器''： 用``游戏引擎''数据来扩充训练集。
+
+问题： 游戏引擎偷懒了，把所有的``路沿''都渲染成了同一种简单的纹理。
+
+偏移类型： 协变量偏移。
+
+失败原因： 模型没有学会识别``路沿的几何形状''，它学会了识别``那种特定的游戏纹理''。但这在真实世界中毫无用处。
+
+``坦克探测器''：
+
+无坦克 = 早上拍的森林（有阴影）。
+
+有坦克 = 中午拍的森林（无阴影）。
+
+失败原因： 模型学会了识别``阴影''，而不是``坦克''。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  非平稳分布（缓慢发生的概念偏移）
+\end{enumerate}
+
+广告模型： 2009 年的模型不知道``iPad''是什么。P(点击 \textbar{} ``iPad'') 这个规则在 2010 年被创造了出来。
+
+垃圾邮件过滤器： 垃圾邮件发送者会不断进化他们的词汇和手段。P(垃圾邮件 \textbar{} 邮件内容) 这个规则一直在被动地变化。
+
+推荐系统： 圣诞节过后，P(感兴趣 \textbar{} ``圣诞帽'') 这个规则从 1 变成了 0。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  总结
+\end{enumerate}
+
+人脸特写： 协变量偏移。（训练集里没有``脸占满屏幕''的x）。
+
+美国/英国： 概念偏移。（``football''对应的y 从``橄榄球''变成了``足球''）。
+
+数据类型不均衡： 标签偏移。（训练时 P(y) 是均衡的，但现实中 P(y) 是不均衡的）。
+
+\hypertarget{ux56dbux89e3ux51b3ux65b9ux6848}{%
+\subsection{四、解决方案}\label{ux56dbux89e3ux51b3ux65b9ux6848}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  对于协变量偏移：重要性采样和加权Loss
+\item
+  我们想优化的真实风险是：
+\end{enumerate}
+
+\[
+R_{\mathrm{test}}=E_{p_{\mathrm{test}}}[L]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  但我们只有训练数据：
+\end{enumerate}
+
+\[
+E_{p_{\mathrm{train}}}[\cdots]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  通过引入一个比率：
+\end{enumerate}
+
+\[
+\beta(\mathbf{x})=\frac{P_{\mathrm{test}}(\mathbf{x})}{P_{\mathrm{train}}(\mathbf{x})}
+\]
+
+就可以把对 \(P_{\mathrm{test}}\) 的期望，改写为对 \(P_{\mathrm{train}}\) 的加权期望：
+
+\[
+R_{\mathrm{test}}=E_{p_{\mathrm{train}}}[\beta(\mathbf{x})\cdot L]
+\]
+
+重要性权重为：
+
+\[
+\beta(\mathbf{x})=\frac{P_{\mathrm{test}}(\mathbf{x})}{P_{\mathrm{train}}(\mathbf{x})}
+\]
+
+含义：如果一个训练样本 \(\mathbf{x}\) 在测试集中出现的概率是在训练集中的 10 倍，那么它就非常重要，我们应该给它 10 倍的权重。
+
+我们无法显式求解每一个样本在两个集合中概率密度函数的值，但是我们可以训练一个鉴别器，直接拟合二者的比值：
+
+事实证明，我们不需要分别知道 \(P_{\mathrm{test}}\) 和 \(P_{\mathrm{train}}\) 的值，只需要知道它们的比率 \(\beta(\mathbf{x})\)。
+
+训练一个鉴别器 \(f(\mathbf{x})\)，让它区分样本来自 \(P_{\mathrm{test}}\)（标签 1）还是来自 \(P_{\mathrm{train}}\)（标签 0）。鉴别器为了最小化自己的分类损失，必须隐式地学习到这两个分布的相对密度。若鉴别器输出：
+
+\[
+f(\mathbf{x})=P(z=1\mid\mathbf{x})
+\]
+
+则通过贝叶斯公式可以直接转换成所需的比率：
+
+\[
+\beta(\mathbf{x})
+=\frac{P(\mathbf{x}\mid z=1)}{P(\mathbf{x}\mid z=0)}
+\propto\frac{P(z=1\mid\mathbf{x})}{P(z=0\mid\mathbf{x})}
+=\frac{f(\mathbf{x})}{1-f(\mathbf{x})}
+\]
+
+这里鉴别器训练时用训练集和测试集的等量数据，保证p(z=1)=p(z=0).
+
+例如，用卡通图片为主的数据集训练主模型，测试集以现实环境中的图片为主，为了增强泛化性，运用鉴别器，对于训练集中偶然出现的真实环境图片，会认为它高概率来自测试集，从而给它赋予高权重，使得测试集训练时增强对现实的泛化能力，避免严重偏移为一个卡通图像识别模型。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  对于标签偏移：计算``混淆矩阵''C
+\end{enumerate}
+
+考虑医院的 AI 诊断模型：
+
+\begin{itemize}
+\tightlist
+\item
+  类别 \(y\)：3 个类别，\(\{0:\mathcjk{健康},1:\mathcjk{普通感冒},2:\mathcjk{流感}\}\)。
+\item
+  特征 \(\mathbf{x}\)：症状，如发烧、咳嗽、喉咙痛等。
+\item
+  标签偏移假设：\(P(\mathbf{x}\mid y)\) 不变，即``流感''的症状在夏天和冬天是一样的。
+\end{itemize}
+
+训练集来自夏天：
+
+\begin{itemize}
+\tightlist
+\item
+  流行度 \(P_{\mathrm{train}}(y)\)：\(\{0:\mathcjk{健康 }80\%,1:\mathcjk{感冒 }19\%,2:\mathcjk{流感 }1\%\}\)。
+\item
+  模型会学到：``流感''极其罕见，因此非常不愿意预测``流感''。
+\end{itemize}
+
+测试集部署在冬天：
+
+\begin{itemize}
+\tightlist
+\item
+  未知的真实流行度 \(P_{\mathrm{test}}(y)\)：\(\{??,??,??\}\)。
+\item
+  我们猜``流感''的比例会大大增加。
+\end{itemize}
+
+模型的缺陷：由于它是在 \(P_{\mathrm{train}}\) 上训练的，它天生具有一种偏见，即认为``流感''的先验概率只有 1\%。在冬天使用时，它会系统性地低估``流感''的发生率，并把很多``流感''病人错判为``普通感冒''。
+
+为解决这个问题，我们将数据集（不包括测试集）分为训练集和验证集。验证集也来自夏天（P\_train），所以我们拥有真实标签。我们让模型预测这个验证集。然后我们统计它的``犯错模式''，并将结果 normalized（归一化），得到混淆矩阵C：
+
+\(C_{ij}\) 的精确定义为：
+
+\[
+C_{ij}=P_{\mathrm{train}}(\hat{y}=i\mid y=j)
+\]
+
+其中 \(i\) 是行（预测值），\(j\) 是列（真实值）。例如，\(C_{1,2}\) 表示：当一个病人真实得了``流感''（\(y=2\)）时，模型有多大概率会错误地预测他是``普通感冒''（\(\hat{y}=1\)）。
+
+假设计算出的 \(C\) 如下（列是真实标签，行是预测标签）：
+
+\begin{longtable}[]{@{}lrrr@{}}
+\toprule
+预测 ~真实 & 健康 & 感冒 & 流感 \\
+\midrule
+\endhead
+健康 & 0.9 & 0.1 & 0.0 \\
+感冒 & 0.1 & 0.8 & 0.3 \\
+流感 & 0.0 & 0.1 & 0.7 \\
+\bottomrule
+\end{longtable}
+
+这个矩阵中，\(C_{1,2}=0.3\) 表示模型有 30\% 的概率把``流感''错判为``感冒''；\(C_{2,2}=0.7\) 表示模型有 70\% 的概率能正确识别``流感''。
+
+接下来我们把模型已经部署在冬天（测试集）。运行模型，比如看了 1000 个新病人，得到被``污染''的数据：
+
+我们没有这 1000 个病人的真实标签 \(y\)，但可以看到模型的预测 \(\hat{y}\)。简单统计模型预测的百分比，假设模型在 1000 个病人中预测：
+
+\begin{itemize}
+\tightlist
+\item
+  ``健康''（\(\hat{y}=0\)）：200 次。
+\item
+  ``感冒''（\(\hat{y}=1\)）：600 次。
+\item
+  ``流感''（\(\hat{y}=2\)）：200 次。
+\end{itemize}
+
+于是得到平均模型输出向量：
+
+\[
+\mu_{\mathrm{test}}(\hat{y})=[0.2,0.6,0.2]
+\]
+
+注意：我们不认为这是真实的流行度。这个结果被 \(C\) ``污染''了，例如 \(0.6\) 的``感冒''里可能混入了很多被错判的``流感''。
+
+接下来我们运用混淆矩阵和全概率公式，从被``污染''的概率数据中复原真实概率数据：
+
+矩阵形式为：
+
+\[
+\mu_{\mathrm{test}}(\hat{y})=C\cdot P_{\mathrm{test}}(y)
+\]
+
+以``感冒''为例，冬天观测到的平均感冒预测率 \(\mu_{\mathrm{test}}(\hat{y}=1)\) 由三部分组成：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  真实是``健康''（\(j=0\)）且被错判为``感冒''（\(i=1\)）的概率。
+\item
+  真实是``感冒''（\(j=1\)）且被正确判为``感冒''（\(i=1\)）的概率。
+\item
+  真实是``流感''（\(j=2\)）且被错判为``感冒''（\(i=1\)）的概率。
+\end{enumerate}
+
+数学表达为：
+
+\[
+\begin{aligned}
+\mu_{\mathrm{test}}(\hat{y}=1)
+&=P(\hat{y}=1\mid y=0)P(y=0)\\
+&\quad+P(\hat{y}=1\mid y=1)P(y=1)
++P(\hat{y}=1\mid y=2)P(y=2)\\
+&=C_{1,0}\cdot P_{\mathrm{test}}(y=0)
++C_{1,1}\cdot P_{\mathrm{test}}(y=1)
++C_{1,2}\cdot P_{\mathrm{test}}(y=2)
+\end{aligned}
+\]
+
+这正是矩阵 \(C\) 的第二行（\(i=1\)）与真实标签分布向量 \(P_{\mathrm{test}}(y)\) 的点积。该结论对所有 \(i\) 都成立，因此：
+
+\[
+\mu_{\mathrm{test}}(\hat{y})=C\cdot P_{\mathrm{test}}(y)
+\]
+
+只要 \(C\) 可逆，就可以从被污染的预测分布中恢复真实标签分布：
+
+\[
+P_{\mathrm{test}}(y)=C^{-1}\cdot\mu_{\mathrm{test}}(\hat{y})
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  对于缓慢的概念偏移：在线学习（Online Learning）
+\end{enumerate}
+
+如非平稳分布时，不要从头开始训练，而是使用新数据持续更新（微调）现有的模型权重，让模型``跟上''变化。另外，老虎机 (Bandits)是``在线学习''的特例，指的是你的``行动''（预测）是有限的几种选择（例如``拉 1 号杆''或``拉 2 号杆''）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  强化学习
+\end{enumerate}
+
+明确引入了``奖励'' （Reward）。RL 的目标是学习一个策略（如何行动），以最大化长期奖励。
+
+RL 是``鞋子-贷款''问题的真正解： 银行（Agent）做出``发放贷款''（Action）的决策，环境（客户）做出``穿牛津鞋''（State change）的反应，银行最终得到``盈利情况''（Reward）。RL 框架天生就是为了解决这种``反馈循环''而设计的。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-8}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-8}}
+
+\begin{itemize}
+\tightlist
+\item
+  Aston Zhang, Zachary C. Lipton, Mu Li, Alexander J. Smola. (2023). \href{https://zh.d2l.ai/}{《动手学深度学习》}. Cambridge University Press.
+\end{itemize}
+
+\clearpage

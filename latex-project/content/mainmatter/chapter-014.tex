@@ -1,0 +1,1774 @@
+\hypertarget{ux5f3aux5316ux5b66ux4e60ux7684ux5176ux4ed6ux7b97ux6cd5}{%
+\chapter{强化学习的其他算法}\label{ux5f3aux5316ux5b66ux4e60ux7684ux5176ux4ed6ux7b97ux6cd5}}
+
+\hypertarget{ux6a21ux4effux5b66ux4e60}{%
+\section{模仿学习}\label{ux6a21ux4effux5b66ux4e60}}
+
+\hypertarget{ux4e00ux884cux4e3aux514bux9686behavioral-cloning-bc}{%
+\subsection{一、行为克隆（Behavioral Cloning, BC）}\label{ux4e00ux884cux4e3aux514bux9686behavioral-cloning-bc}}
+
+行为克隆是模仿学习中最直观、最简单的形式，其核心思想是将模仿学习问题转化为一个监督学习问题。
+
+\hypertarget{ux4e00ux7b97ux6cd5ux539fux7406}{%
+\subsubsection{（一）算法原理}\label{ux4e00ux7b97ux6cd5ux539fux7406}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  核心思想：行为克隆假设专家数据是独立同分布的样本。它不关心环境的动力学模型，直接建立从状态空间 \(S\) 到动作空间 \(A\) 的映射。
+\item
+  输入与标签：我们将专家轨迹中的状态 \(s_t\) 作为样本输入，将专家在该状态下采取的动作 \(a_t\) 视为标签。
+\item
+  优化目标：目标是训练一个策略网络，使其输出尽可能接近专家的动作。数学上，这等价于最小化在专家数据集 \(\mathcal{B}\) 上的期望损失：
+\end{enumerate}
+
+\[
+\theta^{*}
+=
+\arg\min_\theta
+\mathbb{E}_{(s,a)\sim\mathcal{B}}
+\bigl[
+L(\pi_\theta(s),a)
+\bigr]
+\]
+
+\hypertarget{ux4e8cux5e94ux7528ux4e3bux8981ux7528ux4e8eux8badux7ec3ux521dux671fux8ba9ux6a21ux578bux8badux7ec3ux80fdux66f4ux5febux7a33ux5b9aux5982alphagoux65e9ux671fux5148ux901aux8fc7ux5b66ux4e60ux4ebaux7c7bux5927ux5e08ux68cbux8c31ux8fdbux884cux6a21ux4effux5b66ux4e60ux540eux7eedux518dux8fd0ux7528ux5176ux4ed6ux65b9ux6cd5ux8ba9ux5176ux81eaux4e3bux63a2ux7d22ux65b0ux7b56ux7565}{%
+\subsubsection{（二）应用：主要用于训练初期，让模型训练能更快稳定。如AlphaGo早期先通过学习人类大师棋谱进行模仿学习，后续再运用其他方法让其自主探索新策略。}\label{ux4e8cux5e94ux7528ux4e3bux8981ux7528ux4e8eux8badux7ec3ux521dux671fux8ba9ux6a21ux578bux8badux7ec3ux80fdux66f4ux5febux7a33ux5b9aux5982alphagoux65e9ux671fux5148ux901aux8fc7ux5b66ux4e60ux4ebaux7c7bux5927ux5e08ux68cbux8c31ux8fdbux884cux6a21ux4effux5b66ux4e60ux540eux7eedux518dux8fd0ux7528ux5176ux4ed6ux65b9ux6cd5ux8ba9ux5176ux81eaux4e3bux63a2ux7d22ux65b0ux7b56ux7565}}
+
+\hypertarget{ux4e09ux6838ux5fc3ux7f3aux9677ux8befux5deeux7d2fux79ef}{%
+\subsubsection{（三）核心缺陷：误差累积}\label{ux4e09ux6838ux5fc3ux7f3aux9677ux8befux5deeux7d2fux79ef}}
+
+在训练时，策略网络只见过专家产生的状态分布。然而，在测试（实际推理）时，策略网络不可避免地会产生微小的预测误差。一旦智能体根据有误差的策略采取了动作，它就会进入一个新的状态。这个状态可能稍稍偏离了专家的轨迹分布。由于智能体从未在训练集中见过这种``偏离后的状态''（比如变成了另一个棋局，看起来和原棋局比较像但实际局面相差很大），它不仅无法纠正错误，反而可能做出更离谱的动作。这种误差会随着时间步呈级联放大，导致智能体的轨迹与专家轨迹渐行渐远。
+
+\hypertarget{ux4e8cux751fux6210ux5f0fux5bf9ux6297ux6a21ux4effux5b66ux4e60gailstandford2016}{%
+\subsection{二、生成式对抗模仿学习（GAIL）（Standford，2016）}\label{ux4e8cux751fux6210ux5f0fux5bf9ux6297ux6a21ux4effux5b66ux4e60gailstandford2016}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux539fux7406ux5360ux7528ux5ea6ux91cfux5339ux914d}{%
+\subsubsection{（一）核心原理：占用度量匹配}\label{ux4e00ux6838ux5fc3ux539fux7406ux5360ux7528ux5ea6ux91cfux5339ux914d}}
+
+GAIL 认为，如果一个策略足够好，那么它在环境中产生的状态-动作占用度量（State-Action Occupancy Measure）\(\rho(s,a)\) 应该与专家策略的占用度量 \(\rho_E(s,a)\) 一致。
+
+\begin{itemize}
+\tightlist
+\item
+  占用度量 \(\rho(s,a)\)：可以理解为在长时间运行中，某个特定状态-动作对出现的频率分布。
+\item
+  本质：GAIL 的本质是通过对抗训练，拉近智能体策略产生的分布 \(\rho_\pi\) 和专家分布 \(\rho_E\) 之间的距离，通常使用 Jensen-Shannon 散度。
+\end{itemize}
+
+\hypertarget{ux4e8cux67b6ux6784ux4e0eux6570ux5b66ux63a8ux5bfc}{%
+\subsubsection{（二）架构与数学推导}\label{ux4e8cux67b6ux6784ux4e0eux6570ux5b66ux63a8ux5bfc}}
+
+GAIL 包含两个核心组件，它们进行极大极小博弈。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  判别器（Discriminator）\(D_\omega\)：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  角色：类似于 GAN 中的判别器。它的任务是区分输入的 \((s,a)\) 对究竟是来自专家（Expert）还是智能体（Agent）。
+\item
+  定义：判别器输出 \(D(s,a)\in[0,1]\)。
+\item
+  越近 \(0\)：表示判别器认为这是专家的数据。
+\item
+  越近 \(1\)：表示判别器认为这是智能体的数据。
+\end{itemize}
+
+判别器损失函数为：
+
+\[
+\mathcal{L}(\omega)
+=
+-
+\mathbb{E}_{\pi}
+\bigl[
+\log D_\omega(s,a)
+\bigr]
+-
+\mathbb{E}_{\pi_E}
+\bigl[
+\log(1-D_\omega(s,a))
+\bigr]
+\]
+
+解释：判别器希望最大化区分度。对于智能体产生的 \((s,a)\)，它希望 \(D(s,a)\) 接近 \(1\)；对于专家产生的 \((s,a)\)，它希望 \(D(s,a)\) 接近 \(0\)。上面的负号是为了转化为最小化问题。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  生成器或策略（Generator/Policy）\(\pi\)：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  角色：智能体本身。它的任务是生成能够``骗过''判别器的轨迹。
+\item
+  训练方式：GAIL 将判别器的输出转化为强化学习中的奖励信号（Reward Signal）。
+\item
+  奖励函数：
+\end{itemize}
+
+\[
+r(s,a)
+=
+-
+\log D_\omega(s,a)
+\]
+
+解释：
+
+\begin{itemize}
+\tightlist
+\item
+  如果判别器认为数据来自智能体，即 \(D\approx 1\)，则 \(\log D\approx 0\)，奖励 \(r\approx 0\)，收益较低。
+\item
+  如果智能体成功骗过判别器，即 \(D\approx 0\)，则 \(\log D\) 是很大的负数，奖励 \(r=-\log D\) 变为很大的正数。
+\item
+  因此，智能体通过最大化这个奖励，被迫生成那些让判别器误以为是专家行为的 \((s,a)\)。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  算法流程与优势：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  交互式学习：与 BC 不同，GAIL 要求智能体必须与环境进行交互，采样状态，然后利用 PPO 或 TRPO 等强化学习算法来更新策略。
+\item
+  解决复合误差：因为 GAIL 匹配的是整个分布（Occupancy Measure），而不是单步误差。即使智能体偏离了轨迹，判别器也会给出相应的反馈，促使其回到正确的分布上来。这使得 GAIL 具有长期一致性，鲁棒性远强于 BC。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-60}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-60}}
+
+\begin{itemize}
+\tightlist
+\item
+  \href{https://hrl.boyuai.com/}{《动手学强化学习》}.
+\item
+  Ho, J., \& Ermon, S. (2016). \href{https://arxiv.org/abs/1606.03476}{Generative Adversarial Imitation Learning}. NeurIPS 2016.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux57faux4e8eux6a21ux578bux7684ux5f3aux5316ux5b66ux4e60}{%
+\section{基于模型的强化学习}\label{ux57faux4e8eux6a21ux578bux7684ux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux6a21ux578bux9884ux6d4bux63a7ux5236model-predictive-control-mpc}{%
+\subsection{一、模型预测控制（Model Predictive Control, MPC）}\label{ux4e00ux6a21ux578bux9884ux6d4bux63a7ux5236model-predictive-control-mpc}}
+
+以下棋为例。在无模型（Model-Free）的算法中，我们看到当前棋局，直接凭经验落子（策略网络直接输出动作）。而MPC则是：看到当前棋局，我在脑海里（环境模型）推演：如果我下A处，对手可能下B，那我再下C\ldots\ldots 推演H步之后，发现局势大好，于是我决定现在的第一步就走A。
+
+MPC 的核心是滚动时域控制（receding horizon control）：在当前状态 \(s_t\) 下，先用环境模型规划未来 \(H\) 步的动作序列，
+
+\[
+a^*_{t:t+H-1}=\arg\max_{a_{t:t+H-1}}\sum_{\tau=t}^{t+H-1}r(s_\tau,a_\tau),
+\quad s_{\tau+1}=f(s_\tau,a_\tau)
+\]
+
+虽然优化的是一整段动作序列，但真实执行时只执行第一步 \(a_t^*\)。执行后环境到达新状态 \(s_{t+1}\)，算法再从新状态重新规划未来 \(H\) 步。也就是说，MPC 一边执行一边重算计划，避免一次性相信很长的模型预测。
+
+由于动作空间可能是连续且高维的，直接用数学公式解出上面的argmax很难。为此，我们可以采取如下操作：
+
+\hypertarget{ux4e00ux6253ux9776ux6cd5}{%
+\subsubsection{（一）打靶法}\label{ux4e00ux6253ux9776ux6cd5}}
+
+简单粗暴，随机生成1000条动作轨迹，扔进模型里跑一下，看哪条轨迹得分最高，就选哪条。在高维空间中，随机乱猜很难猜中最优解，效率极低。
+
+\hypertarget{ux4e8cux4ea4ux53c9ux71b5ux65b9ux6cd5cross-entropy-method-cem}{%
+\subsubsection{（二）交叉熵方法（Cross-Entropy Method, CEM）}\label{ux4e8cux4ea4ux53c9ux71b5ux65b9ux6cd5cross-entropy-method-cem}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  核心步骤
+\end{enumerate}
+
+（1）初始化：假设动作服从某个分布（比如正态分布）。
+
+（2）采样：从这个分布里采样一批动作序列。
+
+（3）评估：用模型评估这些序列的得分。
+
+（4）筛选精英：挑出得分最高的那些序列（比如前10\%）。
+
+（5）进化：用这些精英序列的统计特征（均值和方差）来更新分布的参数。让分布的中心向高分区域移动，并缩小方差（更确信）。
+
+（6）迭代：重复上述过程，直到分布收敛。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  和交叉熵的关系
+\end{enumerate}
+
+CEM是一种进化算法，它从当前分布中生成一堆样本，挑出表现最好的精英样本，它认为：``这前10\%的精英样本就是真理，就是正确答案。''于是它倾向于更新分布参数（比如高斯分布的u和sigma），使得这个分布生成这些``精英样本''的概率最大，即我们让当前的分布去拟合精英样本的分布。衡量这两个分布差异的指标就是交叉熵，推导如下：
+
+设 \(z\) 表示一条候选动作序列，当前采样分布为 \(Q(z;\theta)\)。CEM 的目标不是直接求一个动作，而是找到新的分布参数 \(\theta_{\mathrm{new}}\)，使 \(Q(z;\theta_{\mathrm{new}})\) 更接近精英样本所代表的理想分布 \(P_{\mathrm{ideal}}(z)\)。
+
+用 KL 散度衡量两者差异：
+
+\[
+D_{\mathrm{KL}}(P_{\mathrm{ideal}}\Vert Q)
+=\sum_z P_{\mathrm{ideal}}(z)\log\frac{P_{\mathrm{ideal}}(z)}{Q(z;\theta)}
+\]
+
+展开可得：
+
+\[
+D_{\mathrm{KL}}(P_{\mathrm{ideal}}\Vert Q)
+=\sum_z P_{\mathrm{ideal}}(z)\log P_{\mathrm{ideal}}(z)
+-\sum_z P_{\mathrm{ideal}}(z)\log Q(z;\theta)
+\]
+
+第一项只与 \(P_{\mathrm{ideal}}\) 有关，和 \(\theta\) 无关。因此，最小化 KL 散度等价于最小化交叉熵项：
+
+\[
+\arg\min_\theta D_{\mathrm{KL}}(P_{\mathrm{ideal}}\Vert Q)
+\Longleftrightarrow
+\arg\min_\theta\left(-\sum_z P_{\mathrm{ideal}}(z)\log Q(z;\theta)\right)
+\]
+
+如果把理想分布理解为只在精英样本上有质量的经验分布，上式就等价于最大化精英样本在当前分布下的似然：
+
+\[
+\arg\max_\theta\sum_{z\in\mathrm{Elites}}\log Q(z;\theta)
+\]
+
+当 \(Q\) 取高斯分布时，这个最大似然估计有解析更新式：新的均值取精英样本的均值，新的方差取精英样本的方差。因此，CEM 的每轮更新就是``用高分样本重新估计采样分布''，使下一轮采样更集中在高分区域。
+
+\hypertarget{ux4e8cpetsux7b97ux6cd5probabilistic-ensembles-with-trajectory-samplinguc-berkeleyneurips-2018}{%
+\subsection{二、PETS算法（Probabilistic Ensembles with Trajectory Sampling）（UC Berkeley，NeurIPS 2018）}\label{ux4e8cpetsux7b97ux6cd5probabilistic-ensembles-with-trajectory-samplinguc-berkeleyneurips-2018}}
+
+模型是不完美的。如果环境模型预测错了，MPC就会根据错误的信息规划出错误的策略。PETS引入了概率（Probabilistic）和集成（Ensembles）来量化这种风险。
+
+\hypertarget{ux4e00ux4e24ux79cdux4e0dux786eux5b9aux6027}{%
+\subsubsection{（一）两种不确定性}\label{ux4e00ux4e24ux79cdux4e0dux786eux5b9aux6027}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  偶然不确定性（aleatoric uncertainty）
+\end{enumerate}
+
+这种不确定性来自环境本身的随机性，即使模型已经学得很好也无法完全消除。PETS 的环境模型不只输出一个确定的下一个状态，而是输出高斯分布的均值和方差：
+
+\[
+p_\theta(s_{t+1}\mid s_t,a_t)=N(\mu_\theta(s_t,a_t),\sigma_\theta^2(s_t,a_t))
+\]
+
+对应的负对数似然损失可写为：
+
+\[
+\mathcal L(\theta)=\sum_{i=1}^{N}-\log p_\theta(s_{t+1}^{(i)}\mid s_t^{(i)},a_t^{(i)})
+\]
+
+若展开为高斯形式，并省略常数项，则单个样本的损失为：
+
+\[
+\mathrm{loss}
+=\frac{(s_{t+1}-\mu_\theta(s_t,a_t))^2}{2\sigma_\theta^2(s_t,a_t)}
++\log\sigma_\theta(s_t,a_t)
+\]
+
+这里的核心仍是：PETS 用高斯输出的均值和方差来建模偶然不确定性。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  认知不确定性（epistemic uncertainty）
+\end{enumerate}
+
+这种不确定性来自模型知识不足，数据越少、模型越没有见过类似状态动作对，不确定性越高。PETS 用 ensemble 来刻画它：
+
+\begin{itemize}
+\tightlist
+\item
+  同时训练多个环境模型，例如 \(M_1,\ldots,M_5\)。
+\item
+  每个模型可以有不同初始化，并通过 bootstrap 看到略有差异的数据子集。
+\item
+  如果多个模型对同一动作序列的预测差异很大，说明模型在该区域知识不足。
+\item
+  如果多个模型预测相近，说明该区域更可信。
+\end{itemize}
+
+\hypertarget{ux4e8cpetsux7684ux7b56ux7565}{%
+\subsubsection{（二）PETS的策略}\label{ux4e8cpetsux7684ux7b56ux7565}}
+
+PETS 先收集真实交互数据集：
+
+\[
+\mathcal D=\{(s,a,r,s')\}
+\]
+
+然后初始化多个概率环境模型：
+
+\[
+f_{\theta_1},f_{\theta_2},\ldots,f_{\theta_5}
+\]
+
+每个模型输入 \((s,a)\)，输出下一个状态或状态差分的高斯分布参数 \(N(\mu,\sigma)\)。训练时通过 bootstrap 让不同模型看到不同的数据子集，从而形成 ensemble。
+
+后续第二、三阶段为利用模型的输出进行前向计算。若干次前向计算后，我们会用收集到的数据训练环境模型，损失函数见后面（三）部分所示。
+
+规划时，PETS 将 MPC 与 CEM 结合：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化动作序列分布。
+\item
+  从该分布中采样 \(N\) 条候选动作序列。
+\item
+  对每条候选动作序列生成 \(P\) 个粒子，例如 \(P=20\)。
+\item
+  这些粒子的初始状态都等于当前真实观测状态 \(s_0\)。
+\end{enumerate}
+
+轨迹采样（trajectory sampling）的关键是让粒子经过不同的环境模型。假设有 5 个模型 \(M_1,\ldots,M_5\)，20 个粒子可以按组分配给模型，例如粒子 1-4 使用 \(M_1\)，粒子 5-8 使用 \(M_2\)，依此类推。
+
+每个粒子沿着候选动作序列向前模拟若干步，并累计奖励。对同一条候选动作序列，PETS 会把 20 个粒子的奖励取平均，作为该动作序列的评分 \(A_i\)：
+
+\[
+A_i=\frac{1}{P}\sum_{p=1}^{P}\sum_{\tau=t}^{t+H-1}r(s_{\tau}^{(p)},a_{\tau})
+\]
+
+随后执行 CEM 式的精英筛选和分布更新：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  按 \(A_i\) 对候选动作序列排序。
+\item
+  选取得分最高的前 10\% 作为精英样本。
+\item
+  用精英动作序列重新估计采样分布的均值和方差。
+\item
+  重复若干轮采样、评估、筛选和更新。
+\item
+  最终取更新后分布均值对应的第一步动作作为 \(a^*\)。
+\end{enumerate}
+
+第二、三阶段是前向计算，也就是``走一步''。走一定步数之后，模型会用这些步数采集到的数据训练环境模型。
+
+执行阶段采用 receding horizon 的方式：只执行 \(a^*\) 的第一步，观察真实环境得到下一个状态 \(s_{t+1}\)，把新转移加入 \(\mathcal D\)，然后从新的真实状态重新规划或周期性更新模型。
+
+从直观上看，PETS 像一次蒙特卡洛模拟：它为同一条候选动作序列构造多个``平行推演''。如果大多数模型和粒子都认为这条动作序列好，它才会得到高评分；如果只有单个模型乐观，其余模型并不认可，平均得分就会被拉低。
+
+也就是说，对那些总体得分较高且各环境模型之间没有较大分歧的动作，模型才会给它们较高的A\_i值，使其被选进前10％``精英''中，被采用进真实动作分布。这种策略对一些容错率低的环境尤其有用。
+
+\hypertarget{ux4e09ux73afux5883ux6a21ux578bm1-m5ux7684ux635fux5931ux51fdux6570}{%
+\subsubsection{（三）环境模型（M1-M5）的损失函数}\label{ux4e09ux73afux5883ux6a21ux578bm1-m5ux7684ux635fux5931ux51fdux6570}}
+
+本质上，这是在强制用高斯分布拟合的前提下，取预测正确概率的最大似然。
+
+设模型输入为 \(x=(s_t,a_t)\)，预测目标为 \(y=s_{t+1}\) 或状态差分。PETS 用高斯分布建模：
+
+\[
+p_\theta(y\mid x)=N(\mu_\theta(x),\sigma_\theta^2(x))
+\]
+
+最大化似然等价于最小化负对数似然。高斯概率密度为：
+
+\[
+p_\theta(y\mid x)=\frac{1}{\sqrt{2\pi}\sigma_\theta(x)}
+\exp\left(-\frac{(y-\mu_\theta(x))^2}{2\sigma_\theta^2(x)}\right)
+\]
+
+去掉常数项后，损失为：
+
+\[
+L(\theta)=\frac{(y-\mu_\theta(x))^2}{2\sigma_\theta^2(x)}+\log\sigma_\theta(x)
+\]
+
+其中第一项是加权均方误差（weighted MSE）：
+
+\[
+\frac{(y-\mu_\theta(x))^2}{2\sigma_\theta^2(x)}
+\]
+
+当模型认为某个区域不确定性很高，即 \(\sigma_\theta^2(x)\) 较大时，同样大小的预测误差会受到较小惩罚；当模型很自信，即 \(\sigma_\theta^2(x)\) 较小时，预测错误会受到更大惩罚。
+
+第二项是 uncertainty penalty：
+
+\[
+\log\sigma_\theta(x)
+\]
+
+它会惩罚过大的不确定性，防止模型把 \(\sigma_\theta(x)\) 无限增大来逃避 weighted MSE。整体效果是：难预测区域可以适当增大方差，但要付出 \(\log\sigma\) 惩罚；易预测区域则应减小方差，提高预测置信度并降低整体损失。
+
+\hypertarget{ux4e09mbpoux7b97ux6cd5model-based-policy-optimization}{%
+\subsection{三、MBPO算法（Model-Based Policy Optimization）}\label{ux4e09mbpoux7b97ux6cd5model-based-policy-optimization}}
+
+MBPO结合了Model-Based的高数据利用效率和Model-Free（如SAC）的高性能。
+
+\hypertarget{ux4e00ux57faux4e8eux6a21ux578bux65b9ux6cd5ux7684ux590dux5408ux8befux5deeux95eeux9898}{%
+\subsubsection{（一）基于模型方法的复合误差问题}\label{ux4e00ux57faux4e8eux6a21ux578bux65b9ux6cd5ux7684ux590dux5408ux8befux5deeux95eeux9898}}
+
+纯粹的 Model-Based 方法（如PETS）完全依赖模型推演。如果模型第一步预测偏了 1\%，第二步就是基于偏了的数据再预测，误差会指数级累积。推演越长，结果越不可信。
+
+\hypertarget{ux4e8cmbpoux7684ux521bux65b0ux5206ux652fux63a8ux6f14}{%
+\subsubsection{（二）MBPO的创新：分支推演}\label{ux4e8cmbpoux7684ux521bux65b0ux5206ux652fux63a8ux6f14}}
+
+传统思路是从s\_0开始一直用模型推演到底，但MBPO并不如此。它的步骤如下：
+
+MBPO 的分支推演从真实经验池中的状态出发：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  真实环境产生转移 \((s,a,r,s')\)，存入真实经验池 \(\mathcal D_{\mathrm{env}}\)。
+\item
+  从 \(\mathcal D_{\mathrm{env}}\) 采样真实状态 \(s_{\mathrm{real}}\)。
+\item
+  用当前策略在 \(s_{\mathrm{real}}\) 上生成动作。
+\item
+  用学习到的环境模型生成短 rollout。
+\item
+  将模型生成的转移写入模型经验池 \(\mathcal D_{\mathrm{model}}\)。
+\item
+  用真实经验池和模型经验池的混合数据训练无模型策略，例如 SAC。
+\end{enumerate}
+
+每次推演都从``真实状态''出发，好比每走几步就看一眼地图（真实数据），消除了累积误差。虽然只推演几步，但可以生成成千上万条这样的短数据。对于SAC这样的算法来说，数据量越大，训练越稳。MBPO证明了，只要模型推演的步数k控制得当（平衡了模型误差和数据增益），基于模型的方法可以比无模型方法快很多倍（采样效率高），且最终效果一样好。
+
+\hypertarget{ux4e09mbpoux7684ux5de5ux4f5cux6d41}{%
+\subsubsection{（三）MBPO的工作流}\label{ux4e09mbpoux7684ux5de5ux4f5cux6d41}}
+
+初始化与预热
+
+初始化阶段包括：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化 Actor 和 Critic，也就是 SAC 的策略网络与价值网络。
+\item
+  初始化 ensemble dynamics model。
+\item
+  初始化真实经验池 \(\mathcal D_{\mathrm{env}}\) 和模型经验池 \(\mathcal D_{\mathrm{model}}\)。
+\item
+  用随机策略 warm-up 若干步，把真实交互数据先填入 \(\mathcal D_{\mathrm{env}}\)。
+\end{enumerate}
+
+大循环：
+
+总的来说，MBPO继承了PETS的集成环境模型（M1-M5）以及其更新过程（即第二阶段）。但MBPO没有采用PETS那种直接用环境模型决定策略的方式，而是像Dyna-Q那样，取一个过去出现过的真实状态，由当前策略生成动作，再让环境模型生成辅助训练数据（即第三阶段），主算法利用真实数据和模型数据进行更新（即第四阶段）。
+
+第一阶段：真实交互
+
+当前策略与真实环境交互一步：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  在真实状态 \(s_{\mathrm{real}}\) 下，由当前策略采样动作 \(a_t\)。
+\item
+  真实环境返回奖励 \(r_t\) 和下一个真实状态 \(s'_{\mathrm{real}}\)。
+\item
+  将 \((s_{\mathrm{real}},a_t,r_t,s'_{\mathrm{real}})\) 写入真实经验池 \(\mathcal D_{\mathrm{env}}\)。
+\item
+  回到主循环，继续积累真实数据。
+\end{enumerate}
+
+第二阶段：环境模型更新（把最新现实输入给环境模型，类似PETS，对集成环境模型M1-M5进行更新，损失函数也和PETS完全相同）
+
+环境模型更新阶段：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  从真实经验池 \(\mathcal D_{\mathrm{env}}\) 采样 mini-batch。
+\item
+  用最大似然或负对数似然训练集成模型。
+\item
+  模型输入为 \((s,a)\)，目标是预测下一个状态和奖励的分布 \(N(\mu,\sigma)\)。
+\item
+  不必每一步都完整重训模型，实际实现中可以每隔一定真实交互步数训练一次，例如每 250 步更新一次。
+\end{enumerate}
+
+第三阶段：分支推演（让环境模型输出推演数据，喂给SAC）
+
+分支推演阶段：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  从 \(\mathcal D_{\mathrm{env}}\) 采样真实状态 \(s_{\mathrm{real}}\) 作为 rollout 起点。
+\item
+  只做短期推演 \(k\) 步，例如 \(k=1\) 或较小的整数。
+\item
+  每一步先由当前策略给出动作，再由 ensemble model 预测下一状态和奖励。
+\item
+  将模型生成的合成转移写入 \(\mathcal D_{\mathrm{model}}\)。
+\item
+  使用短 rollout 是为了控制模型误差累积，同时仍然大量增加可用于策略训练的数据。
+\end{enumerate}
+
+这一阶段与Dyna-Q不同的是，Dyna-Q直接取了(s\_t,a\_t)，仅仅预测s\_t+1,r\_t。而这里只取一个s\_real，后面都根据当前策略推演。
+
+第四阶段：策略优化（利用真实数据和环境模型数据，训练SAC）
+
+策略优化阶段训练 SAC：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  每个训练 batch 同时从 \(\mathcal D_{\mathrm{env}}\) 和 \(\mathcal D_{\mathrm{model}}\) 采样。
+\item
+  模型数据占比可以较高，例如 95\%，真实数据用于校准模型生成数据的偏差。
+\item
+  每个真实环境步之后，可以执行多次 SAC 更新，例如 20 次。
+\item
+  这样既利用模型数据提升样本效率，又保留 SAC 在连续控制任务中的稳定优化能力。
+\end{enumerate}
+
+这里的第四阶段类似于把Dyna-Q的``利用上次真实交互更新''和``利用环境更新''合为一体，更好地并行计算。
+
+伪代码：
+
+初始化;
+
+先随机玩 5000 步存入真实池;
+
+for epoch in range(total\_epochs):
+
+--- 步骤 A: 真实交互 ---
+
+根据SAC的策略执行一步交互;
+
+存入真实经验池;
+
+--- 步骤 B: 训练/更新模型 ---
+
+if epoch \% 250 == 0: \# 每 250 步真实交互，重新训练一次模型
+
+使用真实数据训练模型，以最小化Negative Log-Likelihood;
+
+--- 步骤 C: 分支推演 (数据生成) ---
+
+从真实池中选取起点;
+
+for i in range(k\_steps): \# k步推演
+
+由当前策略产生动作，随机选一个模型网络预测下一个状态和奖励;
+
+存入模型经验池;
+
+状态更新，准备下一步推演;
+
+--- 步骤 D: 策略更新 (SAC) ---
+
+for \_ in range(G\_updates): \# 环境每走1步，SAC训练G次(如 20 次)
+
+混合采样(模型数据占比通常很高);
+
+更新SAC参数;
+
+\hypertarget{ux53c2ux8003ux6587ux732e-61}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-61}}
+
+\begin{itemize}
+\tightlist
+\item
+  \href{https://hrl.boyuai.com/}{《动手学强化学习》}.
+\item
+  Chua, K., Calandra, R., McAllister, R., \& Levine, S. (2018). \href{https://arxiv.org/abs/1805.12114}{Deep Reinforcement Learning in a Handful of Trials using Probabilistic Dynamics Models}. NeurIPS 2018.
+\item
+  Janner, M., Fu, J., Zhang, M., \& Levine, S. (2019). \href{https://arxiv.org/abs/1906.08253}{When to Trust Your Model: Model-Based Policy Optimization}. NeurIPS 2019.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux79bbux7ebfux5f3aux5316ux5b66ux4e60}{%
+\section{离线强化学习}\label{ux79bbux7ebfux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux79bbux7ebfux5f3aux5316ux5b66ux4e60ux7684ux5b9aux4e49ux548cux4e3bux8981ux65b9ux6cd5}{%
+\subsection{一、离线强化学习的定义和主要方法}\label{ux4e00ux79bbux7ebfux5f3aux5316ux5b66ux4e60ux7684ux5b9aux4e49ux548cux4e3bux8981ux65b9ux6cd5}}
+
+离线强化学习的核心在于：智能体不与环境交互，仅从已收集的静态数据集（Experience Replay Buffer）中学习策略。这解决了现实场景（如自动驾驶、医疗、推荐系统）中在线试错成本过高或反馈滞后的问题。
+
+在在线策略（On-policy）或离线策略（Off-policy）算法中，智能体可以通过交互修正误差。但在纯离线设定下，直接使用传统 Off-policy 算法（如DDPG）会失败，因为数据集中状态-动作对 \((s,a)\) 的分布与当前策略 \(\pi\) 产生的分布不匹配，价值函数 \(Q(s,a)\) 会对数据集中未出现的动作（Out-of-Distribution, OOD）给出错误的高估值。由于智能体无法去环境验证，这个错误会不断累积，导致策略失效。
+
+为了解决这个问题，主要有两种思路：限制策略选择（如BCQ）和 限制价值函数（如CQL）。
+
+\hypertarget{ux4e8cux6279ux91cfux9650ux5236q-learningbcq}{%
+\subsection{二、批量限制Q-learning（BCQ）}\label{ux4e8cux6279ux91cfux9650ux5236q-learningbcq}}
+
+BCQ的核心思想是：为了解决``外推误差'' (Extrapolation Error)，我们将策略限制在离线数据集（Batch）的分布范围内，并在该范围内寻找最优动作。
+
+\hypertarget{ux4e00ux6a21ux578bux7ec4ux6210}{%
+\subsubsection{（一）模型组成}\label{ux4e00ux6a21ux578bux7ec4ux6210}}
+
+BCQ主要由三类网络组成：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Q网络（Critic）：估计动作价值\(Q_\theta(s,a)\)。实际实现中通常使用两个Q网络\(Q_{\theta_1}(s,a)\)和\(Q_{\theta_2}(s,a)\)，用较保守的组合方式减轻Q值过估计。
+\item
+  条件VAE：用于学习离线数据集中状态\(s\)下可能出现的动作分布，近似行为策略\(P_{\mathcal B}(a \mid s)\)。它由编码器\(E_\omega(s,a)\)和解码器\(D_\omega(s,z)\)组成。
+\item
+  扰动网络：记为\(\xi_\phi(s,a)\)。它接收VAE生成的候选动作，在很小范围内做微调，使动作既不远离数据分布，又能获得更高的\(Q\)值。
+\end{enumerate}
+
+\hypertarget{ux4e8cux5de5ux4f5cux6d41}{%
+\subsubsection{（二）工作流}\label{ux4e8cux5de5ux4f5cux6d41}}
+
+\hypertarget{ux8badux7ec3-vae}{%
+\paragraph{1. 训练 VAE}\label{ux8badux7ec3-vae}}
+
+第一步是训练VAE，这是BCQ限制动作范围的基础。
+
+\begin{itemize}
+\tightlist
+\item
+  训练数据来自离线 Buffer 中的真实 \((s,a)\) 对。
+\item
+  VAE 学习的是``在状态 \(s\) 下，数据集中常见动作 \(a\) 长什么样''。
+\item
+  编码器根据 \((s,a)\) 生成潜变量分布，解码器再根据 \((s,z)\) 重构动作 \(\hat{a}\)。
+\item
+  训练完成后，给定新状态 \(s\) 并采样不同 \(z\)，解码器就能生成一批接近数据分布的候选动作。
+\end{itemize}
+
+具体训练方式见后文。
+
+\hypertarget{ux8ba1ux7b97ux76eeux6807-q-ux503c}{%
+\paragraph{2. 计算目标 Q 值}\label{ux8ba1ux7b97ux76eeux6807-q-ux503c}}
+
+在 Q-learning 中，目标 \(Q\) 值为``奖励 + 下一状态 \(s'\) 的 \(Q\) 值''的最大值。这里的难题是怎么估计下一状态 \(s'\) 的 \(Q\) 值。
+
+BCQ不直接在所有可能动作上计算\(\max_a Q(s',a)\)，因为这会选到离线数据集之外的OOD动作。它改为只在VAE生成的候选动作中选最大值：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  对下一状态\(s'\)，从标准正态分布采样\(n\)个潜变量\(z_i \sim \mathcal{N}(0,I)\)。
+\item
+  用目标VAE生成候选动作\(a_i = D_{\omega'}(s',z_i)\)。
+\item
+  用目标扰动网络做小幅修正：
+\end{enumerate}
+
+\[
+\tilde a_i = a_i + \xi_{\phi'}(s',a_i)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  在这些候选动作中选择目标Q值最大的动作。常见的BCQ目标写作：
+\end{enumerate}
+
+\[
+y = r + \gamma \max_i \bigl[
+\lambda \min_{j=1,2} Q_{\theta'_j}(s', \tilde a_i)
++ (1-\lambda) \max_{j=1,2} Q_{\theta'_j}(s', \tilde a_i)
+\bigr]
+\]
+
+其中 \(\lambda\) 控制目标值的保守程度，\(\theta'_j\)、\(\omega'\) 和 \(\phi'\) 表示目标网络参数。
+
+\hypertarget{ux66f4ux65b0-q-ux7f51ux7edc}{%
+\paragraph{3. 更新 Q 网络}\label{ux66f4ux65b0-q-ux7f51ux7edc}}
+
+Q 网络按标准 TD 误差更新，使当前 \(Q\) 值接近目标值 \(y\)：
+
+\[
+L_Q(\theta)=\mathbb{E}_{(s,a,r,s')\sim\mathcal B}
+[(Q_\theta(s,a)-y)^{2}]
+\]
+
+若使用双 \(Q\) 网络，则分别最小化 \(Q_{\theta_1}\) 和 \(Q_{\theta_2}\) 对应的均方误差。
+
+\hypertarget{ux66f4ux65b0ux6270ux52a8ux7f51ux7edcux89c1ux540eux6587}{%
+\paragraph{4. 更新扰动网络（见后文）}\label{ux66f4ux65b0ux6270ux52a8ux7f51ux7edcux89c1ux540eux6587}}
+
+\hypertarget{ux4e09vaeux7684ux8badux7ec3}{%
+\subsubsection{（三）VAE的训练}\label{ux4e09vaeux7684ux8badux7ec3}}
+
+VAE训练包含编码、重参数化、解码和损失优化四步：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  编码器输入\((s,a)\)，输出潜变量分布参数\(\mu_\omega(s,a)\)和\(\sigma_\omega(s,a)\)。
+\item
+  通过重参数化采样潜变量：
+\end{enumerate}
+
+\[
+\epsilon \sim \mathcal{N}(0,I), \qquad z=\mu_\omega(s,a)+\sigma_\omega(s,a)\odot\epsilon
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  解码器输入\((s,z)\)，输出重构动作：
+\end{enumerate}
+
+\[
+\hat a = D_\omega(s,z)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  损失函数由动作重构误差和KL散度正则项组成：
+\end{enumerate}
+
+\[
+L_{\mathrm{VAE}}
+=\mathbb{E}[\lVert a-D_\omega(s,z)\rVert^{2}]
++ D_{\mathrm{KL}}(q_\omega(z\mid s,a)\Vert \mathcal{N}(0,I))
+\]
+
+重构误差让解码器能生成数据集中出现过的动作，KL正则让潜变量空间接近标准正态分布，便于测试时直接从\(\mathcal{N}(0,I)\)采样。
+
+\hypertarget{ux56dbux4e3aux4ec0ux4e48ux8981ux7528vaeux800cux4e0dux80fdux7528ux56deux5f52ux4ea4ux53c9ux71b5ux7b49ux65b9ux5f0f}{%
+\subsubsection{（四）为什么要用VAE，而不能用回归、交叉熵等方式？}\label{ux56dbux4e3aux4ec0ux4e48ux8981ux7528vaeux800cux4e0dux80fdux7528ux56deux5f52ux4ea4ux53c9ux71b5ux7b49ux65b9ux5f0f}}
+
+\hypertarget{ux56deux5f52ux7684ux95eeux9898}{%
+\paragraph{1. 回归的问题}\label{ux56deux5f52ux7684ux95eeux9898}}
+
+普通回归网络通常学习确定性映射 \(a=\pi(s)\)。如果同一个状态 \(s\) 下存在多个合理动作，回归会倾向输出这些动作的平均值，而这个平均动作未必合理。
+
+例如在十字路口导航中，同一状态 \(s\) 下历史数据可能包含左转 \(a_1=-1\) 和右转 \(a_2=+1\)，二者都能避障。若用确定性网络 \(\mathrm{Net}(s)\) 最小化均方误差：
+
+\[
+Loss=(Net(s)-(-1))^{2}+(Net(s)-(+1))^{2}
+\]
+
+最优输出会接近 \(a=0\)，也就是直行。直行动作可能正好是危险动作。这个例子说明：多峰动作分布的均值可能落在低概率甚至错误的区域。
+
+\hypertarget{ux4ea4ux53c9ux71b5ux7684ux95eeux9898}{%
+\paragraph{2. 交叉熵的问题}\label{ux4ea4ux53c9ux71b5ux7684ux95eeux9898}}
+
+交叉熵适合离散动作分类，但连续控制动作不能直接用一个有限类别表示。若强行离散化，类别数会迅速爆炸。
+
+例如机械臂每个关节角度位于 \([-180^{\circ},180^{\circ}]\)，如果每个关节切成100个 bin，7个关节的组合类别数就是：
+
+\[
+100^{7} = 100000000000000
+\]
+
+这意味着 Softmax 输出层需要覆盖极大的组合动作空间，计算和泛化都很困难。因此，对连续、多模态动作分布，VAE 比简单回归或交叉熵分类更合适。
+
+\hypertarget{vae-ux7684ux597dux5904}{%
+\paragraph{3. VAE 的好处}\label{vae-ux7684ux597dux5904}}
+
+把 VAE 的编码器和解码器合起来，实际上就是一个``模仿器''，其能有效在给定 \(a\) 的情况下，``模仿''出一批相似的 \(a\)，无论 \(a\) 的分布如何。
+
+VAE 通过潜变量 \(z\) 表达同一状态下的多种可能动作。在 BCQ 使用的条件 VAE 中，映射不是单纯的 \(s\to a\)，而是 \((s,z)\to a\)。
+
+\begin{itemize}
+\tightlist
+\item
+  训练阶段，编码器看到完整的 \((s,a)\)。如果同一状态下有``左转''和``右转''两种动作，编码器可以把``状态 + 左转动作''映射到某个 \(z_{\mathrm{left}}\)，把``状态 + 右转动作''映射到另一个 \(z_{\mathrm{right}}\)。
+\item
+  生成阶段，只给定状态 \(s\)，从 \(\mathcal{N}(0,I)\) 采样不同 \(z\)，再交给解码器 \(D_\omega(s,z)\) 生成不同动作。
+\end{itemize}
+
+这里的重点仍是：通过改变潜变量 \(z\)，VAE 可以在同一状态下生成多种不同但都接近数据分布的动作。
+
+继续以上例子，解码器可以把不同潜变量映射回不同动作：
+
+\begin{itemize}
+\tightlist
+\item
+  采样 \(z_1\) 时，\(D_\omega(s,z_1)\) 可能输出 \(a\approx -1\)，对应左转。
+\item
+  采样 \(z_2\) 时，\(D_\omega(s,z_2)\) 可能输出 \(a\approx +1\)，对应右转。
+\end{itemize}
+
+因此，VAE 不是把状态 \(s\) 强行压成一个固定动作，而是在学习条件动作分布 \(P(a\mid s)\)。通过改变 \(z\)，BCQ 可以在同一状态下生成多种``数据中见过或接近见过''的候选动作。
+
+\hypertarget{ux56dbux6270ux52a8ux7f51ux7edcux7684ux66f4ux65b0}{%
+\subsubsection{（四）扰动网络的更新}\label{ux56dbux6270ux52a8ux7f51ux7edcux7684ux66f4ux65b0}}
+
+VAE负责把动作限制在数据分布附近，但它只是在模仿行为数据，不保证生成动作在当前Q函数下最优。扰动网络的作用是在``不要偏离数据分布太远''的约束下，做局部改进。
+
+\begin{itemize}
+\tightlist
+\item
+  输入：VAE生成的动作\(a_{\mathrm{vae}}=D_\omega(s,z)\)。
+\item
+  输出：小扰动\(\xi_\phi(s,a_{\mathrm{vae}})\)。
+\item
+  修正动作：
+\end{itemize}
+
+\[
+\tilde a = a_{\mathrm{vae}}+\xi_\phi(s,a_{\mathrm{vae}})
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  约束：通常把扰动限制在\([-\Phi,\Phi]\)，例如\(\Phi=0.05\)，体现Batch-Constrained的思想。
+\end{itemize}
+
+扰动网络通常在更新Q网络之后，或与Q网络交替更新。更新时冻结Q网络，只优化扰动网络参数\(\phi\)，目标是让微调后的动作获得更高Q值：
+
+\[
+L_\phi
+=-\mathbb{E}_{s\sim\mathcal B,\ z\sim\mathcal{N}(0,I)}
+\bigl[
+Q_\theta(s,a_{\mathrm{vae}}+\xi_\phi(s,a_{\mathrm{vae}}))
+\bigr]
+\]
+
+其中\(a_{\mathrm{vae}}=D_\omega(s,z)\)。最小化\(L_\phi\)等价于最大化微调动作的\(Q\)值。
+
+\hypertarget{ux4e09ux4fddux5b88q-learningcql}{%
+\subsection{三、保守Q-learning（CQL）}\label{ux4e09ux4fddux5b88q-learningcql}}
+
+CQL算法基于SAC算法，对Q函数的更新方式进行了修改。既然在无法与环境互动的情况下，未知动作容易被高估，那就直接在Q函数的更新目标中加入惩罚项，人为压低没见过的动作的Q值。
+
+CQL的Critic损失可以理解为``Bellman误差 + 保守正则项''：
+
+\[
+L_{\mathrm{CQL}}(\theta)
+=\frac{1}{2}\mathbb{E}_{(s,a,r,s')\sim\mathcal D}
+[(Q_\theta(s,a)-y)^{2}]
++\alpha \mathcal R(\theta)
+\]
+
+第一项是标准Bellman误差，使Q函数满足时序差分目标；第二项\(\mathcal R(\theta)\)是保守正则项，用来压低可能被高估的动作，特别是离线数据集中很少出现的OOD动作。
+
+离散动作空间中，保守正则项常写成：
+
+\[
+\mathcal R(\theta)
+=\mathbb{E}_{s\sim\mathcal D}
+\bigl[
+\log \sum_a \exp(Q_\theta(s,a))
+-\mathbb{E}_{a\sim\mathcal D(\cdot\mid s)}[Q_\theta(s,a)]
+\bigr]
+\]
+
+这个式子包含两个方向相反的力量：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \(-\mathbb{E}_{a\sim\mathcal D(\cdot\mid s)}[Q_\theta(s,a)]\)：最小化损失时，相当于拉高数据集中真实动作的Q值。
+\item
+  \(\log \sum_a \exp(Q_\theta(s,a))\)：这是LogSumExp，也可以看作Soft-Maximum，会近似关注当前状态下Q值最高的动作。最小化这一项会压低高Q动作，尤其是数据集中没有充分支持的OOD动作。
+\end{enumerate}
+
+最终效果是：数据集中真实动作受到数据项的支撑，不会被无差别压低；OOD动作没有数据项支撑，主要会被LogSumExp项压低，从而得到更保守的Q函数。
+
+在连续动作空间中，\(\log\sum_a\exp(Q(s,a))\)对应的求和或积分无法直接精确计算，CQL通常用采样近似。一个实现层面的写法是：
+
+\[
+L(\theta)
+=\alpha\mathbb{E}_{s\sim\mathcal D}
+\bigl[
+\mathbb{E}_{a\sim\mu(a\mid s)}[Q_\theta(s,a)]
+-\mathbb{E}_{a\sim\mathcal D(\cdot\mid s)}[Q_\theta(s,a)]
+\bigr]
++\mathrm{Bellman\ Error}
+\]
+
+其中\(\mu(a\mid s)\)表示用于产生``可能被高估动作''的采样分布。实践中常从两类动作中采样近似保守项：
+
+\begin{itemize}
+\tightlist
+\item
+  当前策略动作：\(a\sim\pi_\phi(\cdot\mid s)\)，用于压低策略可能选择但缺少数据支持的动作。
+\item
+  随机动作：\(a\sim\mathrm{Uniform}(-1,1)\)，用于覆盖更广的连续动作空间。
+\end{itemize}
+
+因此，CQL不是直接限制策略动作，而是通过训练更保守的Q函数，让策略在优化时自然避开被高估的OOD动作。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-62}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-62}}
+
+\begin{itemize}
+\tightlist
+\item
+  \href{https://hrl.boyuai.com/}{《动手学强化学习》}.
+\item
+  Fujimoto, S., Meger, D., \& Precup, D. (2019). \href{https://arxiv.org/abs/1812.02900}{Off-Policy Deep Reinforcement Learning without Exploration}. ICML 2019.
+\item
+  Kumar, A., Zhou, A., Tucker, G., \& Levine, S. (2020). \href{https://arxiv.org/abs/2006.04779}{Conservative Q-Learning for Offline Reinforcement Learning}. NeurIPS 2020.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux591aux667aux80fdux4f53ux5f3aux5316ux5b66ux4e60}{%
+\section{多智能体强化学习}\label{ux591aux667aux80fdux4f53ux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux76eeux6807ux548cux57faux672cux65b9ux6cd5}{%
+\subsection{一、目标和基本方法}\label{ux4e00ux76eeux6807ux548cux57faux672cux65b9ux6cd5}}
+
+\hypertarget{ux4e00ux76eeux6807ux4e3aux6bcfux4e2aux667aux80fdux4f53ux5b66ux4e60ux4e00ux4e2aux7b56ux7565-pi_iux4ee5ux6700ux5927ux5316ux5176ux81eaux8eabux7684ux671fux671bux7d2fux79efux5956ux52b1}{%
+\subsubsection{\texorpdfstring{（一）目标：为每个智能体学习一个策略 \(\pi_i\)，以最大化其自身的期望累积奖励。}{（一）目标：为每个智能体学习一个策略 \textbackslash pi\_i，以最大化其自身的期望累积奖励。}}\label{ux4e00ux76eeux6807ux4e3aux6bcfux4e2aux667aux80fdux4f53ux5b66ux4e60ux4e00ux4e2aux7b56ux7565-pi_iux4ee5ux6700ux5927ux5316ux5176ux81eaux8eabux7684ux671fux671bux7d2fux79efux5956ux52b1}}
+
+\hypertarget{ux4e8cux57faux672cux65b9ux6cd5}{%
+\subsubsection{（二）基本方法}\label{ux4e8cux57faux672cux65b9ux6cd5}}
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+范式 & 完全中心化（Fully Centralized） & 完全去中心化（Fully Decentralized） \\
+\midrule
+\endhead
+原理 & 将所有智能体视为一个``超级智能体''。输入是联合状态，输出是联合动作。 & 假设每个智能体独立，将其他智能体视为环境的一部分。 \\
+优点 & 环境变为静态，理论收敛性好。 & 扩展性强，不受智能体数量限制，避免维度灾难。 \\
+缺点 & 维度爆炸：状态/动作空间随智能体数量指数增长，难以训练。 & 非稳态问题：由于忽略其他智能体的策略变化，收敛性无法保证。 \\
+\bottomrule
+\end{longtable}
+
+\hypertarget{ux4e8cippo-ux7b97ux6cd5independent-ppo}{%
+\subsection{二、IPPO 算法（Independent PPO）}\label{ux4e8cippo-ux7b97ux6cd5independent-ppo}}
+
+IPPO 属于完全去中心化方法。它直接对每个智能体使用智能体自己的 PPO（Proximal Policy Optimization）算法进行训练。尽管理论上不能保证收敛，但在实践中效果往往不错，并且具有良好的扩展性。
+
+IPPO 算法工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化：为 \(N\) 个智能体分别初始化各自的策略网络 \(\pi_i\) 和价值网络 \(V_i\)。
+\item
+  循环训练（For 训练轮数 do）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    数据采集：所有智能体在环境中同时运行，各自收集一条轨迹数据（Trajectory）。
+  \item
+    优势估计：对每个智能体 \(i\)，利用其价值网络 \(V_i\) 和广义优势估计（GAE）计算优势函数 \(\hat{A}_i\)。
+  \item
+    策略更新：对每个智能体 \(i\)，最大化 PPO-Clip 目标函数来更新策略 \(\pi_i\)。
+  \item
+    价值更新：对每个智能体 \(i\)，通过最小化均方误差来更新价值网络 \(V_i\)。
+  \end{itemize}
+\item
+  结束循环。
+\end{enumerate}
+
+\hypertarget{ux4e09maddpgux7b97ux6cd5openai2017}{%
+\subsection{三、MADDPG算法（OpenAI，2017）}\label{ux4e09maddpgux7b97ux6cd5openai2017}}
+
+\hypertarget{ux4e00ctdeux8303ux5f0f}{%
+\subsubsection{（一）CTDE范式}\label{ux4e00ctdeux8303ux5f0f}}
+
+为了平衡环境非稳态和可扩展性的矛盾，学术界提出了CTDE（Centralized Training with Decentralized Execution，中心化训练去中心化执行）范式。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  训练阶段：允许使用全局信息（所有智能体的状态、动作、奖励）。就像足球队的教练，拥有上帝视角，指导球员如何配合。
+\item
+  执行阶段：智能体仅根据自己的局部观测进行决策。就像球员上场后，只能根据自己看到的局部情况踢球，不再依赖教练的实时指令。
+\end{enumerate}
+
+\hypertarget{ux4e8cux6a21ux578bux67b6ux6784}{%
+\subsubsection{（二）模型架构}\label{ux4e8cux6a21ux578bux67b6ux6784}}
+
+MADDPG（Multi-Agent DDPG）是 CTDE 范式下的代表算法，基于 Actor-Critic 架构。
+
+\begin{itemize}
+\tightlist
+\item
+  Actor（策略网络）：仅输入局部观测 \(o_i\)，输出动作 \(a_i\)。用于执行阶段。
+\item
+  Critic（价值网络）：输入全局信息 \(x\)（包含所有观测 \(o_1,\ldots,o_N\)）和所有动作 \(a_1,\ldots,a_N\)。仅用于训练阶段。
+\end{itemize}
+
+数学指导与梯度公式如下。
+
+我们定义全局状态信息为 \(x\)，所有智能体的动作集合为 \(a=(a_1,\ldots,a_N)\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Critic 更新（中心化部分）：每个智能体 \(i\) 的 Critic 网络 \(Q_i^{\mu}(x,a_1,\ldots,a_N)\) 旨在评估在全局状态下采取联合动作的价值。损失函数定义为均方误差：
+\end{enumerate}
+
+\[
+L(\theta_i)
+=
+\mathbb{E}_{x,a,r,x'}
+\bigl[
+\bigl(
+Q_i^{\mu}(x,a_1,\ldots,a_N)-y
+\bigr)^{2}
+\bigr]
+\]
+
+其中，目标值 \(y\) 使用目标网络计算：
+
+\[
+y
+=
+r_i
++
+\gamma
+Q_i^{\mu'}\bigl(
+x',
+a_1',
+\ldots,
+a_N'
+\bigr)
+\quad
+\text{where }
+a_j'=\mu_j'(o_j')
+\]
+
+注意：这里 \(Q_i^{\mu'}\) 是目标 Critic 网络，\(\mu_j'\) 是目标 Actor 网络。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  Actor 更新（去中心化执行的基础）：对于确定性策略 \(\mu_{\theta_i}\)，我们通过最大化 \(Q\) 值来更新策略。由于 \(Q\) 是中心化的，它能告诉 Actor：考虑到其他队友的动作，你这样做好不好。确定性策略梯度公式为：
+\end{enumerate}
+
+\[
+\nabla_{\theta_i}J(\mu_i)
+=
+\mathbb{E}_{x,a\sim\mathcal{D}}
+\bigl[
+\nabla_{\theta_i}\mu_i(o_i)
+\cdot
+\nabla_{a_i}Q_i^{\mu}(x,a_1,\ldots,a_N)
+\big|_{a_i=\mu_i(o_i)}
+\bigr]
+\]
+
+解释：
+
+\begin{itemize}
+\tightlist
+\item
+  \(\nabla_{\theta_i}\mu_i(o_i)\)：Actor 怎么改变参数能让输出的动作变化。
+\item
+  \(\nabla_{a_i}Q_i^{\mu}(\cdots)\)：Critic 告诉 Actor，动作往哪个方向变动能让 \(Q\) 值，也就是全局收益，变大。
+\end{itemize}
+
+\hypertarget{ux4e09ux8badux7ec3ux5de5ux4f5cux6d41}{%
+\subsubsection{（三）训练工作流}\label{ux4e09ux8badux7ec3ux5de5ux4f5cux6d41}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    为每个智能体 \(i\) 初始化 Actor 网络 \(\mu_i\) 和 Critic 网络 \(Q_i\)。
+  \item
+    初始化对应的目标网络 \(\mu_i'\) 和 \(Q_i'\)。
+  \item
+    初始化经验回放池 \(\mathcal{D}\)。
+  \end{itemize}
+\item
+  主循环（For 序列 \(1\) to \(M\) do）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    初始化环境状态（用于采集数据），并初始化随机噪声过程 \(\mathcal{N}\)。
+  \item
+    步数循环（For \(t=1\) to \(\mathrm{max\_steps}\) do）：
+
+    \begin{enumerate}
+    \def\labelenumii{\arabic{enumii}.}
+    \tightlist
+    \item
+      决策：每个智能体 \(i\) 根据局部观测 \(o_i\) 选择动作：\(a_i=\mu_i(o_i)+\mathcal{N}_t\)。
+    \item
+      交互：执行联合动作 \(a=(a_1,\ldots,a_N)\)，环境返回奖励和新观测 \(x'\)。
+    \item
+      存储：将转移元组 \((x,a,r,x')\) 存入经验回放池 \(\mathcal{D}\)。
+    \item
+      训练：当池子足够大时，从 \(\mathcal{D}\) 中随机采样一批数据（Batch）。
+    \item
+      更新 Critic：计算目标值 \(y\)，最小化 Loss 更新每个智能体的 \(Q_i\)。这里因为 Critic 输入的是所有智能体的动作，所以是中心化训练。
+    \item
+      更新 Actor：使用梯度上升法更新每个智能体的 \(\mu_i\)。Actor 根据局部观测输出动作，但梯度方向由中心化的 Critic 提供指导。
+    \item
+      软更新：使用 \(\tau\) 参数更新目标网络，然后将新观测转为下一时刻状态并继续采样。
+    \end{enumerate}
+  \end{itemize}
+\item
+  结束主循环。
+\end{enumerate}
+
+其中，目标网络的软更新公式为：
+
+\[
+\theta'
+\leftarrow
+\tau\theta+(1-\tau)\theta'
+\]
+
+和其他Actor-Critic算法一样，训练完毕后，Critic即舍弃，留下Actor根据训练后``冻结''的策略进行前向推理。因此，训练完毕后，推理就完全去中心化。
+
+\hypertarget{ux56dbux591aux667aux80fdux4f53ux7f16ux6392ux5668}{%
+\subsection{四、多智能体+编排器}\label{ux56dbux591aux667aux80fdux4f53ux7f16ux6392ux5668}}
+
+以Kimi K2.5 Agent Swarm为例，推理过程中，当输入一个任务时，一个编排器负责确定输入任务需要子智能体的数量及角色（以上下文形式提供给智能体）、分配任务、调度智能体；每个子智能体都是同一个大模型的``分身''，权重完全相同。
+
+训练方法：先训练子智能体（大模型）；在子智能体训练完毕后，冻结子智能体的参数，用端到端的强化学习方法训练编排器（刚开始先用小模型充当子智能体，后续再换为大模型）。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-63}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-63}}
+
+\begin{itemize}
+\tightlist
+\item
+  \href{https://hrl.boyuai.com/}{《动手学强化学习》}.
+\item
+  Lowe, R., Wu, Y., Tamar, A., Harb, J., Abbeel, P., \& Mordatch, I. (2017). \href{https://arxiv.org/abs/1706.02275}{Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments}. NeurIPS 2017.
+\item
+  de Witt, C. S., Gupta, T., Makoviichuk, D., et al.~(2020). \href{https://arxiv.org/abs/2011.09533}{Is Independent Learning All You Need in the StarCraft Multi-Agent Challenge?}. arXiv:2011.09533.
+\item
+  Moonshot AI. (2026). \href{https://github.com/MoonshotAI/Kimi-K2.5/blob/master/tech_report.pdf}{Kimi K2.5 Technical Report}.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux76eeux6807ux5bfcux5411ux7684ux5f3aux5316ux5b66ux4e60}{%
+\section{目标导向的强化学习}\label{ux76eeux6807ux5bfcux5411ux7684ux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux4e00ux76eeux6807ux5bfcux5411ux7684ux5f3aux5316ux5b66ux4e60ux628aux76eeux6807ux53d8ux6210ux53d8ux91cf}{%
+\subsection{一、目标导向的强化学习------把目标变成变量}\label{ux4e00ux76eeux6807ux5bfcux5411ux7684ux5f3aux5316ux5b66ux4e60ux628aux76eeux6807ux53d8ux6210ux53d8ux91cf}}
+
+\hypertarget{ux4e00ux76eeux6807ux5bfcux5411}{%
+\subsubsection{（一）目标导向}\label{ux4e00ux76eeux6807ux5bfcux5411}}
+
+在强化学习中，有时我们希望模型不仅能完成单一任务，还能迁移到通用任务。
+
+传统强化学习和目标导向强化学习的差异可以概括为：
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+项目 & 传统强化学习 & 目标导向强化学习 \\
+\midrule
+\endhead
+任务形式 & 只学习一个固定任务 & 将目标 \(g\) 作为输入变量，学习一类任务 \\
+价值函数 & \(Q(s,a)\) & \(Q(s,a,g)\) \\
+策略 & \(\pi(a\mid s)\) 或 \(\pi(s)\) & \(\pi(a\mid s,g)\) 或 \(\pi(s,g)\) \\
+奖励 & 奖励主要由状态和动作决定 & 奖励取决于当前状态与目标 \(g\) 的距离或是否达成目标 \\
+\bottomrule
+\end{longtable}
+
+数学上，这意味着MDP（马尔可夫决策过程）多了一个维度g，奖励函数R也不再只看s，而是看s和g的距离。
+
+\hypertarget{ux4e8cux7a00ux758fux5956ux52b1ux56f0ux5883}{%
+\subsubsection{（二）稀疏奖励困境}\label{ux4e8cux7a00ux758fux5956ux52b1ux56f0ux5883}}
+
+在机械臂抓取或推球任务中，稀疏奖励会造成严重的数据浪费。大多数探索轨迹都没有刚好到达指定目标，因此只得到失败奖励；只有极少数轨迹碰巧成功，才会给出正奖励。
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+轨迹结果 & 奖励信号 & 学习问题 \\
+\midrule
+\endhead
+多次尝试都没有到达指定目标 & \(r=-1\) 或 \(r=0\) & 模型只知道``没成功''，不知道这次动作把物体推向了哪里 \\
+偶然到达目标 & \(r=+1\) & 成功样本太少，难以支撑稳定训练 \\
+\bottomrule
+\end{longtable}
+
+\hypertarget{ux4e09herux4e8bux540eux7ecfux9a8cux56deux653e}{%
+\subsubsection{（三）HER（事后经验回放）}\label{ux4e09herux4e8bux540eux7ecfux9a8cux56deux653e}}
+
+HER（Hindsight Experience Replay）的核心思想是：如果智能体本来想去目标 A，但实际到达了目标 B，那么这条经验对目标 A 是失败的，却可以被重新解释为``成功到达 B''的经验。
+
+原始经验可以写成：
+
+\[
+\{s,a,r=-1,s',\mathrm{Goal}=A\}
+\]
+
+事后重标目标后，可以得到：
+
+\[
+\{s,a,r=+1,s',\mathrm{Goal}=B\}
+\]
+
+智能体虽然还没学会怎么去A，但它先学会了怎么去B。随着它学会去的地方越来越多（右边的B,右前方的C,左边的D,正前方的E\ldots），掌握了怎么去不同点的运动规律，最终它就能学会怎么去A。再举一个射箭的例子：
+
+如果射箭时本来瞄准靶心 A，结果射到了旁边的 B，那么从目标 A 的角度看这是失败；但从``如何射到 B''的角度看，这次动作提供了一条有效经验。HER 正是把这种事后解释机制系统化：失败轨迹不再直接丢弃，而是重新标注成对另一个目标的成功样本。
+
+这样，智能体就能从失败中学习了。
+
+工作流如下：
+
+HER 的训练流程可以写成：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  采样一条原始轨迹：
+\end{enumerate}
+
+\[
+\tau=(s_0,a_0,s_1,a_1,\ldots,s_T)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  按原始目标 \(g\) 存储普通转移：
+\end{enumerate}
+
+\[
+(s_t,a_t,r_t,s_{t+1},g)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  从同一条轨迹中选取实际达到的未来状态 \(g'=s_k\) 作为新目标，重新计算奖励并存储重标转移：
+\end{enumerate}
+
+\[
+(s_t,a_t,r(s_t,a_t,g'),s_{t+1},g')
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  将普通经验和重标经验一起放入经验回放池。
+\item
+  使用 DDPG、SAC、DQN 等离策略强化学习算法训练目标条件策略。
+\end{enumerate}
+
+\hypertarget{ux56dbux4ef7ux503cux51fdux6570}{%
+\subsubsection{（四）价值函数}\label{ux56dbux4ef7ux503cux51fdux6570}}
+
+前面我们得到的数据混杂了多种不同目标下的奖励，无法直接套用DDPG、SAC或DQN算法。因此我们将价值函数改造为通用价值函数近似器（Universal Value Function Approximators, UVFA）。
+
+UVFA 的改造方式是把目标也输入价值函数和策略网络：
+
+\[
+Q(s,a)\quad\longrightarrow\quad Q(s,a,g)
+\]
+
+\[
+\pi(s)\quad\longrightarrow\quad \pi(s,g)
+\]
+
+这样g就变成了函数的输入之一，往往以向量表示（如在三维空间中的位置）。由神经网络的泛化性，即便神经网络未到过a，也可以用附近其他目标的数据作出泛化估计。能这样估计的原因有以下三点：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  物理动力学是共享的。目标变了，但环境的状态转移规律并没有变：同一个机械臂、同一个桌面、同一个物体，仍然服从同一套动力学。
+\item
+  目标空间通常具有连续性。目标 \(g_1\) 和 \(g_2\) 如果在空间上很接近，那么到达它们所需的动作序列通常也相近，价值函数输出也应接近。
+\item
+  相对位置可以迁移。很多任务真正依赖的是相对向量：
+\end{enumerate}
+
+\[
+\Delta=g-s
+\]
+
+当两个任务具有相似的 \(\Delta\) 时，即使起点和终点的绝对位置不同，策略也可以复用类似的动作模式。
+
+这种泛化还可以通过 Bellman 传播理解：如果从当前位置 \(s\) 到中间点 \(B\) 的路径已经学会，而从 \(B\) 到目标 \(g\) 的价值也可估计，那么目标 \(g\) 的价值信息就可以经由 \(B\) 向前传播。
+
+目标条件 Bellman 目标为：
+
+\[
+y
+=
+r(s,a,g)
++
+\gamma
+\max_{a'}Q(s',a',g)
+\]
+
+如果使用确定性策略，也可以写成：
+
+\[
+a'=\pi(s',g)
+\]
+
+\[
+y
+=
+r(s,a,g)
++
+\gamma Q(s',\pi(s',g),g)
+\]
+
+以DDPG + HER为例，具体操作如下：
+
+网络输入需要把目标拼接进去：
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+网络 & 输入 & 输出 \\
+\midrule
+\endhead
+Actor & \(\mathrm{concat}([s,g])\) & 动作 \(a=\pi(s,g)\) \\
+Critic & \(\mathrm{concat}([s,a,g])\) & 目标条件价值 \(Q(s,a,g)\) \\
+\bottomrule
+\end{longtable}
+
+这样就可以把不同目标下的数据混在同一个经验池中训练。经验池里可能同时有目标 \(g_1,g_2,g_3,\ldots\)，但因为目标 \(g\) 本身就是网络输入的一部分，网络学习的是按目标条件化的映射，而不是把所有目标压成同一个标签。换句话说，同一条状态和动作在目标 \(g_A\) 下可能是高价值，在目标 \(g_B\) 下可能是低价值；网络会利用输入的 \(g\) 区分这两种情形，因此不会因为混合不同目标的数据而直接冲突。
+
+DDPG + HER 的目标网络和损失函数可写为：
+
+\[
+a_i'=\pi'(s_i',g_i)
+\]
+
+\[
+y_i
+=
+r(s_i,a_i,g_i)
++
+\gamma Q'(s_i',a_i',g_i)
+\]
+
+Critic 损失为：
+
+\[
+L_Q
+=
+\frac{1}{N}
+\sum_i
+\bigl(
+Q(s_i,a_i,g_i)-y_i
+\bigr)^{2}
+\]
+
+Actor 目标为最大化 Critic 评估的目标条件价值：
+
+\[
+J_\pi
+=
+\frac{1}{N}
+\sum_i
+Q(s_i,\pi(s_i,g_i),g_i)
+\]
+
+这样，网络就变成了一个``通用导航仪''：只要你输入起点s和终点g，它就能利用物理规律告诉你怎么走，而不受限于训练时那个固定的终点。
+
+\hypertarget{ux4e94ux76eeux524dux9762ux4e34ux7684ux95eeux9898}{%
+\subsubsection{（五）目前面临的问题}\label{ux4e94ux76eeux524dux9762ux4e34ux7684ux95eeux9898}}
+
+目标导向的强化学习虽然能从失败中学习，但当动作空间巨大、不同任务相关性弱、长时间找不到``主线相关的奖励''时，也无异于盲人摸象。
+
+\hypertarget{ux4e8cux81eaux76d1ux7763ux7684ux76eeux6807ux5bfcux5411ux5f3aux5316ux5b66ux4e60neurips-2025}{%
+\subsection{二、自监督的目标导向强化学习（NeurIPS 2025）}\label{ux4e8cux81eaux76d1ux7763ux7684ux76eeux6807ux5bfcux5411ux5f3aux5316ux5b66ux4e60neurips-2025}}
+
+与SAC/PPO这种基于动态规划（贝尔曼方程）的方法不同，这篇论文的方法本质上是一个自监督序列建模问题。
+
+\hypertarget{ux4e00ux6a21ux578bux6784ux6210}{%
+\subsubsection{（一）模型构成}\label{ux4e00ux6a21ux578bux6784ux6210}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  输入和输出
+\end{enumerate}
+
+自监督目标导向方法把同一条轨迹中的未来状态当作目标。给定当前状态 \(s_t\) 和未来状态 \(g=s_{t+k}\)，模型先编码二者：
+
+\[
+z_0=\mathrm{Embed}(s_t,g)
+\]
+
+然后通过深层网络输出两个头：
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+模块 & 输入 & 监督信号 \\
+\midrule
+\endhead
+策略头 \(\pi_\theta\) & 当前状态 \(s_t\) 与目标 \(g=s_{t+k}\) & 预测真实动作 \(a_t\) \\
+价值/距离头 \(V_\theta\) & 当前状态 \(s_t\) 与目标 \(g=s_{t+k}\) & 预测到达目标所需步数 \(k\) \\
+\bottomrule
+\end{longtable}
+
+总结：
+
+训练样本可以整理为：
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule
+输入 & 目标输出 \\
+\midrule
+\endhead
+\((s_t,s_{t+k})\) & 当前动作 \(a_t\) \\
+\((s_t,s_{t+k})\) & 时间距离 \(k\) \\
+\bottomrule
+\end{longtable}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  损失函数和更新方式
+\end{enumerate}
+
+动作预测采用负对数似然损失：
+
+\[
+L_{\mathrm{action}}(\theta)
+=
+-
+\mathbb{E}
+\bigl[
+\log \pi_\theta(a_t\mid s_t,g=s_{t+k})
+\bigr]
+\]
+
+如果有距离预测，则还有距离预测损失：
+
+\[
+L_{\mathrm{dist}}(\theta)
+=
+\mathbb{E}
+\bigl[
+\lVert
+V_\theta(s_t,s_{t+k})-k
+\rVert^{2}
+\bigr]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  网络架构
+\end{enumerate}
+
+这类方法强调非常深的残差网络。普通残差块可写为：
+
+\[
+x_{l+1}=x_l+F(x_l)
+\]
+
+深层 gated ResNet 块会加入谱归一化、归一化层和门控强度，使每一层只做受控的小幅更新：
+
+\[
+x_{l+1}
+=
+x_l
++
+\alpha_l\cdot
+\sigma
+\bigl(
+\mathrm{BN}
+\bigl(
+W_2\,
+\phi
+\bigl(
+\mathrm{BN}(W_1x_l)
+\bigr)
+\bigr)
+\bigr)
+\]
+
+\hypertarget{ux4e8cux6838ux5fc3ux601dux60f3}{%
+\subsubsection{（二）核心思想}\label{ux4e8cux6838ux5fc3ux601dux60f3}}
+
+核心思想是把网络深度看作一种``内部计算时间''。浅层网络只能做很短的局部映射，而几百层、上千层的网络可以在前向传播中逐步修正中间表示，相当于在模型内部做多步搜索。
+
+可以把不同层数理解为不同程度的推理：
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule
+层数 & 能力直觉 \\
+\midrule
+\endhead
+第 10 层 & 主要完成局部特征处理和短程动作预测 \\
+第 500 层 & 可以整合更长范围的轨迹信息 \\
+第 900 层 & 更接近多步规划或内部搜索过程 \\
+\bottomrule
+\end{longtable}
+
+\hypertarget{ux4e09ux4e3aux4ec0ux4e48ux52a0ux6df1ux7f51ux7edcux4e0dux9002ux5408ux4f20ux7edfrlux7b97ux6cd5}{%
+\subsubsection{（三）为什么加深网络不适合传统RL算法？}\label{ux4e09ux4e3aux4ec0ux4e48ux52a0ux6df1ux7f51ux7edcux4e0dux9002ux5408ux4f20ux7edfrlux7b97ux6cd5}}
+
+普通 RL 并不会天然因为网络更深而变好，主要原因在于监督信号较弱。SAC、TD3 等方法通常依赖标量 \(Q\) 值和 bootstrapping 目标，目标本身会随网络更新而变化；网络越深，训练越容易受到误差累积和不稳定目标的影响。
+
+自监督目标导向方法的信号更密集：每条轨迹都能构造许多 \((s_t,s_{t+k})\) 对，每个样本都带有动作预测、距离预测等结构化监督。因此网络容量和训练信号更匹配。
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+方法 & 主要监督信号 & 加深网络的风险或收益 \\
+\midrule
+\endhead
+SAC/TD3 等传统 RL & 标量 \(Q\) 值，且依赖 bootstrapping & 深网络容易放大目标漂移和估计误差 \\
+自监督目标导向 RL & 动作、距离、目标条件轨迹关系等密集信号 & 深度可转化为更长的内部搜索和组合推理能力 \\
+\bottomrule
+\end{longtable}
+
+\hypertarget{ux4e09ux4e3aux4ec0ux4e48ux76eeux6807ux5bfcux5411ux65b9ux6cd5ux76eeux524dux4ecdux4e3bux8981ux9650ux4e8eux673aux5668ux4ebaux7b49ux9886ux57df}{%
+\subsection{三、为什么目标导向方法目前仍主要限于机器人等领域？}\label{ux4e09ux4e3aux4ec0ux4e48ux76eeux6807ux5bfcux5411ux65b9ux6cd5ux76eeux524dux4ecdux4e3bux8981ux9650ux4e8eux673aux5668ux4ebaux7b49ux9886ux57df}}
+
+尽管 GORL 在机器人控制领域非常成功，但在大语言模型中大规模应用面临以下核心挑战：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  目标的空间无限性与语义模糊性
+\end{enumerate}
+
+在机器人领域，目标通常是坐标(x, y, z)；在LLM中，目标是自然语言指令，如要求完成某道题目。语义空间是离散且高维的，很难有一个自动化、不会被hacking的方式将失败的回答重塑为对另一个目标的成功回答（找出这个目标和验证都不容易）。而且，LLM的状态s中已经包含了上下文，事实上隐含了目标，如果强行把目标和过程拆开来反而是自找麻烦。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  状态表示（State Representation）的难题
+\end{enumerate}
+
+LLM的状态s是已生成的Token序列。在文本生成中，定义``距离目标的距离''变得非常抽象。目前的RLVR只看终点（Outcome-based），而GORL强依赖于状态转移过程的建模。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  算力成本与数据效率
+\end{enumerate}
+
+GORL 需要模型在训练时不断改变目标进行探索。LLM 的推理成本极高。在海量目标空间下进行充分探索，其计算量呈指数级增长。目前的 RLVR（如GRPO算法）通过组内相对比较已经非常耗能，GORL的多目标采样会让训练成本更难以承受。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-64}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-64}}
+
+\begin{itemize}
+\tightlist
+\item
+  Andrychowicz, M., Wolski, F., Ray, A., et al.~(2017). \href{https://arxiv.org/abs/1707.01495}{Hindsight Experience Replay}. NeurIPS 2017.
+\item
+  Agarwal, R., et al.~(2025). \href{https://openreview.net/forum?id=ZMRJQg39iE}{1000 Layer Networks for Self-Supervised RL: Scaling Depth Can Enable New Goal-Reaching Capabilities}. NeurIPS 2025.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux4f20ux9012ux5f3aux5316ux5b66ux4e60ux8bbaux6587}{%
+\section{传递强化学习（论文）}\label{ux4f20ux9012ux5f3aux5316ux5b66ux4e60ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux65f6ux5e8fux5deeux5206ux7b97ux6cd5ux548cux8499ux7279ux5361ux6d1bux65b9ux6cd5ux7684ux4ef7ux503cux56deux4f20ux6b65ux6570ux9012ux5f52ux6b21ux6570}{%
+\subsection{一、时序差分算法和蒙特卡洛方法的价值回传步数（递归次数）}\label{ux4e00ux65f6ux5e8fux5deeux5206ux7b97ux6cd5ux548cux8499ux7279ux5361ux6d1bux65b9ux6cd5ux7684ux4ef7ux503cux56deux4f20ux6b65ux6570ux9012ux5f52ux6b21ux6570}}
+
+传统RL中，价值函数的更新主要依赖蒙特卡洛算法和时序差分算法，前者方差大，后者偏差大。在二者间取折中的TD-n算法，则需要人工调整n以平衡偏差和方差。从价值函数回传的时间复杂度角度看：
+
+时序差分算法（TD）：\(V(s_t)=r+\gamma V(s_{t+1})\)，每次更新，价值信息回传一个时间步，故在长度为 \(T\) 的序列上回传需要 \(T\) 个时间步，每一步都会引入额外的偏差，导致最终误差大。
+
+TD-n算法：利用 \(n\) 步实际采样的经验，公式为：
+
+\[
+V(s_t) \leftarrow r_t+\gamma r_{t+1}+\cdots+\gamma^{n-1}r_{t+n-1}+\gamma^{n} V(s_{t+n})
+\]
+
+每进行一次更新，价值信息就在轨迹上向前跨越了 \(n\) 个时间步。要覆盖总长度为 \(T\) 的路径，信息只需要跨越 \(T/n\) 次（称其为递归次数）。虽然 \(n\) 越大递归越少（偏差累积越小），但由于 \(n\) 步采样引入了更多未观测到的随机性，方差会随之剧增。
+
+蒙特卡洛算法：只需要一个时间步（根据每一步实际获得的奖励计算），但方差大。
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule
+方法 & 一次更新中的真实采样与递归估计 & 递归复杂度 \\
+\midrule
+\endhead
+TD & \(1+(T-1)\) & \(O(T)\) \\
+TD-n & \(n+(T-n)\) & \(O(T/n)\) \\
+Divide \& Conquer & \(T/2+T/2\) & \(O(\log T)\) \\
+\bottomrule
+\end{longtable}
+
+\hypertarget{ux4e8cux4f20ux9012ux5f3aux5316ux5b66ux4e60ux7684ux6838ux5fc3ux539fux7406}{%
+\subsection{二、传递强化学习的核心原理}\label{ux4e8cux4f20ux9012ux5f3aux5316ux5b66ux4e60ux7684ux6838ux5fc3ux539fux7406}}
+
+\hypertarget{ux4e00ux4ef7ux503cux9012ux63a8ux516cux5f0f}{%
+\subsubsection{（一）价值递推公式}\label{ux4e00ux4ef7ux503cux9012ux63a8ux516cux5f0f}}
+
+最短路径距离满足三角不等式：
+
+\[
+d^{*}(s,g) \le d^{*}(s,w)+d^{*}(w,g)
+\]
+
+目标到达价值可以写为：
+
+\[
+V^{*}(s,g)=\gamma^{d^{*}(s,g)},\quad 0<\gamma<1
+\]
+
+这里 \(V\) 是当前状态 \(s\) 和目标 \(g\) 的函数。从中可以看出，传递强化学习是目标导向的强化学习的一种变体。
+
+由于 \(0<\gamma<1\)，距离越短价值越大，因此由三角不等式可以得到：
+
+\[
+\gamma^{d^{*}(s,g)} \ge \gamma^{d^{*}(s,w)+d^{*}(w,g)}
+\]
+
+进一步写成价值函数之间的关系：
+
+\[
+V^{*}(s,g) \ge V^{*}(s,w)V^{*}(w,g)
+\]
+
+对应的传递 Bellman 更新为：
+
+\[
+V(s,g) \leftarrow \max_{w \in S} V(s,w)V(w,g)
+\]
+
+\hypertarget{ux4e8cux9012ux5f52ux6b21ux6570logt}{%
+\subsubsection{（二）递归次数：logT}\label{ux4e8cux9012ux5f52ux6b21ux6570logt}}
+
+TRL 的分治思想是把长度为 \(T\) 的目标路径拆成两个较短子路径，并通过中间状态 \(w\) 将二者组合起来。若每次递归都近似把路径长度折半，则递归深度为 \(h=\log_2 T\)，回传复杂度为 \(O(\log T)\)。
+
+\hypertarget{ux4e09ux4ef7ux503cux9ad8ux4f30ux95eeux9898ux7684ux89e3ux51b3ux65b9ux6848}{%
+\subsection{三、价值高估问题的解决方案}\label{ux4e09ux4ef7ux503cux9ad8ux4f30ux95eeux9898ux7684ux89e3ux51b3ux65b9ux6848}}
+
+\hypertarget{ux4e00ux8ba1ux7b97maxux65f6ux53eaux4f7fux7528ux5df2ux6709ux6837ux672cux7684ux72b6ux6001ux548cux52a8ux4f5c}{%
+\subsubsection{（一）计算max时只使用已有样本的状态和动作}\label{ux4e00ux8ba1ux7b97maxux65f6ux53eaux4f7fux7528ux5df2ux6709ux6837ux672cux7684ux72b6ux6001ux548cux52a8ux4f5c}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  限制子目标 \(w\) 的范围在已有状态中：不在整个状态空间搜索中间状态 \(w\)，而是仅从数据集中已有的状态里提取子目标（称为行为子目标）。
+\item
+  利用已有动作求解损失，拟合最优动作：使用非对称的Expectile损失函数来近似max操作，从而在不显式迭代所有状态的情况下，只利用样本内的动作来实现最大化：
+\end{enumerate}
+
+\[
+L_\kappa(Q,T)=|\kappa-\mathbf{1}(Q<T)|\cdot(Q-T)^{2},\quad \kappa\in(0.5,1)
+\]
+
+如果 \(\kappa\) 接近 1，损失函数会极度惩罚``低估''优秀路径的行为，从而迫使神经网络 \(Q\) 去拟合数据集中表现最好的那部分组合，而不被平庸的数据拉低平均值。这就实现了隐式的最大化。
+
+\hypertarget{ux4e8cux57faux4e8eux8dddux79bbux7684ux91cdux6743ux5316}{%
+\subsubsection{（二）基于距离的重权化}\label{ux4e8cux57faux4e8eux8dddux79bbux7684ux91cdux6743ux5316}}
+
+算法会为损失函数分配权重，优先保证短路径（小问题）的价值估计准确，因为长路径的准确性依赖于短路径的组合。这类似于动态规划中``由小到大''的求解逻辑。
+
+\hypertarget{ux56dbux635fux5931ux51fdux6570-2}{%
+\subsection{四、损失函数}\label{ux56dbux635fux5931ux51fdux6570-2}}
+
+对于初始状态 \(s_i\)，采取动作 \(a_i\)，经过 \(s_k\)，最终到达状态 \(s_j\)：
+
+\[
+L^{TRL}(\theta)=\mathbb{E}_{(s_i,a_i,s_k,s_j)\sim D}[w(s_i,s_j)\cdot L_\kappa(Q_\theta(s_i,a_i,s_j),T_{TRL})]
+\]
+
+\hypertarget{ux76eeux6807ux503cux7684ux8ba1ux7b97}{%
+\paragraph{1. 目标值的计算}\label{ux76eeux6807ux503cux7684ux8ba1ux7b97}}
+
+\[
+T_{TRL}=\bar{Q}(s_i,a_i,s_k)\cdot \bar{V}(s_k,s_j)
+\]
+
+\(L_\kappa(\cdot)\) 这步操作相当于对不同 \(s_k\) 取最大值，即这个损失函数设计的核心目的是让价值函数 \(Q(s_i,a_i,s_j)\) 拟合对于不同 \(s_k\)，\(T_{TRL}\) 的最大值。
+
+\hypertarget{ux8dddux79bbux91cdux6743ux5316}{%
+\paragraph{2. 距离重权化}\label{ux8dddux79bbux91cdux6743ux5316}}
+
+\[
+w(s_i,s_j)=\frac{1}{(1+d(s_i,s_j))^{\lambda}},\quad d(s_i,s_j)=\log_\gamma Q(s_i,a_i,s_j)
+\]
+
+距离越短的任务，权重越大，即这样的任务的 \(Q\) 估计值的准确性更加重要。因为长任务的价值是由短任务``拼''出来的。如果短任务（比如只跨越几步的子路径）的 \(Q\) 估计值都没学准，根据分治法，长任务的误差必然呈指数级爆炸。所以必须优先保证局部准确。
+
+\hypertarget{ux7b97ux6cd5ux5de5ux4f5cux6d41}{%
+\paragraph{3. 算法工作流}\label{ux7b97ux6cd5ux5de5ux4f5cux6d41}}
+
+算法工作流可以概括为：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  从数据集中采样由 \(s_i\)、\(s_k\)、\(s_j\) 构成的目标三元组，并读取对应动作 \(a_i\)。
+\item
+  进行局部对齐，用 \(\bar{Q}(s_i,a_i,s_k)\) 与 \(\bar{V}(s_k,s_j)\) 组合得到传递目标 \(T_{TRL}\)。
+\item
+  使用 expectile 损失偏好更高价值的中间状态组合，从而近似 \(\max\) 操作。
+\item
+  借助距离重权化先训练短距离任务，再用较准确的短距离估计支撑更长距离目标。
+\end{enumerate}
+
+\hypertarget{ux4e94ux95eeux9898ux4e0eux6311ux6218}{%
+\subsection{五、问题与挑战}\label{ux4e94ux95eeux9898ux4e0eux6311ux6218}}
+
+虽然 TRL 解决了 \(O(T)\) 的递归问题，但它也引入了一个新开销：它需要对状态空间中的点对（Pairs）进行采样。相比于 TD 学习只需采样相邻点，TRL 对数据集的覆盖质量和采样多样性有更高的要求。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-65}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-65}}
+
+\begin{itemize}
+\tightlist
+\item
+  Park, S., Oberai, A., Atreya, P., \& Levine, S. (2025). \href{https://arxiv.org/abs/2510.22512}{Transitive RL: Value Learning via Divide and Conquer}. arXiv:2510.22512.
+\end{itemize}
+
+\clearpage

@@ -1,0 +1,633 @@
+\hypertarget{ux4f18ux5316ux7b97ux6cd5}{%
+\chapter{优化算法}\label{ux4f18ux5316ux7b97ux6cd5}}
+
+\hypertarget{ux968fux673aux68afux5ea6ux4e0bux964dsgd}{%
+\section{随机梯度下降（SGD）}\label{ux968fux673aux68afux5ea6ux4e0bux964dsgd}}
+
+随机梯度下降（SGD），即对于随机打乱顺序的样本，每次取一个或取一个批量（Batch）进行梯度下降。
+
+\hypertarget{ux4e00ux5728ux8badux7ec3ux4e2dsgdux9762ux4e34ux7684ux95eeux9898}{%
+\subsection{一、在训练中SGD面临的问题}\label{ux4e00ux5728ux8badux7ec3ux4e2dsgdux9762ux4e34ux7684ux95eeux9898}}
+
+收敛速度问题：在特定地形（如狭长``峡谷''或鞍点）下收敛极其缓慢。
+
+学习率选择问题：所有参数共享一个学习率，难以适应不同参数（特征）的梯度尺度。
+
+Adam 优化器正是为了同时解决这两个问题，它结合了两种先进的优化思想：Momentum (动量法) 和 RMSProp。
+
+\hypertarget{ux4e8csgdux5728ux5f3aux5316ux5faeux8c03ux4e2dux6548ux679cux53cdux800cux53efux80fdux4e0dux900aux4e8eadamw2025}{%
+\subsection{二、SGD在强化微调中效果反而可能不逊于AdamW（2025）}\label{ux4e8csgdux5728ux5f3aux5316ux5faeux8c03ux4e2dux6548ux679cux53cdux800cux53efux80fdux4e0dux900aux4e8eadamw2025}}
+
+论文《Reinforcement Learning Finetunes Small Subnetworks in Large Language Models》指出，在强化微调中，大部分参数事实上是不变的，强化微调具有内生稀疏性。本质上说，语义关联性已经在预训练中学习好了，强化微调主要是调整它们的概率分布，以强化正确的推理路径。因此局部优化曲面简单，不需要AdamW这种复杂系统。在AdamW中，由于自带动量和自适应机制，局部梯度很小也会更新，导致参数改动大，实际上很多是噪音；在SGD中，只有梯度显著的才会被调整，符合强化微调实际需求。
+
+实验证明，用SGD进行全量微调，实际修改的参数可能比LoRA还少，效果却不逊于用AdamW进行全量微调。学习率需要取较大的值（1e-1左右）。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-23}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-23}}
+
+\begin{itemize}
+\tightlist
+\item
+  Robbins, H., \& Monro, S. (1951). \href{https://doi.org/10.1214/aoms/1177729586}{A Stochastic Approximation Method}. The Annals of Mathematical Statistics.
+\item
+  Bottou, L., Curtis, F. E., \& Nocedal, J. (2018). \href{https://epubs.siam.org/doi/10.1137/16M1080173}{Optimization Methods for Large-Scale Machine Learning}. SIAM Review.
+\item
+  Mukherjee, S., Yuan, L., Hakkani-Tur, D., \& Peng, H. (2025). \href{https://arxiv.org/abs/2505.11711}{Reinforcement Learning Finetunes Small Subnetworks in Large Language Models}. NeurIPS 2025.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux52a8ux91cfux6cd5momentum}{%
+\section{动量法（Momentum）}\label{ux52a8ux91cfux6cd5momentum}}
+
+\hypertarget{ux4e00momentum-ux89e3ux51b3ux4e86ux4ec0ux4e48ux95eeux9898}{%
+\subsection{一、Momentum 解决了什么问题？}\label{ux4e00momentum-ux89e3ux51b3ux4e86ux4ec0ux4e48ux95eeux9898}}
+
+Momentum主要解决了SGD在特定地形下的收敛速度和稳定性问题。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  狭窄``峡谷''地形的震荡
+\end{enumerate}
+
+描述： 想象一个损失函数的等高线图，它像一个狭长的山谷。在``山谷''的陡峭方向（两侧峭壁），梯度很大；但在``山谷''的平缓方向（通向谷底的最优解），梯度很小。
+
+SGD的问题：SGD在陡峭方向上会因为梯度过大而来回震荡（Overshooting），这导致它在平缓方向上的前进速度非常缓慢。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  鞍点和平坦区域
+\end{enumerate}
+
+描述： 在高维空间中，局部最小值（Local Minima）其实较少，更常见的是鞍点。在鞍点处，所有方向的梯度都接近于零。
+
+SGD的问题：当梯度趋于0时，SGD的更新步骤也会接近于零，导致优化器``卡住''，停止更新。
+
+\hypertarget{ux4e8cmomentum-ux5982ux4f55ux89e3ux51b3ux95eeux9898}{%
+\subsection{二、Momentum 如何解决问题？}\label{ux4e8cmomentum-ux5982ux4f55ux89e3ux51b3ux95eeux9898}}
+
+Momentum引入了物理学中``动量''或``惯性''的概念。想象一个球从山上滚下：它不仅仅受当前位置的坡度影响，还携带着过去积累的速度（即``动量''）。
+
+在陡峭方向，梯度 \(g_t\) 来回反向（\(+C, -C, +C, -C, \ldots\)）。当它们被累积到动量 \(m_t\) 中时，这些正负梯度会相互抵消，使得 \(m_t\) 在该方向上的分量减小，从而抑制了震荡。
+
+在平缓方向，梯度 \(g_t\) 始终指向同一个方向（\(-c, -c, -c, \ldots\)）。动量 \(m_t\) 会持续累积这些同向的梯度，使得 \(m_t\) 在该方向上的分量增大，从而加速了前进。
+
+当小球滚到一个鞍点时，虽然当前梯度 \(g_t\) 接近 \(0\)，但只要它携带着过去的动量（\(m_{t-1}>0\)），它就能凭借这股``惯性''``冲''过这个平坦区域，继续向最优解前进。
+
+\hypertarget{ux4e09ux6570ux5b66ux8868ux8fbe}{%
+\subsection{三、数学表达}\label{ux4e09ux6570ux5b66ux8868ux8fbe}}
+
+Momentum引入了一个接近1的超参数β1，代表``惯性''的衰减率。不直接用梯度更新参数，而是用``过去梯度\emph{β1+当下梯度}（1-β1）''这个移动平均乘以学习率来更新参数。
+
+计算梯度：
+
+\[
+g_t = \nabla_\theta J(\theta_{t-1})
+\]
+
+更新动量（一阶矩估计）：
+
+\[
+m_t = \beta_1 \cdot m_{t-1} + (1-\beta_1)\cdot g_t
+\]
+
+\(m_t\) 是 \(g_t\) 的指数移动平均值。\(\beta_1\) 决定了过去梯度的``遗忘''速度；\(\beta_1=0.9\) 意味着当前的 \(m_t\) 大约 \(90\%\) 来自过去的动量，\(10\%\) 来自当前梯度。
+
+注：在一些经典实现中，也写作 \(m_t=\beta_1\cdot m_{t-1}+g_t\)。Adam 采用的是 EMA 形式，我们在此统一使用 EMA 形式。
+
+更新参数：
+
+\[
+\theta_t = \theta_{t-1} - \alpha \cdot m_t
+\]
+
+参数更新的方向不再是 \(g_t\)，而是平滑后的 \(m_t\)。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-24}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-24}}
+
+\begin{itemize}
+\tightlist
+\item
+  Polyak, B. T. (1964). \href{https://doi.org/10.1016/0041-5553(64)90137-5}{Some methods of speeding up the convergence of iteration methods}. USSR Computational Mathematics and Mathematical Physics.
+\item
+  Sutskever, I., Martens, J., Dahl, G., \& Hinton, G. (2013). \href{https://proceedings.mlr.press/v28/sutskever13.html}{On the importance of initialization and momentum in deep learning}. ICML 2013.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux81eaux9002ux5e94ux5b66ux4e60ux7387}{%
+\section{自适应学习率}\label{ux81eaux9002ux5e94ux5b66ux4e60ux7387}}
+
+\hypertarget{ux4e00ux81eaux9002ux5e94ux5b66ux4e60ux7387ux89e3ux51b3ux4e86ux4ec0ux4e48ux95eeux9898}{%
+\subsection{一、自适应学习率解决了什么问题？}\label{ux4e00ux81eaux9002ux5e94ux5b66ux4e60ux7387ux89e3ux51b3ux4e86ux4ec0ux4e48ux95eeux9898}}
+
+主要解决了SGD的学习率选择问题，特别是当不同参数的梯度尺度差异巨大时。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  全局学习率困境（Global Learning Rate Dilemma）
+\end{enumerate}
+
+在深度神经网络中，不同参数（如浅层权重、深层权重、偏置项）的梯度量级可能相差数个数量级。SGD对所有参数都使用同一个学习率。如果设置得太大，梯度大的参数（如损失函数变化剧烈的参数）会更新过快，导致震荡甚至``爆炸''；如果设置得太小，梯度小的参数（如损失函数变化平缓的参数）会更新过慢，导致收敛需要极长时间。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  非平稳目标（Non-Stationary Objectives）
+\end{enumerate}
+
+在某些任务（如强化学习）或训练后期，梯度的统计特性（如平均大小）可能会发生变化。固定的值无法适应这种变化。
+
+\hypertarget{ux4e8cux81eaux9002ux5e94ux5b66ux4e60ux7387ux7684ux89e3ux51b3ux65b9ux6848}{%
+\subsection{二、自适应学习率的解决方案}\label{ux4e8cux81eaux9002ux5e94ux5b66ux4e60ux7387ux7684ux89e3ux51b3ux65b9ux6848}}
+
+自适应学习率即在更新参数时，将每个维度的学习率除以本维度上过去梯度的``均方根''（Root Mean Square，即sqrt(v\_t)），缩放其大小。对于近期梯度一直很大的参数，其有效学习率会自动减小，防止其更新过猛而震荡；对于近期梯度一直很小的参数，其有效学习率会自动增大，使其能够更快地收敛。
+
+而对于这个均方根怎么计算，产生了两种方案：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  AdaGrad：使用过去全体梯度二次方的算术平均值。
+\item
+  RMSProp（Root Mean Square Propagation）：使用过去梯度二次方的移动平均值v\_t，这个v\_t向量（与参数维度相同）跟踪了每个参数近期梯度的平均幅度（或能量）。相对而言，近期梯度的权重更大。
+\end{enumerate}
+
+RMSProp效果更好，故后续围绕RMSProp讨论。
+
+这里有两个问题：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  为什么取近期而不是单次？
+\end{enumerate}
+
+``整体地形''更能反映实际情况。有时单个点梯度很大、整体梯度却很小，我们就不应该除以一个很大的值，因为首先一个点具有偶然性，其次可能这个点本来就很特殊、不应被``平均''扼杀。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  为什么用均方根？
+\end{enumerate}
+
+首先，如果一个参数在``峡谷''中剧烈震荡，它会产生非常大的梯度。均方根这一对异常值非常敏感的指标会迅速增大，从而急剧减小该参数的学习率，这正是我们想要的。我们需要一个强大的自动稳定器，对震荡（大梯度）做出快速而强烈的反应。
+
+其次，随着优化的进行，梯度平均值趋于0（这里有正负），我们知道方差等于E(X\textsuperscript{2)-E(X)}2，E(X)≈0时平方的平均实质上就是对方差的估计，方差在统计学上可以代表代表``震荡程度''，适合用于调节学习率的幅度。
+
+\hypertarget{ux4e09ux6570ux5b66ux8868ux8fbe-1}{%
+\subsection{三、数学表达}\label{ux4e09ux6570ux5b66ux8868ux8fbe-1}}
+
+RMSProp将梯度除以引入了两个新超参数：β2和epsilon。前者是利用移动平均计算梯度平方和的值时的衰减率，后者是一个极小的值如10\^{}-8以防止除法分母为0。更新参数时，我们将梯度按元素除以（近期梯度的均方根+epsilon），再乘学习率。
+
+计算梯度：
+
+\[
+g_t = \nabla_\theta J(\theta_{t-1})
+\]
+
+更新梯度平方的 EMA（二阶矩估计）：
+
+\[
+v_t = \beta_2 \cdot v_{t-1} + (1-\beta_2)\cdot (g_t \odot g_t)
+\]
+
+注意：\(\odot\) 表示逐元素相乘（Element-wise multiplication），即 \(g_t\) 中的每个元素单独平方。
+
+更新参数：
+
+\[
+\theta_t = \theta_{t-1} - \frac{\alpha}{\sqrt{v_t}+\epsilon}\odot g_t
+\]
+
+注意：这里的除法和乘法也都是逐元素的。\(\alpha\) 被 \(v_t\) 中每个参数对应的``均方根''所缩放。
+
+注：在 RMSProp 的原始论文中，更新使用的是 \(\frac{\alpha}{\sqrt{v_t}+\epsilon}\odot g_t\)，而不是 \(m_t\)。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-25}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-25}}
+
+\begin{itemize}
+\tightlist
+\item
+  Duchi, J., Hazan, E., \& Singer, Y. (2011). \href{https://jmlr.org/papers/v12/duchi11a.html}{Adaptive Subgradient Methods for Online Learning and Stochastic Optimization}. Journal of Machine Learning Research.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{adamux4f18ux5316ux5668}{%
+\section{Adam优化器}\label{adamux4f18ux5316ux5668}}
+
+\hypertarget{ux4e00adam-ux89e3ux51b3ux4e86ux4ec0ux4e48ux95eeux9898}{%
+\subsection{一、Adam 解决了什么问题？}\label{ux4e00adam-ux89e3ux51b3ux4e86ux4ec0ux4e48ux95eeux9898}}
+
+针对优化过程中遇到的各种问题，Adam优化器既利用了Momentum 的``惯性''``动量''特性，以加速收敛、抑制震荡，并冲过鞍点；也利用了RMSProp的``自适应学习率''特性，以为不同参数分配合理的更新步长。
+
+\hypertarget{ux4e8cadam-ux5982ux4f55ux89e3ux51b3ux95eeux9898}{%
+\subsection{二、Adam 如何解决问题？}\label{ux4e8cadam-ux5982ux4f55ux89e3ux51b3ux95eeux9898}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  它是两种思路的集大成者，同时跟踪了两个``矩''的指数移动平均值：
+\end{enumerate}
+
+一阶矩（First Moment）：梯度的平均值 \(m_t\)（Momentum部分），用于决定更新的方向和动量。
+
+二阶矩（Second Moment）：梯度平方的平均值 \(v_t\)（RMSProp部分），用于自适应地缩放每个参数的学习率（像RMSProp）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  关键改进：偏差修正（Bias Correction）
+\end{enumerate}
+
+Adam 论文的作者发现一个问题：\(m_t\) 和 \(v_t\) 都在 \(t=0\) 时被初始化为 \(0\)。由于 \(\beta_1\) 和 \(\beta_2\) 都非常接近 \(1\)（例如 \(0.9\) 和 \(0.999\)），在训练刚开始的几个步骤中，\(m_t\) 和 \(v_t\) 会严重地偏向 \(0\)（Bias towards zero）。为此，他们将 \(m_t\) 和 \(v_t\) 的表达式根据时间参数进行了缩放。
+
+\hypertarget{ux4e09ux6570ux5b66ux8868ux8fbe-2}{%
+\subsection{三、数学表达}\label{ux4e09ux6570ux5b66ux8868ux8fbe-2}}
+
+超参数包括 \(\alpha\)（学习率）、\(\beta_1\)（例如 \(0.9\)）、\(\beta_2\)（例如 \(0.999\)）和 \(\epsilon\)（例如 \(10^{-8}\)）。初始化为 \(m_0=0\)（一阶矩向量）、\(v_0=0\)（二阶矩向量）、\(t=0\)。
+
+在时间步 \(t\)：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  令 \(t \leftarrow t+1\)。
+\item
+  计算梯度：
+\end{enumerate}
+
+\[
+g_t = \nabla_\theta J(\theta_{t-1})
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  更新有偏的一阶矩（Momentum）：
+\end{enumerate}
+
+\[
+m_t = \beta_1 \cdot m_{t-1} + (1-\beta_1)\cdot g_t
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  更新有偏的二阶矩（RMSProp）：
+\end{enumerate}
+
+\[
+v_t = \beta_2 \cdot v_{t-1} + (1-\beta_2)\cdot (g_t \odot g_t)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  计算偏差修正后的一阶矩：
+\end{enumerate}
+
+\[
+\hat{m}_t = \frac{m_t}{1-\beta_1^t}
+\]
+
+当 \(t\) 很小时，\(1-\beta_1^t\) 接近 \(0\)，起到了放大 \(m_t\) 的作用。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{5}
+\tightlist
+\item
+  计算偏差修正后的二阶矩：
+\end{enumerate}
+
+\[
+\hat{v}_t = \frac{v_t}{1-\beta_2^t}
+\]
+
+当 \(t\) 很大时，\(\beta^t \to 0\)，分母 \(\to 1\)，修正作用消失。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{6}
+\tightlist
+\item
+  执行参数更新：
+\end{enumerate}
+
+\[
+\theta_t = \theta_{t-1} - \alpha \cdot \frac{\hat{m}_t}{\sqrt{\hat{v}_t}+\epsilon}
+\]
+
+\hypertarget{ux56dbux5e94ux7528}{%
+\subsection{四、应用}\label{ux56dbux5e94ux7528}}
+
+Adam（及其变体，如AdamW）是当今深度学习领域绝大多数任务的默认首选优化器。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  在语言模型中：对于模型中的``词嵌入层''（Embedding Layer），输入是各种文段，输出是需要的对该文段的综合向量表示（以进行下一步处理）。例如词汇表有 50,000 个词，每个词是一个300维向量，那这一层的参数量就是15,000,000。现在我们要更新参数，通过参数的正确收敛（每个词嵌入向量能有效表达语义），实现对输入文段的正确输出表示。但在任何一个句子中，只都涉及少数几个词，这些词的参数被激活和更新，结果常用词的梯度更新频繁，而稀有词（如 ``aardvark''）的梯度更新极少。SGD会导致常用词训练过度，而稀有词训练不足。Adam 的自适应学习率完美解决了这个问题。稀有词的梯度长期为 \(0\)，导致 \(v_t\) 非常小，以指数形式衰减并趋近于 \(0\)。一旦这个稀有词在输入文段中出现，一个非零的 \(g_t\) 会除以一个极小的值，从而产生一个巨大的有效学习率，使其得到充分更新。
+\item
+  处理大型复杂模型时：大模型动辄拥有数千亿甚至数万亿的参数。Adam的动量特性有助于在如此复杂和高维的损失空间中平滑地导航，避免``卡''在鞍点或平坦区域，从而大大加快收敛速度。
+\item
+  搭建一个新的CV模型时：SGD+Momentum 可能需要一个精心设计和调试的``学习率衰减策略''（learning rate schedule）才能收敛，而Adam对学习率的初始选择不那么敏感，通常使用默认值（如α=0.001）就能快速得到一个非常好的结果。
+\item
+  在生成模型训练中：如GANs的训练是一个``二人零和游戏''（生成器vs判别器），双方需要精妙的平衡。如果一方训练过快，另一方就会崩溃，导致训练失败。Adam 的自适应学习率有助于自动平衡两者的训练速度，防止某一方的梯度爆炸或消失，大大提高了 GAN 训练的成功率。又如扩散模型非常庞大且训练成本高昂。它们依赖 Adam 来确保在海量数据上进行稳定且高效的训练。
+\item
+  在强化学习中：智能体一边学习，一边改变其策略，这导致它采集到的数据分布（即``经验''）是不断变化的。RL中的奖励信号往往是稀疏且延迟的，这导致计算出的梯度方差极大，噪声很大。Adam的二阶矩 \(v_t\)（RMSProp部分）能有效估计梯度的方差，而一阶矩 \(m_t\)（Momentum部分）能平滑噪声，增强鲁棒性。这使其成为在RL这种高噪声、非平稳环境中进行稳定训练的理想选择。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-26}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-26}}
+
+\begin{itemize}
+\tightlist
+\item
+  Kingma, D. P., \& Ba, J. (2015). \href{https://arxiv.org/abs/1412.6980}{Adam: A Method for Stochastic Optimization}. ICLR 2015.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{adamwux4f18ux5316ux5668}{%
+\section{AdamW优化器}\label{adamwux4f18ux5316ux5668}}
+
+AdamW优化器（Adam with Decoupled Weight Decay）是对Adam优化器的一种改进。
+
+\hypertarget{ux4e00ux63d0ux51faux80ccux666fadamux81eaux9002ux5e94ux5b66ux4e60ux7387ux5bf9ux6b63ux5219ux5316ux9879ux7684ux9519ux8befux7f29ux653e}{%
+\subsection{一、提出背景：Adam自适应学习率对正则化项的错误缩放}\label{ux4e00ux63d0ux51faux80ccux666fadamux81eaux9002ux5e94ux5b66ux4e60ux7387ux5bf9ux6b63ux5219ux5316ux9879ux7684ux9519ux8befux7f29ux653e}}
+
+在传统 Adam 中，我们向损失函数添加 \(L_2\) 范数惩罚：
+
+\[
+\mathcal{L}_{total}(\theta) = f(\theta) + \frac{\lambda}{2}\lVert\theta\rVert^2
+\]
+
+此时，传入优化器的梯度 \(\hat{g}_t\) 变为：
+
+\[
+\hat{g}_t = \nabla f(\theta_{t-1}) + \lambda\theta_{t-1}
+\]
+
+Adam 算法将这个包含正则项的梯度 \(\hat{g}_t\) 用于计算动量 \(m_t\) 和 \(v_t\)：
+
+\[
+m_t = \beta_1m_{t-1} + (1-\beta_1)\hat{g}_t
+\]
+
+\[
+v_t = \beta_2v_{t-1} + (1-\beta_2)\hat{g}_t^2
+\]
+
+参数更新公式为：
+
+\[
+\theta_t = \theta_{t-1} - \eta\frac{\hat{m}_t}{\sqrt{\hat{v}_t}+\epsilon}
+\]
+
+问题所在：正则化项 \(\lambda\theta\) 被混入了 \(m_t\) 和 \(v_t\) 中。由于 Adam 会除以 \(\sqrt{v_t}\) 来进行自适应缩放，这意味着正则化项也被自适应缩放了。
+
+对于梯度变化幅度很大的参数（\(v_t\) 大），正则化力度被削弱了。对于梯度变化平缓的参数（\(v_t\) 小），正则化力度被放大了。这导致不同参数受到的衰减力度不均匀，且 \(\lambda\) 的最佳取值与学习率 \(\eta\) 产生了强耦合，难以调参。
+
+我们需要的是Loss对参数的梯度太大时减小学习率，Loss对参数的梯度太小时增大学习率，而不应该影响正则化项。故需要把正则化项解耦出来。
+
+\hypertarget{ux4e8cadamwux7684ux89e3ux51b3ux65b9ux6848}{%
+\subsection{二、AdamW的解决方案}\label{ux4e8cadamwux7684ux89e3ux51b3ux65b9ux6848}}
+
+AdamW 将权重衰减项从梯度 \(\hat{g}_t\) 中移除。梯度仅基于原始损失函数：
+
+\[
+g_t = \nabla f(\theta_{t-1})
+\]
+
+动量计算仅涉及原始梯度：
+
+\[
+m_t = \beta_1m_{t-1} + (1-\beta_1)g_t
+\]
+
+\[
+v_t = \beta_2v_{t-1} + (1-\beta_2)g_t^2
+\]
+
+参数更新公式分为两部分，分别为Adam更新方向和独立权重衰减：
+
+\[
+\theta_t = \theta_{t-1} - \eta\frac{\hat{m}_t}{\sqrt{\hat{v}_t}+\epsilon} - \eta\lambda\theta_{t-1}
+\]
+
+其中，第一项是标准 Adam 更新步，第二项是解耦的权重衰减。
+
+权重衰减项直接作用于参数，不再受到学习率的缩放影响。这恢复了SGD中权重衰减的原始物理意义（即每次迭代让权重按比例收缩），使得模型的泛化能力通常优于Adam。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-27}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-27}}
+
+\begin{itemize}
+\tightlist
+\item
+  Loshchilov, I., \& Hutter, F. (2019). \href{https://arxiv.org/abs/1711.05101}{Decoupled Weight Decay Regularization}. ICLR 2019.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{muonux4f18ux5316ux5668}{%
+\section{Muon优化器}\label{muonux4f18ux5316ux5668}}
+
+Adam/AdamW优化器在实现自适应学习率时，对于每个维度（参数）各自进行除以标量的缩放。但在优化问题中，这只是高维参数空间中的一种坐标系。Muon优化器通过正交化动量矩阵来更新参数，让更新矩阵 \(U\) 成为一个近似的正交矩阵，即满足 \(U^{T}U\approx I\)。
+
+从几何上看，这意味着优化器在参数空间的所有主方向（奇异向量方向）上进行归一化，在这些方向上前进相同步长，类似于牛顿法对于变换的空间执行各方向步长相同的梯度下降（当然，这里的奇异向量方向并不是牛顿法中的方向），而不是像Adam仅仅试图调节各个坐标轴上行进的幅度。
+
+在矩阵正交化计算上，Muon使用Newton-Schulz迭代 来逼近矩阵的``符号函数''，从而实现正交化，极大地减小了计算量。
+
+目前，在Kimi K2等一些大模型的训练中，已经改用了Muon优化器。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-28}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-28}}
+
+\begin{itemize}
+\tightlist
+\item
+  Jordan, K., et al.~(2024). \href{https://kellerjordan.github.io/posts/muon/}{Muon: An optimizer for hidden layers in neural networks}.
+\item
+  Kimi Team. (2025). \href{https://arxiv.org/abs/2507.20534}{Kimi K2: Open Agentic Intelligence}. arXiv:2507.20534.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux96f6ux9636ux4f18ux5316ux7b97ux6cd5}{%
+\section{零阶优化算法}\label{ux96f6ux9636ux4f18ux5316ux7b97ux6cd5}}
+
+在一些情况下，我们无法求解梯度（一阶导数信息），则可以运用零阶优化算法。
+
+\hypertarget{ux4e00ux9057ux4f20ux7b97ux6cd5}{%
+\subsection{一、遗传算法}\label{ux4e00ux9057ux4f20ux7b97ux6cd5}}
+
+遗传算法是一种受达尔文生物进化论``物竞天择，适者生存''思想启发的搜索启发式算法。它模拟了自然选择和遗传学中的过程，用于解决优化和搜索问题。其核心思想非常简单：在一个充满候选解决方案（称为``个体''或``染色体''）的``种群''中，让那些更``适应''（即更好）的个体有更高的几率生存、繁殖并将自己的``基因''（即解决方案的特征）传递给下一代。经过数代的演化，种群的整体适应性会不断提高，最终收敛到一个或几个优秀的解决方案上。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  基本概念与术语
+\end{enumerate}
+
+个体/染色体：代表一个可能的解决方案。通常被编码成一个字符串（如二进制串、浮点数列等）。
+
+基因：染色体中的一个元素，代表解决方案的某个特征或参数。
+
+种群：一组个体的集合，是算法每一代处理的对象。
+
+适应度函数：一个评价函数，用于衡量一个个体（解决方案）的好坏。适应度越高，个体越优秀。
+
+选择：根据个体的适应度，从当前种群中挑选出优秀的个体作为``父母''，用于繁殖下一代。适应度越高的个体被选中的概率越大。
+
+交叉：模拟生物的有性繁殖。两个``父母''染色体交换部分基因，产生一个或两个新的``后代''染色体。这是产生新个体的主要方式。
+
+变异：以很小的概率随机改变染色体上的某个或某些基因。这为种群引入了新的遗传物质，有助于维持种群的多样性，避免过早陷入局部最优解。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  算法流程（五步循环）
+\end{enumerate}
+
+遗传算法通常遵循以下流程，这是一个迭代的过程：
+
+步骤详解：
+
+初始化：随机生成一个包含 N 个个体的初始种群。这些个体就像第一代生物，基因是随机的。
+
+适应度计算：使用适应度函数评估种群中每一个个体的好坏。例如，如果问题是寻找函数的最大值，那么函数值本身就可以作为适应度。
+
+选择：目的是从当前种群中选出``优秀''的父母。常用``轮盘赌选择法''。想象一个轮盘，每个个体占用的面积与其适应度成正比。适应度高的个体被选中的概率就大。
+
+交叉：组合父母的特征，产生新的后代，希望结合父母的优点。最常用的是单点交叉。随机选择一个点，将两个父代染色体在该点处切断，并交换后半部分。（父代1:~1010 \textbar{} 1010 父代2:~1100 \textbar{} 1100 后代1:~1010 1100 后代2:~1100 1010）
+
+变异：引入随机变化，增加种群的多样性，探索新的可能解。以一个很小的概率（如0.1\%），随机改变后代染色体上的某个基因。对于二进制编码，就是把 0 变成 1，或把 1 变成 0。
+
+然后，用新生成的后代种群取代旧的种群，形成新一代，并回到步骤2（计算适应度），开始新的循环。~这个过程会不断重复，直到满足某个终止条件，例如：达到了最大迭代次数（代数）；种群中最优个体的适应度已经连续多代没有显著改善；找到了满足要求的解（例如，适应度高于某个阈值）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  一个简单的例子：寻找函数 f(x) = x² 在 {[}0, 31{]} 上的最大值
+\end{enumerate}
+
+编码：我们用5位二进制数表示x。例如，11001~代表 25，00000~代表 0。
+
+初始化：随机生成一个包含4个染色体的初始种群。
+
+A:~01101~(13) B:~11000~(24) C:~01000~(8) D:~10011~(19)
+
+适应度计算：f(x) = x² f(A) = 169 f(B) = 576 f(C) = 64 f(D) = 361
+
+选择：根据适应度比例选择父母。B和D的适应度很高，更有可能被选中。假设我们选中了 B 和 D 作为一对父母，A 和 D 作为另一对。
+
+交叉：假设在第三位后交叉。
+
+父母 (B, D):~110 \textbar{} 00~和~100 \textbar{} 11
+
+后代 (E, F):~11011~(27) 和~10000~(16)
+
+父母 (A, D):~011 \textbar{} 01~和~100 \textbar{} 11
+
+后代 (G, H):~01111~(15) 和~10001~(17)
+
+变异：假设后代F(10000)的最后一位发生变异，变成了~10001~(17)。
+
+新的种群变为：E(27), F(17), G(15), H(17)。计算它们的适应度：
+
+f(E) = 729 f(F) = 289 f(G) = 225 f(H) = 289
+
+可以看到，仅仅经过一代，种群的平均适应度和最佳适应度都有了显著提高。继续迭代，最终会收敛到~11111~(31)，即最大值。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  优缺点及应用
+\end{enumerate}
+
+优点：
+
+全局搜索能力强：不易陷入局部最优解，尤其适用于复杂、非线性的问题。
+
+通用性强：对问题的数学性质（如可微、连续）要求不高，只要能定义编码和适应度函数即可。
+
+隐含并行性：同时处理种群中的多个点，搜索效率高。
+
+鲁棒性好：对初始解不敏感。
+
+缺点：
+
+收敛速度慢：对于简单问题，可能不如梯度下降等传统方法快。
+
+参数调优复杂：交叉率、变异率、种群大小等参数对结果影响很大，需要经验调整。
+
+``保证最优''：不能保证找到全局最优解，只能找到``满意''的近似解。
+
+编码和适应度函数设计是关键：设计不当会导致算法性能低下。
+
+应用：
+
+函数优化与组合优化：旅行商问题、调度问题（车辆调度、作业车间调度）。
+
+人工智能：神经网络结构设计、模糊逻辑规则优化。
+
+自动程序设计：设计计算机程序以满足特定需求。
+
+机器学习：特征选择、分类器参数调优。
+
+经济学与金融学：预测模型、投资组合优化。
+
+生物信息学：DNA序列分析、蛋白质结构预测。
+
+工程设计：飞机机翼设计、天线设计、机器人路径规划。
+
+总结：遗传算法是一种强大而灵活的全局优化工具，它通过模拟自然进化过程，在巨大的搜索空间中有效地寻找``足够好''的解决方案。虽然它不一定能找到绝对的最优解，并且在计算上可能不是最高效的，但其在处理那些没有现成数学模型或传统方法难以解决的复杂问题时，展现出了独特的优势。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-29}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-29}}
+
+\begin{itemize}
+\tightlist
+\item
+  Holland, J. H. (1975). \href{https://openlibrary.org/books/OL5070129M/Adaptation_in_natural_and_artificial_systems}{Adaptation in Natural and Artificial Systems}. University of Michigan Press.
+\item
+  Goldberg, D. E. (1989). \href{https://openlibrary.org/books/OL2030750M/Genetic_algorithms_in_search_optimization_and_machine_learning}{Genetic Algorithms in Search, Optimization, and Machine Learning}. Addison-Wesley.
+\item
+  Nesterov, Y., \& Spokoiny, V. (2017). \href{https://doi.org/10.1007/s10208-015-9296-2}{Random Gradient-Free Minimization of Convex Functions}. Foundations of Computational Mathematics.
+\end{itemize}
+
+\clearpage

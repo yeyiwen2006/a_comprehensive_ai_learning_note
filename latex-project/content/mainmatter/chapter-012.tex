@@ -1,0 +1,305 @@
+\hypertarget{ux57faux4e8eux7b56ux7565ux7684ux5f3aux5316ux5b66ux4e60}{%
+\chapter{基于策略的强化学习}\label{ux57faux4e8eux7b56ux7565ux7684ux5f3aux5316ux5b66ux4e60}}
+
+\hypertarget{ux57faux4e8eux7b56ux7565ux7684ux5f3aux5316ux5b66ux4e60ux7684ux57faux672cux601dux60f3}{%
+\section{基于策略的强化学习的基本思想}\label{ux57faux4e8eux7b56ux7565ux7684ux5f3aux5316ux5b66ux4e60ux7684ux57faux672cux601dux60f3}}
+
+\hypertarget{ux4e00ux57faux4e8eux4ef7ux503cux7684ux65b9ux6cd5ux7684ux7f3aux9677}{%
+\subsection{一、基于价值的方法的缺陷}\label{ux4e00ux57faux4e8eux4ef7ux503cux7684ux65b9ux6cd5ux7684ux7f3aux9677}}
+
+基于价值的强化学习方法依赖于学习Q(s,a)，即给定状态下动作的价值函数。这意味着需要枚举所有（X个）动作以选择最优，其输出是离散的，对于连续动作（如机械臂控制），神经网络有几个输出节点，就最多只能拟合几种离散动作，导致动作僵硬；否则，拟合Q函数涉及几乎无限多个策略的期望比较、选择最优，需要的参数几乎无限多。因此，我们引入基于策略的强化学习。
+
+\hypertarget{ux4e8cux57faux4e8eux7b56ux7565ux7684ux5f3aux5316ux5b66ux4e60}{%
+\subsection{二、基于策略的强化学习}\label{ux4e8cux57faux4e8eux7b56ux7565ux7684ux5f3aux5316ux5b66ux4e60}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  总体思想
+\end{enumerate}
+
+直接学习每个状态下的动作的概率分布，并按此分布采样动作。类似于学骑车（或者一些机器人的精密连续的动作），无法计算哪种状态价值期望最优，直接让智能体在对应状态下不断选择策略（准确说是策略的概率分布，比如也以小狗寻路为例，它会学习：在某个路口在70％左转30％右转），每次走完全程、得到累积奖励G（不同于Q函数是按最优策略计算的期望值）。我们的终极目标是找到一个策略π，使得累积奖励的期望J最大化。当策略由一个参数向量 θ（例如神经网络的权重）表示时，这个问题就转化为寻找最优的 θ。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  神经网络函数
+\end{enumerate}
+
+神经网络的输入为状态s，输出为动作值或动作相关参数。这个神经网络拟合了π函数，也即给定状态下动作值向量或动作相关参数的概率分布（对于连续的值，相当于概率密度函数），它是基于经验的（经验记忆在神经网络的参数θ中）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  目标函数（损失函数）
+\end{enumerate}
+
+设初始状态为s0（确定），目标是让每一次完整动作链的累积奖励期望J=E\_τ\textasciitilde π(R(τ))最大，这里R(τ)表示沿着动作链τ走完全程获得的奖励，期望是按策略π对应的动作链概率分布求出的。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  策略梯度
+\end{enumerate}
+
+所有动作的累积奖励的期望（也就是R(τ)的期望）J对参数向量 θ的梯度：
+
+梯度表达：我们从目标函数的定义出发，并利用期望的积分形式和对数导数技巧（Log-Likelihood Trick）进行转换。
+
+\[
+\nabla_\theta J(\theta)
+=\nabla_\theta\int P(\tau|\theta)R(\tau)d\tau
+=\int\nabla_\theta P(\tau|\theta)R(\tau)d\tau
+\]
+
+利用对数导数技巧 \(\nabla_\theta P(\tau|\theta)=P(\tau|\theta)\nabla_\theta\log P(\tau|\theta)\)，上式可转化为：
+
+\[
+\nabla_\theta J(\theta)
+=\int P(\tau|\theta)R(\tau)\nabla_\theta\log P(\tau|\theta)d\tau
+=\mathbb{E}_{\tau\sim\pi_\theta}\left[R(\tau)\nabla_\theta\log P(\tau|\theta)\right]
+\]
+
+我们将一个梯度的积分转化为了一个期望。这意味着我们可以通过采样来近似这个梯度。
+
+我们把动作链τ分解成每一个时间步下的``元动作''：
+
+分解轨迹概率：一条轨迹 \(\tau=(s_0,a_0,s_1,a_1,\cdots)\) 发生的概率可以分解为：
+
+\[
+P(\tau|\theta)=p(s_0)\prod_{t=0}^{T}\pi_\theta(a_t|s_t)P(s_{t+1}|s_t,a_t)
+\]
+
+其中只有策略部分 \(\pi_\theta(a_t|s_t)\) 依赖于参数 \(\theta\)。因此，当我们计算其对数梯度时，环境动态部分（初始状态分布 \(p(s_0)\) 和状态转移概率 \(P(s_{t+1}|s_t,a_t)\)）会被消去：
+
+\[
+\nabla_\theta\log P(\tau|\theta)=\sum_{t=0}^{T}\nabla_\theta\log\pi_\theta(a_t|s_t)
+\]
+
+（其中s\_i为状态，a\_i为动作，相当于(动作选择概率*状态转移概率)的累乘）
+
+得到最终形式：将上述结果代回期望表达式，就得到了策略梯度定理的经典形式：
+
+\[
+\nabla_\theta J(\theta)
+=\mathbb{E}_{\tau\sim\pi_\theta}
+\left[
+R(\tau)\cdot\sum_{t=0}^{T}\nabla_\theta\log\pi_\theta(a_t|s_t)
+\right]
+\]
+
+\(\nabla_\theta\log\pi_\theta(a_t|s_t)\) 是什么？
+
+\begin{itemize}
+\tightlist
+\item
+  这是一个向量，指出了``如何在参数空间中移动，才能增加在状态 \(s_t\) 下选择动作 \(a_t\) 的概率''。
+\item
+  简而言之：它想让这个动作出现的概率变大。
+\end{itemize}
+
+这一项决定了梯度的方向，即θ向量梯度更新的方向。R项则决定正负、大小（对梯度向量进行缩放），正奖励越大，越促进往该方向进行梯度上升，负奖励反之。梯度值为期望，意味着我们通过按π\_θ采样即可获得无偏估计。
+
+由于期望的下标是π\_θ，每一次的目标函数值都会随策略的变化而变化，更新策略与行为策略直接相关，这是一个在线学习算法。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-52}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-52}}
+
+\begin{itemize}
+\tightlist
+\item
+  Williams, R. J. (1992). \href{https://doi.org/10.1007/BF00992696}{Simple statistical gradient-following algorithms for connectionist reinforcement learning}. Machine Learning, 8, 229-256.
+\item
+  Sutton, R. S., McAllester, D., Singh, S., \& Mansour, Y. (1999). \href{https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html}{Policy Gradient Methods for Reinforcement Learning with Function Approximation}. NeurIPS 1999.
+\item
+  Sutton, R. S., \& Barto, A. G. (2018). \href{http://incompleteideas.net/book/the-book-2nd.html}{Reinforcement Learning: An Introduction}. MIT Press.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{reinforceux7b97ux6cd5}{%
+\section{REINFORCE算法}\label{reinforceux7b97ux6cd5}}
+
+\hypertarget{ux4e00ux5956ux52b1ux9879ux7684ux53d8ux6362}{%
+\subsection{一、奖励项的变换}\label{ux4e00ux5956ux52b1ux9879ux7684ux53d8ux6362}}
+
+注意到策略梯度公式的方括号内可以视为 \(T+1\) 项相加，每一项是``\(t\) 时刻策略的对数 \(\log\pi_\theta(a_t\mid s_t)\) 对参数 \(\theta\) 的梯度，乘以该动作链全程的奖励 \(R(\tau)\)''。
+
+\(\log\pi_\theta(a_t\mid s_t)\) 对参数 \(\theta\) 的梯度意味着``沿此方向改变 \(\theta\)，\(s_t\) 下选择 \(a_t\) 概率上升（最快）''。显然，如果该动作在未来能带来正奖励，则我们需要概率上升，否则需要减小。但是，决定梯度项大小的系数 \(R(\tau)=r_0+\cdots+r_T\) 却是从0到 \(T\) 全程的奖励，这显然不合理，在 \(t=5\) 做出的动作，不可能影响 \(t=0\) 到 \(t=4\) 已经发生的奖励。因此，和每个梯度项相乘的应该是它的未来的奖励。故把 \(R(\tau)\) 换成：
+
+用回报 \(G_t\) 替代 \(Q\) 函数。
+
+定理中的 \(Q^{\pi_\theta}(s_t,a_t)\) 表示在状态 \(s_t\) 采取动作 \(a_t\) 后所能获得的期望累积回报。在 REINFORCE 中，我们不知道真实的 \(Q\) 函数，但可以从采样的轨迹中计算一个实际观测到的累积回报 \(G_t\) 作为其近似值：
+
+\[
+G_t=r_t+\gamma r_{t+1}+\gamma^{2}r_{t+2}+\cdots+\gamma^{T-t}r_T
+\]
+
+这里，\(G_t\) 是 \(Q^{\pi_\theta}(s_t,a_t)\) 的一个无偏估计，但因为是单次采样结果，其方差（Variance）很高。
+
+这时策略梯度公式变为：
+
+\[
+\nabla_\theta J(\theta)
+=\mathbb{E}_{\pi_\theta}
+\bigl[
+\sum_{t=0}^{T}
+(\sum_{t'=t}^{T}\gamma^{t'-t}r_{t'})
+\nabla_\theta\log\pi_\theta(a_t|s_t)
+\bigr]
+\]
+
+外层从0到 \(T\)，代表 \(\theta\) 的更新让动作链里每一个时间步的策略都得到优化；内层从 \(t\) 到 \(T\)，代表每一个优化的幅度都只取决于未来的奖励，而与 \(t\) 之前已经获得的奖励无关。
+
+由于对于每一个给定 \(t\)、给定神经网络，上式相当于对全体 \(G_t\) 取期望，故公式也可以写成：
+
+\[
+\nabla J(\theta)
+=\mathbb{E}_{\tau\sim\pi}
+\bigl[
+\sum_{t=0}^{T}
+\nabla_\theta\log\pi_\theta(a_t|s_t)Q^{\pi}(s_t,a_t)
+\bigr]
+\]
+
+这里 \(Q_\pi(s_t,a_t)\) 表示对于 \((s_t,a_t)\)，未来累积奖励 \(G_t\) 的期望值。
+
+对于这种参数更新方式，\(\pi\) 对 \(\theta\) 的梯度表示``怎样改变参数 \(\theta\) 的值可以最快地增大在状态 \(s\) 选择动作 \(a\) 的概率 \(\pi\)''，对 \(\pi\) 取 \(\log\) 相当于沿着因变量方向``压扁''，不改变上升速度最快的（梯度）方向，但可以把 \((0,1)\) 之间的概率映射到 \((-\infty,0)\) 增大梯度值，且概率越远离1，梯度越大。当奖励 \(G_t>0\)，反向传播会倾向于增大选择 \(a\) 的概率，反之倾向于减小。
+
+\hypertarget{ux4e8cux671fux671bux7684ux8499ux7279ux5361ux6d1bux8fd1ux4f3c}{%
+\subsection{二、期望的蒙特卡洛近似}\label{ux4e8cux671fux671bux7684ux8499ux7279ux5361ux6d1bux8fd1ux4f3c}}
+
+策略梯度定理可以直接求（所有动作按策略 \(\pi\) 给出的概率加权后）累积奖励 \(J\) 对 \(\theta\) 的梯度。但是，策略梯度定理的公式是一个期望，意味着需要对所有可能的轨迹进行加权平均，这在实际中是无法计算的。故使用蒙特卡洛方法（用频率估计概率）来近似这个期望：即通过每次运行当前一种策略，从初始到结束采样得到 \(N\) 条真实轨迹，每次运行时计算每一个 \(t\) 时刻到最终累积奖励 \(G_t\)。这等价于用 \(G_t\) 估计 \(Q_\pi(s_t,a_t)\)。
+
+然后我们用这些轨迹作为样本，近似代替这里的期望，也就是采取类似小批量随机梯度下降的方法：每次探索一种动作路径，则：
+
+\[
+\nabla_\theta J(\theta)
+\approx
+\frac{1}{N}\sum_{i=1}^{N}
+\bigl(
+\sum_{t=0}^{T}
+\nabla_\theta\log\pi_\theta(a_t^{(i)}|s_t^{(i)})G_t^{(i)}
+\bigr)
+\]
+
+当然，蒙特卡洛方法估计方差较大，这主要是因为 \(G_t\) 的不稳定性。详细分析如下：
+
+\[
+\text{Gradient}\approx\nabla_\theta\log\pi_\theta(a_t|s_t)\cdot G_t
+\]
+
+项 A：\(\nabla_\theta\log\pi_\theta(a_t|s_t)\) ------ ``我们自己的部分''
+
+这一项代表的是：``如果我想让我在状态 \(s_t\) 下做动作 \(a_t\) 的概率变大，我的参数 \(\theta\) 应该往哪个方向改？''
+
+\begin{itemize}
+\tightlist
+\item
+  它是确定的（Deterministic given sample）：一旦采样到了具体的 \((s_t,a_t)\)，这一项就是一个纯粹的微分计算问题。因为 \(\pi_\theta\) 是我们设计的神经网络（比如一个 MLP），其数学形式完全已知。我们通过反向传播（Backpropagation）可以精确无误地算出这个梯度向量。
+\end{itemize}
+
+项 B：\(G_t\) ------ ``环境与未来的部分''
+
+这一项代表的是：``在这个状态 \(s_t\) 做了动作 \(a_t\) 之后，一直到游戏结束，我到底拿了多少分？''
+
+\begin{itemize}
+\tightlist
+\item
+  它是极度随机的（Highly Stochastic）：即使我们在完全相同的 \(s_t\) 做了完全相同的 \(a_t\)，下一次得到的 \(G_t\) 可能完全不同。因为 \(G_t\) 包含了从 \(t\) 时刻到 \(T\) 时刻所有的随机性：
+
+  \begin{enumerate}
+  \def\labelenumi{\arabic{enumi}.}
+  \tightlist
+  \item
+    环境的随机性：也许这次风往左吹，下次风往右吹（状态转移概率 \(P(s'|s,a)\)）。
+  \item
+    策略的随机性：也许这次我们在 \(t+1\) 步选了动作 A，下次选了动作 B（未来策略 \(\pi\) 的随机性）。
+  \end{enumerate}
+\item
+  它是累积的（Accumulated）：\(G_t=r_t+r_{t+1}+r_{t+2}+\cdots\)。每一个 \(r\) 都是一个随机变量。在统计学中，多个独立（或相关）随机变量之和的方差通常会随着数量线性（甚至更快）增长。如果轨迹很长，噪声会不断叠加，最后爆炸。
+\end{itemize}
+
+\hypertarget{ux4e09ux5e26ux57faux7ebfux7684reinforce}{%
+\subsection{三、带基线的REINFORCE}\label{ux4e09ux5e26ux57faux7ebfux7684reinforce}}
+
+前面的推导，我们默认奖励大于0则概率增大。但很多时候，这只会导致``所有被更新到的概率都趋于提升''，并不是我们需要的。我们需要根据动作相对于其他动作而言价值的好坏做出选择，而不是根据其绝对的价值。
+
+虽然 REINFORCE 算法比简单策略梯度法更好，但由于我们是通过采样轨迹来估计策略梯度，这种估计往往具有较高的方差。这意味着每次采样得到的梯度值差异可能很大，这会影响算法的稳定性和收敛速度。
+
+为了解决这个问题，我们可以引入基线（Baseline）的概念。基线的核心思想是，通过减去一个预测值来减少方差，但不改变期望值。具体来说，我们可以使用 \(G_t-b(s_t)\) 来代替 \(G_t\) 作为权重，其中 \(b(s_t)\) 是状态 \(s_t\) 的基线值。为了让期望不变，这个基线函数应该和策略函数的参数 \(\theta\) 无关。
+
+你可以这样直观地理解：如果 \(G_t\) 大于基线 \(b(s_t)\)，则鼓励这个动作的发生；如果 \(G_t\) 小于基线 \(b(s_t)\)，则抑制这个动作的发生。
+
+带基线的 REINFORCE 的梯度计算公式如下：
+
+\[
+\nabla_\theta J(\theta)
+=\mathbb{E}_{\tau\sim\pi_\theta}
+\bigl[
+\sum_{t=0}^{T}
+(G_t-b(s_t))\nabla_\theta\log\pi_\theta(a_t|s_t)
+\bigr]
+\]
+
+这个公式与 REINFORCE 唯一的区别在于我们使用了 \(G_t-b(s_t)\) 而不是 \(G_t\)。
+
+如果我们引入一个基线 \(b(s_t)\)，把公式变成：
+
+\[
+\nabla J(\theta)
+=\mathbb{E}
+\bigl[
+\sum_{t=0}^{T}
+\nabla\log\pi(a_t|s_t)\cdot(G_t-b(s_t))
+\bigr]
+\]
+
+通常，我们把 \(b(s_t)\) 设为当前状态的平均价值（即 \(V^{\pi}(s_t)\)）。回到刚才的例子，假设平均分是 \(+55\) 分：
+
+\begin{itemize}
+\tightlist
+\item
+  考得烂（\(+10\)）：\(10-55=-45\)。（梯度反向，直接抑制该动作）
+\item
+  考得好（\(+100\)）：\(100-55=+45\)。（梯度正向，直接奖励该动作）
+\end{itemize}
+
+由于 \(b(s_t)\) 与策略参数 \(\theta\) 无关，它不影响优化过程。证明：
+
+关键证明在于：项 \(\mathbb{E}[\sum_t \nabla_\theta \log \pi_\theta(a_t \mid s_t)\cdot b(s_t)]\) 的期望值为零。这是因为：
+
+\[
+\begin{aligned}
+\mathbb{E}[\nabla_\theta \log \pi_\theta(a_t \mid s_t)b(s_t)]
+&= b(s_t)\sum_a \pi_\theta(a \mid s_t)\nabla_\theta \log \pi_\theta(a \mid s_t) \\
+&= b(s_t)\nabla_\theta(\sum_a \pi_\theta(a \mid s_t)) \\
+&= b(s_t)\nabla_\theta 1 \\
+&= 0
+\end{aligned}
+\]
+
+这意味着，只要基线 \(b(s_t)\) 不依赖于动作 \(a_t\)，即它是状态的一个函数，那么它在左侧期望上就不会对梯度估计产生系统性影响，因此不会引入偏差，保持了梯度估计的无偏性。
+
+\hypertarget{ux56dbux603bux7ed3-1}{%
+\subsection{四、总结}\label{ux56dbux603bux7ed3-1}}
+
+基于策略的强化学习算法不用枚举全部策略，比基于价值的强化学习更灵活，但可能陷入局部最优（找到一种还行的策略就不去找更好的，可通过适当增加策略初始随机性来避免）；参数稳定渐变，不会像基于价值会因为 \(Q\) 的微小变化而突变；为保证蒙特卡洛估计的准确性（\(G_t\)），相较于基于价值的强化学习，需要更大量数据。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-53}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-53}}
+
+\begin{itemize}
+\tightlist
+\item
+  Williams, R. J. (1992). \href{https://link.springer.com/article/10.1007/BF00992696}{Simple statistical gradient-following algorithms for connectionist reinforcement learning}. Machine Learning.
+\end{itemize}
+
+\clearpage

@@ -1,0 +1,59 @@
+\hypertarget{ux56feux795eux7ecfux7f51ux7edc}{%
+\chapter{图神经网络}\label{ux56feux795eux7ecfux7f51ux7edc}}
+
+\hypertarget{ux56feux795eux7ecfux7f51ux7edc-1}{%
+\section{图神经网络}\label{ux56feux795eux7ecfux7f51ux7edc-1}}
+
+\hypertarget{ux4e00ux56feux795eux7ecfux7f51ux7edcgnnux7684ux57faux672cux539fux7406}{%
+\subsection{一、图神经网络（GNN）的基本原理}\label{ux4e00ux56feux795eux7ecfux7f51ux7edcgnnux7684ux57faux672cux539fux7406}}
+
+\hypertarget{ux4e00ux524dux5411ux7b97ux6cd5}{%
+\subsubsection{（一）前向算法}\label{ux4e00ux524dux5411ux7b97ux6cd5}}
+
+GNN的核心是消息传递（Message Passing），类比``邻居间传递信息更新认知''。其数学流程分为三步：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  消息生成：对于连接节点u和节点v的边e(u,v)，可以生成一个``消息''m\_uv。这个消息的生成函数通常会同时考虑节点u的特征h\_u、节点v的特征h\_v以及边e(u,v)的特征f\_e(u,v)。例如，可以表示为~m\_uv = Message(h\_u, f\_e(u,v), h\_v)。
+\item
+  消息聚合：每个节点v会从其所有邻居节点u接收到消息m\_uv，并将这些消息聚合起来形成一个聚合消息M\_v=Aggregate(\{m\_uv\textbar u∈N(v)\})。聚合函数Aggregate通常是求和、平均或最大值等。
+\item
+  节点更新：节点v的特征h\_v会根据其自身的旧特征h\_v和聚合消息M\_v进行更新。更新函数可以表示为~h\_v(t+1) = Update(h\_v(t), M\_v(t))。
+\end{enumerate}
+
+\hypertarget{ux4e8cux8fedux4ee3ux8fc7ux7a0b}{%
+\subsubsection{（二）迭代过程\hspace{0pt}}\label{ux4e8cux8fedux4ee3ux8fc7ux7a0b}}
+
+上述步骤重复~K~次（即~K~层GNN），使节点捕获~K~阶邻居信息：
+
+第1层：可以学习到直接邻居特征。
+
+第2层：邻居在第1层学习到了其邻居特征，故这里能学习到``邻居的邻居''。
+
+注意：层数过多可能导致过平滑（所有节点表示趋同）。
+
+\hypertarget{ux4e09ux53cdux5411ux4f20ux64ad}{%
+\subsubsection{（三）反向传播}\label{ux4e09ux53cdux5411ux4f20ux64ad}}
+
+消息生成、聚合和更新的函数通常是由可学习的参数（权重矩阵和偏置项）构成的神经网络（如多层感知机MLP）实现的。在反向传播过程中，这些函数的参数会根据损失函数对模型输出的影响来计算梯度并更新节点特征。
+
+此外，一些先进的模型也允许边特征在消息传递过程中被动态更新。例如，在用多尺度交叉注意力Transformer模型学习分子特征时，分子图的节点特征和边特征都会被转换为可供Transformer层处理的输入嵌入，并在多层Transformer中进行处理。另一个例子是分子内消息传递过程，其中初始状态包含节点特征和与键拉伸、键角相关的边特征，在消息传递的每一层中，节点特征和边特征都会得到更新。更新边特征的方法通常与节点特征的更新类似，例如，可以设计一个函数来根据连接节点的特征和旧的边特征来生成新的边特征，或者利用专门的边注意力机制来加权和更新边特征。
+
+\hypertarget{ux4e8cux56feux795eux7ecfux7f51ux7edcux7684ux5e94ux7528}{%
+\subsection{二、图神经网络的应用}\label{ux4e8cux56feux795eux7ecfux7f51ux7edcux7684ux5e94ux7528}}
+
+图神经网络特别适用于处理药物分子图和蛋白质结构图，能够有效捕捉复杂的结构信息和高阶关系。药物由原子（节点）和化学键（边）组成，而蛋白质可以由氨基酸残基（节点）和它们之间的相互作用（边）构成。可以运用图神经网络和其他网络结合，预测药物与分子之间的相互作用。例如，先用图神经网络学习分子特征，再用全连接层预测可能的药物结构。
+
+此外，图神经网络以及结合Transformer和卷积神经网络（如TC-DTA）的模型在预测DTA方面表现出色。这些模型能够从复杂的药物和靶点特征中学习非线性映射，从而预测亲和力值。例如，G-K BertDTA框架结合了图表示学习和语义嵌入，用于预测药物-靶点亲和力。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-39}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-39}}
+
+\begin{itemize}
+\tightlist
+\item
+  Scarselli, F., Gori, M., Tsoi, A. C., Hagenbuchner, M., \& Monfardini, G. (2009). \href{https://doi.org/10.1109/TNN.2008.2005605}{The Graph Neural Network Model}. IEEE Transactions on Neural Networks.
+\end{itemize}
+
+\clearpage

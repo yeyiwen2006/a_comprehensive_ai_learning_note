@@ -1,0 +1,1928 @@
+\hypertarget{ux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux6a21ux578bux7684ux539fux7406ux548cux67b6ux6784}{%
+\chapter{扩散模型与流匹配模型的原理和架构}\label{ux6269ux6563ux6a21ux578bux4e0eux6d41ux5339ux914dux6a21ux578bux7684ux539fux7406ux548cux67b6ux6784}}
+
+\hypertarget{ux6269ux6563ux6a21ux578bux7684ux57faux672cux539fux7406}{%
+\section{扩散模型的基本原理}\label{ux6269ux6563ux6a21ux578bux7684ux57faux672cux539fux7406}}
+
+\hypertarget{ux4e00ux524dux5411ux6269ux6563}{%
+\subsection{一、前向扩散}\label{ux4e00ux524dux5411ux6269ux6563}}
+
+给定从真实数据分布中采样的数据点，我们定义一个前向扩散过程，在该过程中，我们分步骤向样本添加少量高斯噪声，生成一系列含噪样本。步长由方差调度控制。随着步长的增大，数据样本逐渐失去其可区分的特征。最终，它等效于各向同性的高斯分布。
+
+前向过程是一个固定的过程，它系统地、逐步地将一张清晰的原始图像 \(x_0\) 破坏成纯高斯噪声。
+
+数学描述：该过程被定义为一个马尔可夫链，每一步只依赖于前一步。在每一步 \(t\)，我们向前一步的状态 \(x_{t-1}\) 添加高斯噪声得到：
+
+\[
+x_t = \sqrt{\alpha_t}\cdot x_{t-1} + \sqrt{1-\alpha_t}\cdot \epsilon_t
+\]
+
+其中，\(\epsilon_t \sim \mathcal{N}(0, I)\) 是标准高斯噪声，\(\alpha_t = 1-\beta_t\)，而 \(\beta_t\) 是一个预先设定的、随时间 \(t\) 增大而增大的噪声调度参数，控制着每一步添加的噪声量。
+
+简单来说，使用 \(\sqrt{\alpha_t}\) 和 \(\sqrt{1-\alpha_t}\) 而不是直接使用 \(\alpha_t\) 和 \(1-\alpha_t\)，是为了保持数据的方差守恒，或者说防止数据在不断加噪的过程中``能量耗散''或``爆炸''。
+
+根据期望的线性性质：
+
+\[
+\mathbb{E}[x_t]
+= \mathbb{E}\left[\sqrt{\alpha_t}x_{t-1}+\sqrt{1-\alpha_t}\epsilon\right]
+= \sqrt{\alpha_t}\mathbb{E}[x_{t-1}] + \sqrt{1-\alpha_t}\mathbb{E}[\epsilon]
+= 0
+\]
+
+你会发现，无论系数用 \(\sqrt{\alpha}\) 还是 \(\alpha\)，甚至随便使用什么系数，只要输入和噪声的均值是 \(0\)，结果的均值永远是 \(0\)。所以，均值不是问题所在，它不需要我们操心。
+
+\[
+\begin{aligned}
+x_t
+&= \sqrt{\alpha_t}x_{t-1} + \sqrt{1-\alpha_t}\epsilon_{t-1},
+\quad \text{where } \epsilon_{t-1},\epsilon_{t-2},\cdots \sim \mathcal{N}(0,I) \\
+&= \sqrt{\alpha_t\alpha_{t-1}}x_{t-2}
+ + \sqrt{1-\alpha_t\alpha_{t-1}}\bar{\epsilon}_{t-2},
+\quad \text{where } \bar{\epsilon}_{t-2} \text{ merges two Gaussians } (*) \\
+&= \cdots \\
+&= \sqrt{\bar{\alpha}_t}x_0+\sqrt{1-\bar{\alpha}_t}\epsilon
+\end{aligned}
+\]
+
+（*）表示涉及两个高斯分布的合并，数学推导此处暂略。
+
+这里，\(\bar{\alpha}_t=\prod_{s=1}^{t}\alpha_s\) 是 \(\alpha_s\) 的累积乘积，\(\epsilon\sim\mathcal{N}(0,I)\)。这个公式极大地简化了过程，因为我们无需一步步迭代，就能直接获得任何中间噪声状态。当 \(t\) 足够大时（例如 \(T=1000\)），\(\bar{\alpha}_t\) 趋近于 \(0\)，\(x_T\) 就几乎变成了纯噪声 \(\epsilon\)。
+
+前向扩散每一步递推的概率表示：
+
+\[
+q(x_t\mid x_{t-1}) = \mathcal{N}(x_t;\sqrt{1-\beta_t}x_{t-1},\beta_t I)
+\]
+
+等号右边表示用均值为 \(\sqrt{1-\beta_t}x_{t-1}\)、协方差为 \(\beta_t I\) 的高斯分布得到 \(x_t\)。
+
+\hypertarget{ux4e8cux53cdux5411ux6269ux6563}{%
+\subsection{二、反向扩散}\label{ux4e8cux53cdux5411ux6269ux6563}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  数学推导
+\end{enumerate}
+
+在扩散模型的逆向过程（Reverse Process）中，我们的目标是从纯噪声 \(x_T\) 逐步还原出真实数据 \(x_0\)。理论上，从 \(x_t\) 倒推 \(x_{t-1}\) 的过程是一个条件概率分布 \(p_\theta(x_{t-1}\mid x_t)\)。
+
+扩散模型的一个巧妙之处在于，当总步数 T足够大时，这个逆向条件概率可以近似为一个高斯分布：
+
+\[
+p(x_{t-1}\mid x_t)=\mathcal{N}(x_{t-1};\mu_\theta(x_t,t),\Sigma_\theta(x_t,t))
+\]
+
+这里有两个关键参数：均值 \(\mu_\theta\) 和方差 \(\Sigma_\theta\)。
+
+\begin{itemize}
+\tightlist
+\item
+  方差 \(\Sigma_\theta(x_t,t)\) 通常被设定为一个与时间步 \(t\) 相关的常数 \(\sigma_t^2 I\)，不需要网络学习。
+\item
+  因此，神经网络的根本任务是预测这个高斯分布的均值 \(\mu_\theta(x_t,t)\)。
+\end{itemize}
+
+也就是说说，扩散模型先预测一个确定性的噪声值，然后以此得到去噪后 \(x_{t-1}\) 的概率分布（高斯分布），从分布中抽样得到 \(x_{t-1}\)（随机性体现在这里）。下面求解该概率分布。
+
+第一步：应用贝叶斯定理
+
+我们的目标是求已知原始图像 \(x_0\) 时，真实的逆向转移概率 \(q(x_{t-1}\mid x_t,x_0)\)。直接求很困难，但利用贝叶斯定理，可以将其分解为几个已知的分布：
+
+\[
+q(x_{t-1}\mid x_t,x_0)
+= \frac{q(x_t\mid x_{t-1},x_0)\cdot q(x_{t-1}\mid x_0)}{q(x_t\mid x_0)}
+\]
+
+根据扩散模型的马尔可夫性质，当前状态只依赖于前一个状态，因此 \(q(x_t\mid x_{t-1},x_0)=q(x_t\mid x_{t-1})\)。这个分布就是前向过程的定义：
+
+\[
+q(x_t\mid x_{t-1})=\mathcal{N}(x_t;\sqrt{\alpha_t}x_{t-1},(1-\alpha_t)I)
+\]
+
+而 \(q(x_{t-1}\mid x_0)\) 和 \(q(x_t\mid x_0)\) 是前向过程的闭式解，表示从 \(x_0\) 开始经过 \(t-1\) 步和 \(t\) 步加噪后的分布：
+
+\begin{itemize}
+\tightlist
+\item
+  \(q(x_t\mid x_{t-1})=\mathcal{N}(x_t\mid\sqrt{\alpha_t}x_{t-1},(1-\alpha_t)I)\)，表示从 \(x_{t-1}\) 到 \(x_t\) 的噪声添加。
+\item
+  \(q(x_{t-1}\mid x_0)=\mathcal{N}(x_{t-1}\mid\sqrt{\bar{\alpha}_{t-1}}x_0,(1-\bar{\alpha}_{t-1})I)\)，因为 \(x_{t-1}\) 是从 \(x_0\) 经过 \(t-1\) 步累积噪声得到的。
+\item
+  \(q(x_t\mid x_0)=\mathcal{N}(x_t\mid\sqrt{\bar{\alpha}_t}x_0,(1-\bar{\alpha}_t)I)\)，因为 \(x_t\) 是从 \(x_0\) 经过 \(t\) 步累积噪声得到的。
+\end{itemize}
+
+代入贝叶斯公式，得到：
+
+\[
+q(x_{t-1}\mid x_t,x_0)
+= \frac{
+\mathcal{N}(x_t\mid\sqrt{\alpha_t}x_{t-1},(1-\alpha_t)I)\cdot
+\mathcal{N}(x_{t-1}\mid\sqrt{\bar{\alpha}_{t-1}}x_0,(1-\bar{\alpha}_{t-1})I)
+}{
+\mathcal{N}(x_t\mid\sqrt{\bar{\alpha}_t}x_0,(1-\bar{\alpha}_t)I)
+}
+\]
+
+至此，我们将一个未知的分布分解成了三个已知的高斯分布。
+
+第二步：合并高斯分布
+
+我们希望证明这个分式的值也满足高斯分布，这里可以直接忽略归一化常数，只关注概率密度函数的指数部分，因为高斯分布的指数部分是二次型。从而：
+
+\[
+q(x_{t-1}\mid x_t,x_0)
+\propto
+\exp\left\{
+-\frac{(x_t-\sqrt{\alpha_t}x_{t-1})^2}{2(1-\alpha_t)}
+-\frac{(x_{t-1}-\sqrt{\bar{\alpha}_{t-1}}x_0)^2}{2(1-\bar{\alpha}_{t-1})}
++\frac{(x_t-\sqrt{\bar{\alpha}_t}x_0)^2}{2(1-\bar{\alpha}_t)}
+\right\}
+\]
+
+定义二次函数：
+
+\[
+f(y)=
+\frac{(x-\sqrt{a}y)^2}{2(1-a)}
++\frac{(y-\sqrt{b}z)^2}{2(1-b)}
+-\frac{(x-\sqrt{c}z)^2}{2(1-c)}
+\]
+
+其中映射为：
+
+\begin{itemize}
+\tightlist
+\item
+  \(x=x_t\)，\(a=\alpha_t\)；
+\item
+  \(y=x_{t-1}\)，\(b=\bar{\alpha}_{t-1}\)，注意此处 \(b\) 使用累积参数 \(\bar{\alpha}_{t-1}\) 而非 \(\alpha_{t-1}\)；
+\item
+  \(z=x_0\)，\(c=\bar{\alpha}_t\)。
+\end{itemize}
+
+由于 \(f(y)\) 是二次函数，其最小值点即为高斯分布的均值。
+
+对 \(f(y)\) 求导：
+
+\[
+f'(y)=-\frac{\sqrt{a}}{1-a}(x-\sqrt{a}y)+\frac{1}{1-b}(y-\sqrt{b}z)
+\]
+
+展开：
+
+\[
+f'(y)=\frac{a}{1-a}y-\frac{\sqrt{a}}{1-a}x+\frac{1}{1-b}y-\frac{\sqrt{b}}{1-b}z
+\]
+
+合并 \(y\) 项：
+
+\[
+f'(y)=\left(\frac{a}{1-a}+\frac{1}{1-b}\right)y-\frac{\sqrt{a}}{1-a}x-\frac{\sqrt{b}}{1-b}z
+\]
+
+令 \(f'(y)=0\)：
+
+\[
+y=\frac{\frac{\sqrt{a}}{1-a}x+\frac{\sqrt{b}}{1-b}z}{\frac{a}{1-a}+\frac{1}{1-b}}
+\]
+
+化简分母：
+
+\[
+\frac{a}{1-a}+\frac{1}{1-b}
+=\frac{a(1-b)+(1-a)}{(1-a)(1-b)}
+=\frac{1-ab}{(1-a)(1-b)}
+\]
+
+分子为：
+
+\[
+\frac{\sqrt{a}}{1-a}x+\frac{\sqrt{b}}{1-b}z
+\]
+
+因此：
+
+\[
+y=\frac{(1-b)\sqrt{a}x+(1-a)\sqrt{b}z}{1-ab}
+\]
+
+代入映射：
+
+\begin{itemize}
+\tightlist
+\item
+  \(a=\alpha_t\)；
+\item
+  \(b=\bar{\alpha}_{t-1}\)；
+\item
+  \(c=\bar{\alpha}_t\)；
+\item
+  \(ab=\alpha_t\cdot\bar{\alpha}_{t-1}=\bar{\alpha}_t\)，因为 \(\bar{\alpha}_t=\alpha_t\cdot\bar{\alpha}_{t-1}\)。
+\end{itemize}
+
+代入：
+
+\[
+y=\frac{(1-\bar{\alpha}_{t-1})\sqrt{\alpha_t}x_t+(1-\alpha_t)\sqrt{\bar{\alpha}_{t-1}}x_0}{1-\bar{\alpha}_t}
+\]
+
+这正是定理中给出的均值：
+
+\[
+\mu_q(x_t,x_0)=
+\frac{(1-\bar{\alpha}_{t-1})\sqrt{\alpha_t}}{1-\bar{\alpha}_t}x_t
++\frac{(1-\alpha_t)\sqrt{\bar{\alpha}_{t-1}}}{1-\bar{\alpha}_t}x_0
+\]
+
+计算二阶导数：
+
+\[
+f''(y)=\frac{a}{1-a}+\frac{1}{1-b}
+=\frac{a(1-b)+(1-a)}{(1-a)(1-b)}
+=\frac{1-ab}{(1-a)(1-b)}
+\]
+
+代入：
+
+\begin{itemize}
+\tightlist
+\item
+  \(a=\alpha_t\)；
+\item
+  \(b=\bar{\alpha}_{t-1}\)；
+\item
+  \(ab=\bar{\alpha}_t\)。
+\end{itemize}
+
+于是：
+
+\[
+f''(y)=\frac{1-\bar{\alpha}_t}{(1-\alpha_t)(1-\bar{\alpha}_{t-1})}
+\]
+
+方差为倒数：
+
+\[
+\Sigma_q(t)=\frac{(1-\alpha_t)(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}I
+\]
+
+从而最终结果为：
+
+\[
+\tilde{\mu}_t=
+\frac{\sqrt{\alpha_t}(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}x_t
++\frac{\sqrt{\bar{\alpha}_{t-1}}(1-\alpha_t)}{1-\bar{\alpha}_t}x_0
+\]
+
+\[
+\tilde{\beta}_t=\frac{(1-\alpha_t)(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}
+\]
+
+这个公式表明，在已知原始图像 \(x_0\) 的条件下，逆向分布的均值是当前噪声图像 \(x_t\) 和原始图像 \(x_0\) 的线性组合。
+
+第三步：参数化重写表达式
+
+上面的均值公式仍然依赖于我们不知道的 \(x_0\)。这时，前向过程的重参数化技巧发挥了关键作用。前向过程告诉我们，任意时刻的 \(x_t\) 可以直接由 \(x_0\) 和一个小噪声 \(\epsilon\) 表示：
+
+\[
+x_t=\sqrt{\bar{\alpha}_t}x_0+\sqrt{1-\bar{\alpha}_t}\epsilon,\quad \epsilon\sim\mathcal{N}(0,I)
+\]
+
+我们可以从这个等式中解出 \(x_0\)：
+
+\[
+x_0=\frac{x_t-\sqrt{1-\bar{\alpha}_t}\epsilon}{\sqrt{\bar{\alpha}_t}}
+\]
+
+现在，将 \(x_0\) 的表达式代入第二步得到的均值公式中：
+
+\[
+\tilde{\mu}_t=
+\frac{\sqrt{\alpha_t}(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}x_t
++\frac{\sqrt{\bar{\alpha}_{t-1}}(1-\alpha_t)}{1-\bar{\alpha}_t}
+\left(\frac{x_t-\sqrt{1-\bar{\alpha}_t}\epsilon}{\sqrt{\bar{\alpha}_t}}\right)
+\]
+
+接下来的工作就是合并同类项进行化简。经过一些代数运算，可以得到一个极其简洁的形式：
+
+\[
+\tilde{\mu}_t=\frac{1}{\sqrt{\alpha_t}}
+\left(x_t-\frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}}\epsilon\right)
+\]
+
+这里的 \(\epsilon\) 表示从 \(x_0\) 到 \(x_t\) 的步骤加入的``总等价噪声''。
+而真实数据是已被确定的情况下，这一步预测的方差仍由 \(\alpha_t=1-\beta_t\) 决定：
+
+\[
+\tilde{\mu}_t=
+\frac{\sqrt{\alpha_t}(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}x_t
++\frac{\sqrt{\bar{\alpha}_{t-1}}(1-\alpha_t)}{1-\bar{\alpha}_t}x_0
+\]
+
+\[
+\tilde{\beta}_t=\frac{(1-\alpha_t)(1-\bar{\alpha}_{t-1})}{1-\bar{\alpha}_t}
+\]
+
+这个公式表明，在已知原始图像 \(x_0\) 的条件下，逆向分布的均值是当前噪声图像 \(x_t\) 和原始图像 \(x_0\) 的线性组合。
+关于方差的更多讨论见Diffusion Transformer部分。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  在模型中的应用
+\end{enumerate}
+
+以上公式让我们，如果我们能知道在前向过程中第 \(t\) 步所添加的噪声 \(\epsilon_t\)，那么我们就可以精确地计算出逆向步骤的均值，从而从 \(x_t\) 回归到 \(x_{t-1}\) 的分布。但问题在于，我们只知道噪声满足高斯分布 \(\mathcal{N}(0,I)\)，但对于在这个分布中具体采样了什么值，以使得原始的 \(x_0\) 变为充满噪声的 \(x_t\) 一无所知。
+
+既然我们无法预先知道 \(\epsilon\)，那么就训练一个神经网络 \(\epsilon_\theta\) 来学习预测这个噪声。训练目标就是最小化预测噪声 \(\epsilon_\theta(x_t,t)\) 和真实噪声 \(\epsilon\) 之间的均方损失（差距）。这将复杂的分布预测问题转化为更稳定的噪声预测问题，大大降低了模型的学习难度。
+
+这种设置与变分自编码器（VAE）非常相似，因此我们可以使用变分下界来优化负对数似然。
+
+\hypertarget{ux4e09ux6269ux6563ux6a21ux578bux7684ux8badux7ec3}{%
+\subsection{三、扩散模型的训练}\label{ux4e09ux6269ux6563ux6a21ux578bux7684ux8badux7ec3}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  训练时去噪起点的步数随机采样
+\end{enumerate}
+
+在扩散模型的理论框架中，生成过程（反向去噪）是一个马尔可夫链（Markov Chain），需要从 \(t=T\) 一步步倒退回 \(t=0\)。
+
+如果我们在训练时也按照 \(T,T-1,\ldots,0\) 的顺序串行训练，会导致两个致命问题：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{计算成本极高}：每次反向传播都要穿越整个时间链，由于梯度累积，显存会直接撑爆。
+\item
+  \textbf{误差级联}：前面的步骤如果没学好，后面的步骤就会在错误的输入上越走越偏。
+\end{enumerate}
+
+为了解决这个问题，DDPM（Denoising Diffusion Probabilistic Models）的作者利用了高斯分布的``可加性''（重参数化技巧），推导出了一个惊艳的结论：\textbf{我们不需要一步步加噪，而是可以直接写出任意时刻 \(t\) 的状态解析解}。
+
+\[
+x_t=\sqrt{\bar{\alpha}_t}x_0+\sqrt{1-\bar{\alpha}_t}\epsilon
+\]
+
+有了这个公式，模型的最终优化目标（变分下界 ELBO 的简化版）可以写成对所有时间步 \(t\) 的期望：
+
+\[
+\mathcal{L}_{simple}
+=\mathbb{E}_{t\sim\mathcal{U}(1,T),\,x_0\sim q(x_0),\,\epsilon\sim\mathcal{N}(0,I)}
+\left[\left\|\epsilon-\epsilon_\theta(x_t,t)\right\|^2\right]
+\]
+
+数学上的核心就在这里：公式外层的 \(\mathbb{E}_{t\sim\mathcal{U}(1,T)}\) 表示损失函数是对均匀分布的 \(t\) 求期望。在实际写代码训练时，计算这个全局期望的方法就是蒙特卡洛采样（Monte Carlo Sampling），即在每个 Batch 中，随机均匀地抽取 \(t\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  并行性
+\end{enumerate}
+
+扩散模型的每一步都是同时对所有 token 去噪，因而处理过程是并行的。从概率论的角度：
+
+假设我们要生成一个句子：
+
+\[
+X = \{x_1, x_2, x_3, x_4\}
+\]
+
+自回归模型模型严格遵循概率的链式法则：
+
+\[
+P(X) = P(x_1)P(x_2 \mid x_1)P(x_3 \mid x_1, x_2)P(x_4 \mid x_1, x_2, x_3)
+\]
+
+要算 \(x_3\)，必须先有确定的 \(x_1,x_2\)。
+
+而扩散模型的目标是直接模拟联合分布 \(P(x_1,x_2,x_3,x_4)\)。在生成的某一步骤中（例如从 \(X^{(T+1)}\) 去噪到 \(X^{(T)}\)），模型通常假设：各个位置的预测在当前步骤是条件独立的，也就是 \(x_1^{(T)},x_2^{(T)},\ldots,x_N^{(T)}\) 相互独立。我们只通过上一步的全局上下文 \(x_1^{(T+1)},x_2^{(T+1)},\ldots,x_N^{(T+1)}\) 来推断本步的 \(x_i^{(T)}\)，即根据``全局的模糊轮廓''来同时填补所有细节。这样，在文本扩散中，公式往往近似为：
+
+\[
+\begin{aligned}
+P(X^{(T)} \mid X^{(T+1)})
+&\approx
+P(x_1^{(T)} \mid x_1^{(T+1)},x_2^{(T+1)},\ldots) \\
+&\quad \cdot P(x_2^{(T)} \mid x_1^{(T+1)},x_2^{(T+1)},\ldots) \\
+&\quad \cdots
+P(x_N^{(T)} \mid x_1^{(T+1)},x_2^{(T+1)},\ldots)
+\end{aligned}
+\]
+
+这样，在一步预测中，猜测 \(x_2\) 就不需要等待 \(x_1\) 先去噪，能提高 GPU 的利用效率。
+
+在文本生成等任务中，扩散模型的生成质量不如自回归模型。虽然扩散模型可以通过并行一次生成10个词，但由于它在单步生成时，假设了这些词是并行独立生成的（或者仅依赖于上一轮的模糊状态），它往往忽略了词与词之间微小的因果强关联。自回归的做法： ``因为第一个词是`人工'，所以第二个词大概率是`智能'。''（强因果）纯并行的做法： ``我看整体语境像是一个科技话题，所以位置1我猜`人工'，位置2我猜`智能'。''如果并行度太高，有时候会出现逻辑不自洽，在更复杂的推理任务中容易导致逻辑断裂。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  训练算法工作流
+\end{enumerate}
+
+通过随机抽取 \(t\)，扩散模型极其优雅地将一个串行的时序生成问题，拆解成了完全可以并行训练的独立去噪任务。具体的算法工作流如下：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Step 1: 采样真实数据。} 从训练集中随机抽取一张干净的真实图像 \(x_0\sim q(x_0)\)。
+\item
+  \textbf{Step 2: 随机采样时间步。} 从均匀分布中随机抽取一个时间步 \(t\sim\mathcal{U}(1,T)\)（通常 \(T=1000\)）。
+\item
+  \textbf{Step 3: 采样标准高斯噪声。} 生成一个与 \(x_0\) 维度完全相同的随机噪声矩阵 \(\epsilon\sim\mathcal{N}(0,I)\)。
+\item
+  \textbf{Step 4: 一步到位构建加噪图像。} 利用刚才推导出的闭式解公式 \(x_t=\sqrt{\bar{\alpha}_t}x_0+\sqrt{1-\bar{\alpha}_t}\epsilon\)，直接计算出图像在时刻 \(t\) 的加噪状态 \(x_t\)。
+\item
+  \textbf{Step 5: 神经网络预测。} 将加噪图像 \(x_t\) 和时间步 \(t\)（通常经过正弦位置编码）一起输入到神经网络 \(\epsilon_\theta\)（如 U-Net 或 DiT）中，让网络预测出刚才添加的噪声 \(\epsilon_\theta(x_t,t)\)。
+\item
+  \textbf{Step 6: 计算损失并更新梯度。} 计算真实噪声 \(\epsilon\) 和预测噪声 \(\epsilon_\theta\) 之间的均方误差（MSE），进行反向传播更新网络权重。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-154}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-154}}
+
+\begin{itemize}
+\tightlist
+\item
+  Ho, J., Jain, A., \& Abbeel, P. (2020). \href{https://arxiv.org/abs/2006.11239}{Denoising Diffusion Probabilistic Models}. NeurIPS.
+\item
+  Song, Y., Sohl-Dickstein, J., Kingma, D. P., Kumar, A., Ermon, S., \& Poole, B. (2021). \href{https://arxiv.org/abs/2011.13456}{Score-Based Generative Modeling through Stochastic Differential Equations}. ICLR.
+\item
+  Song, J., Meng, C., \& Ermon, S. (2021). \href{https://arxiv.org/abs/2010.02502}{Denoising Diffusion Implicit Models}. ICLR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux968fux673aux68afux5ea6ux6717ux4e4bux4e07ux52a8ux529bux5b66}{%
+\section{随机梯度朗之万动力学}\label{ux968fux673aux68afux5ea6ux6717ux4e4bux4e07ux52a8ux529bux5b66}}
+
+\hypertarget{ux4e00ux968fux673aux68afux5ea6ux6717ux4e4bux4e07ux52a8ux529bux5b66ux7684ux6570ux5b66ux8868ux8fbe}{%
+\subsection{一、随机梯度朗之万动力学的数学表达}\label{ux4e00ux968fux673aux68afux5ea6ux6717ux4e4bux4e07ux52a8ux529bux5b66ux7684ux6570ux5b66ux8868ux8fbe}}
+
+朗之万动力学最初源于物理学，用于描述粒子在势能场中的随机运动。在机器学习中，随机梯度朗之万动力学（Stochastic Gradient Langevin Dynamics, SGLD）将参数优化视为一个``粒子''在能量景观（由损失函数定义）中的运动过程。其离散化的更新公式为：
+
+假设我们想要从一个未知的目标真实数据分布 \(p(x)\) 中采样出一张图像 \(x\)。朗之万动力学提供了一个迭代公式：
+
+\[
+x_{i+1}=x_i+\frac{\gamma}{2}\nabla_x\log p(x_i)+\sqrt{\gamma}z_i
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(x_i\) 是第 \(i\) 步的状态（图像向量）。
+\item
+  \(\gamma\) 是步长（Step size）。
+\item
+  \(z_i\sim\mathcal{N}(0,I)\) 是标准高斯噪声。
+\item
+  \(\nabla_x\log p(x_i)\) 被称为得分函数（Score Function），它是目标分布的对数概率密度函数对输入 \(x\) 的梯度。
+\end{itemize}
+
+这个公式包含两部分力量的博弈：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{确定性漂移（梯度上升）}：\(\frac{\gamma}{2}\nabla_x\log p(x_i)\) 牵引着数据点 \(x_i\) 沿着概率密度增加最快的方向（爬山）移动，让图像越来越像真实图像。
+\item
+  \textbf{随机性扩散（噪声注入）}：\(\sqrt{\gamma}z_i\) 不断注入随机的扰动。这不仅是为了防止模型陷入局部最优（例如前文提到的``撞树''的均值点），更是为了确保最终的样本在整个高维空间中能够严格服从真实的 \(p(x)\) 分布，而不是仅仅坍缩到一个单一的最高概率点。
+\end{enumerate}
+
+看似只是加了噪声，实际上反映出它和常规的梯度下降目标不同：
+
+梯度下降是一种优化算法，其目标是找到损失函数的（局部或全局）最小值点，得到一个点估计（Point Estimate），对应的是最大后验概率（MAP）估计。
+
+SGLD是一种贝叶斯采样算法，其目标不是找到一个``最佳''点，而是通过采样来近似整个后验分布。这允许我们进行不确定性量化，即了解参数估计的可靠程度。
+
+为什么这样采样能近似后验分布：
+
+\[
+\Delta\theta_t=-\frac{\epsilon_t}{2}\nabla\tilde{U}(\theta_t)+\sqrt{\epsilon_t}\cdot\eta_t,\quad \eta_t\sim\mathcal{N}(0,I)
+\]
+
+这个公式包含两部分：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \(-\frac{\epsilon_t}{2}\nabla\tilde{U}(\theta_t)\)：这是随机梯度下降部分。它试图将参数推向后验概率最大的地方（MAP 估计）。
+\item
+  \(\sqrt{\epsilon_t}\cdot\eta_t\)：这是注入的高斯噪声部分。
+\end{enumerate}
+
+关键的 \(\sqrt{\epsilon}\) Scaling：
+
+请注意，梯度的系数是 \(\epsilon\)（步长），而噪声的系数是 \(\sqrt{\epsilon}\)。当步长 \(\epsilon\to 0\) 时，噪声项 \(\sqrt{\epsilon}\) 会比梯度项 \(\epsilon\) 大得多（因为 \(0.0001\ll\sqrt{0.0001}=0.01\)）。
+
+这保证了即使到了谷底（梯度接近 0），噪声依然主导，迫使参数继续跳动。
+
+根据 Fokker-Planck 方程的推导，上述随机过程的稳态分布（Stationary Distribution）精确地收敛于：
+
+\[
+p(\theta)\propto \exp(-U(\theta))
+\]
+
+也就是我们的后验分布。
+另外，当面对大规模数据集时，计算完整数据集的真实梯度 \(\nabla_x L(x_t)\) 计算成本极高。SGLD 使用基于一个小批量（mini-batch）数据 \(\xi_t\) 计算的随机梯度 \(\nabla_x L(x_t;\xi_t)\) 来近似代替真实梯度，进行上述计算。最终生成的参数序列 \(\{x_t\}\) 也会收敛到真实的后验分布 \(p(x\mid\mathrm{data})\)。
+
+\hypertarget{ux4e8cux5f97ux5206ux5339ux914d}{%
+\subsection{二、得分匹配}\label{ux4e8cux5f97ux5206ux5339ux914d}}
+
+要运行朗之万动力学，我们必须知道 \(\nabla_x\log p(x)\)。但在现实中，\(p(x)\) 是极其复杂的。通常概率分布可以写成基于能量的形式：
+
+\[
+p(x)=\frac{e^{-E_\theta(x)}}{Z_\theta}
+\]
+
+这里 \(Z_\theta=\int e^{-E_\theta(x)}dx\) 是配分函数。在高维像素空间中，对所有可能的图像求和或积分计算 \(Z_\theta\) 是绝对不可能的（Intractable）。
+
+\textbf{得分函数的神奇之处在于它消除了 \(Z_\theta\)：}
+
+\[
+\nabla_x\log p(x)=\nabla_x(-E_\theta(x)-\log Z_\theta)=-\nabla_x E_\theta(x)
+\]
+
+因为 \(Z_\theta\) 是一个常数，对 \(x\) 求导直接等于 0。因此，我们可以直接训练一个神经网络 \(s_\theta(x)\) 去拟合这个得分：
+
+\[
+s_\theta(x)\approx\nabla_x\log p(x)
+\]
+
+这个过程被称为得分匹配（Score Matching）。
+
+\hypertarget{ux4e09ux6269ux6563ux6a21ux578bux7684ux672cux8d28}{%
+\subsection{三、扩散模型的本质}\label{ux4e09ux6269ux6563ux6a21ux578bux7684ux672cux8d28}}
+
+在 DDPM 中，神经网络 \(\epsilon_\theta(x_t,t)\) 预测的是噪声 \(\epsilon\)。在数学上，预测噪声与预测得分是完全等价的。它们之间的转换公式为：
+
+\[
+\nabla_{x_t}\log p(x_t)=-\frac{\epsilon_\theta(x_t,t)}{\sqrt{1-\bar{\alpha}_t}}
+\]
+
+因此，DDPM 中的去噪网络本质上就是一个得分估计器。当 DDPM 使用 Euler-Maruyama 方法求解反向 SDE 时，它所执行的每一步去噪操作，本质上就是带有特定系数的退火朗之万动力学（Annealed Langevin Dynamics）。
+
+DDPM 原始的反向采样公式（从 \(x_t\) 生成 \(x_{t-1}\)）长这样：
+
+\[
+x_{t-1}=\frac{1}{\sqrt{\alpha_t}}
+\left(x_t-\frac{1-\alpha_t}{\sqrt{1-\bar{\alpha}_t}}\epsilon_\theta(x_t,t)\right)
++\sigma_t z
+\]
+
+现在，我们将上面的``翻译桥梁''代入这个公式，把 \(\epsilon_\theta\) 替换成梯度的形式，公式就变成了基于得分的形式：
+
+\[
+x_{t-1}=\frac{1}{\sqrt{\alpha_t}}x_t
++\frac{1-\alpha_t}{\sqrt{\alpha_t}}\nabla_{x_t}\log p_t(x_t)
++\sigma_t z
+\]
+
+为了对比，我们把标准的朗之万动力学迭代公式也写在下面：
+
+\[
+x_{i+1}=x_i+\frac{\gamma}{2}\nabla_x\log p(x_i)+\sqrt{\gamma}\epsilon
+\]
+
+现在，这两者的逐项对应关系就变得极其清晰了：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{梯度引导项（确定性漂移）}
+\end{enumerate}
+
+朗之万动力学：\(\frac{\gamma}{2}\nabla_x\log p(x_i)\)。代表沿着概率密度的梯度方向（即数据流形的方向）爬升，步长为 \(\frac{\gamma}{2}\)。
+
+扩散模型：\(\frac{1-\alpha_t}{\sqrt{\alpha_t}}\nabla_{x_t}\log p_t(x_t)\)。这正是 DDPM 在每一步去噪时，利用神经网络推动图像走向真实分布的力量。在这里，\(\frac{1-\alpha_t}{\sqrt{\alpha_t}}\) 精确等价于朗之万动力学中的步长系数 \(\frac{\gamma}{2}\)。随着 \(t\) 减小，这个步长也会动态衰减（退火）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{噪声注入项（随机游走）}
+\end{enumerate}
+
+朗之万动力学：\(\sqrt{\gamma}\epsilon\)。为了防止陷入局部最优和维持分布特性的随机扰动。
+
+扩散模型：\(\sigma_t z\)。其中 \(z\sim\mathcal{N}(0,I)\)。在 DDPM 中，方差 \(\sigma_t^2\) 通常被设定为 \(\beta_t\) 或 \(\tilde{\beta}_t\)。这完美对应了朗之万采样的随机注入部分。它在具身智能中打破``多模态均值（撞树）''僵局的物理力量，就来源于这一项。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{状态缩放项（阻尼/动量）}
+\end{enumerate}
+
+朗之万动力学：\(x_i\)（前面系数为 1）。
+
+扩散模型：\(\frac{1}{\sqrt{\alpha_t}}x_t\)。
+
+\textbf{为什么有差异？} 这是因为 DDPM 的前向加噪过程不仅仅是简单地加噪声，它是一个奥恩斯坦-乌伦贝克过程（Ornstein-Uhlenbeck Process, OU 过程）。在前向时，为了防止图像像素的方差随时间爆炸，DDPM 每一步都会将图像按比例缩小（乘以 \(\sqrt{\alpha_t}\)）。因此，在反向 Langevin 采样时，必须除以 \(\sqrt{\alpha_t}\) 来补偿之前的缩放。这相当于物理学中带有``阻尼''或``向心力''的朗之万动力学。
+
+\hypertarget{ux56dbux5faeux5206ux65b9ux7a0bux8868ux793a}{%
+\subsection{四、微分方程表示}\label{ux56dbux5faeux5206ux65b9ux7a0bux8868ux793a}}
+
+传统的 DDPM（如 Ho 等人提出的形式）是离散步长的。当我们将加噪和去噪的步数 \(T\to\infty\) 时，离散的马尔可夫链就变成了一个连续时间的随机微分方程（SDE）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{前向加噪过程（破坏数据）}
+\end{enumerate}
+
+前向过程可以通过如下的 SDE 描述：
+
+\[
+dx=f(x,t)dt+g(t)dw
+\]
+
+其中 \(w\) 是标准的布朗运动（连续时间的随机游走），\(f(x,t)\) 是漂移系数，\(g(t)\) 是扩散系数。这个过程不需要任何网络参与，纯粹是通过物理规则把清晰图像 \(x_0\) 变成纯噪声 \(x_T\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{反向生成过程（朗之万动力学的连续体现）}
+\end{enumerate}
+
+根据 Anderson 定理，任何形式如上的前向 SDE，都存在一个对应的反向 SDE，用于从噪声 \(x_T\) 逆向生成真实数据 \(x_0\)：
+
+\[
+dx=\left[f(x,t)-g(t)^2\nabla_x\log p_t(x)\right]dt+g(t)d\bar{w}
+\]
+
+这里的 \(d\bar{w}\) 是时间反转下的布朗运动。观察这个反向 SDE 的核心项：\(-g(t)^2\nabla_x\log p_t(x)\)。它精确地对应了朗之万动力学中的梯度引导项。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-155}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-155}}
+
+\begin{itemize}
+\tightlist
+\item
+  Welling, M., \& Teh, Y. W. (2011). \href{https://www.stats.ox.ac.uk/~teh/research/compstats/WelTeh2011a.pdf}{Bayesian Learning via Stochastic Gradient Langevin Dynamics}. ICML.
+\item
+  Roberts, G. O., \& Tweedie, R. L. (1996). \href{https://doi.org/10.2307/3318418}{Exponential Convergence of Langevin Distributions and Their Discrete Approximations}. Bernoulli.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{diffusion-u-net}{%
+\section{Diffusion U-Net}\label{diffusion-u-net}}
+
+U-Net采用卷积神经网络，前半部分类似Encoder，通过池化或步长＞1的卷积，使空间尺寸数不断减小、通道数不断增大；后半部分类似Decoder，空间尺寸数不断增大、通道数不断减小，主要有两种实现方法：
+
+\textbf{1. 转置卷积（Transposed Convolution）}
+
+这是 U-Net 解码器中使用的核心放大技术。它不仅仅是简单的图像插值，而是一个带有可学习参数的逆向空间扩散过程。
+
+在标准卷积中，我们可以将其表示为矩阵乘法 \(\mathbf{Y}=\mathbf{C}\mathbf{X}\)，其中 \(\mathbf{C}\) 是由卷积核转换而来的稀疏矩阵，此过程将大维度的 \(\mathbf{X}\) 压缩为小维度的 \(\mathbf{Y}\)。
+
+转置卷积则是将输出特征图通过乘以 \(\mathbf{C}\) 的转置矩阵 \(\mathbf{C}^T\)（并通过反向传播学习权重）还原到更大的空间：
+
+\[
+\mathbf{X}'=\mathbf{C}^T\mathbf{Y}
+\]
+
+工作流：
+
+以卷积核大小 \(K=3\)、步长 \(S=2\)、填充 \(P=1\) 为例：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{内部零填充（Zero-padding expansion）}：在输入特征图的相邻像素之间插入 \(S-1\) 个零。这会将低分辨率输入的空间尺寸强行撑大。
+\item
+  \textbf{边界填充}：在扩展后的特征图四周边缘添加额外的零填充（数量由 \(K\) 和 \(P\) 决定，以精确对齐所需输出的尺寸）。
+\item
+  \textbf{标准卷积映射}：对上述经过两次填充的巨大特征图，应用一个标准的 \(K\times K\) 卷积核（此时卷积的步长固定为 1）。
+\item
+  \textbf{特征输出}：卷积核在滑动计算过程中，将原始孤立像素的值与其权重相乘并``扩散''到周围插零的区域，最终输出平滑的高分辨率特征图。
+\end{enumerate}
+
+\textbf{2. 双线性插值（Bilinear Interpolation）}
+
+这是一种无参数的纯数学插值方法。它通过计算目标像素在原图中对应位置周围四个已知像素的加权平均值来生成新像素。它的计算成本极低，但无法像转置卷积那样根据数据集的特征自适应学习放大规则。
+
+但U-Net的可扩展性一般，且与当前基于Transformer的大模型架构不兼容。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-156}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-156}}
+
+\begin{itemize}
+\tightlist
+\item
+  Ronneberger, O., Fischer, P., \& Brox, T. (2015). \href{https://arxiv.org/abs/1505.04597}{U-Net: Convolutional Networks for Biomedical Image Segmentation}. MICCAI.
+\item
+  Ho, J., Jain, A., \& Abbeel, P. (2020). \href{https://arxiv.org/abs/2006.11239}{Denoising Diffusion Probabilistic Models}. NeurIPS.
+\item
+  Rombach, R., Blattmann, A., Lorenz, D., Esser, P., \& Ommer, B. (2022). \href{https://arxiv.org/abs/2112.10752}{High-Resolution Image Synthesis with Latent Diffusion Models}. CVPR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{diffusion-transformer}{%
+\section{Diffusion Transformer}\label{diffusion-transformer}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux67b6ux6784ux4e0eux5de5ux4f5cux6d41}{%
+\subsection{一、核心架构与工作流}\label{ux4e00ux6838ux5fc3ux67b6ux6784ux4e0eux5de5ux4f5cux6d41}}
+
+Diffusion Transformer将Transformer架构引入扩散模型，实现了与大语言模型架构的统一，也提高了可扩展性，使得生成质量可随着模型参数的扩大而提升。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{潜在空间分块（Latent Patchification）}
+\end{enumerate}
+
+DiT 并不直接操作像素，而是操作 VAE（变分自编码器）编码后的潜在特征。
+
+给定一张输入图像 \(x\in\mathbb{R}^{H\times W\times 3}\)，首先通过预训练的 VAE 编码器将其映射到潜在空间，得到潜在表示 \(z\in\mathbb{R}^{h\times w\times c}\)。
+
+接着，DiT 将 \(z\) 切分为大小为 \(p\times p\) 的空间块（Patches），将这些块展平并经过线性投影，转换为序列长度为 \(T=(h/p)\times(w/p)\)、维度为 \(d\) 的 Token 序列。最后，加上标准的可学习位置编码（Positional Embeddings）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{条件注入机制：adaLN-Zero Block}
+\end{enumerate}
+
+标准的扩散模型需要在每个去噪步骤中注入当前的时间步 \(t\) 和条件类别 \(c\)。U-Net 通常通过交叉注意力（Cross-Attention）或特征拼接来实现，而 DiT 采用了自适应层归一化（Adaptive Layer Normalization, adaLN）。
+
+这是 DiT 架构中最关键的设计。对于传入 DiT Block 的隐藏层状态 \(h\)，adaLN 的操作如下：
+
+\[
+\mathrm{adaLN}(h,t,c)=\gamma_{(t,c)}\mathrm{LayerNorm}(h)+\beta_{(t,c)}
+\]
+
+其中，缩放参数 \(\gamma_{(t,c)}\) 和平移参数 \(\beta_{(t,c)}\) 是通过对时间步嵌入和类别嵌入的加和应用一个多层感知机（MLP）回归直接生成的，而不是作为可学习参数固定在网络中。
+
+此外，DiT 还引入了\textbf{门控机制（Dimension Scaling）}，用于残差连接之前。为了极大地稳定训练，作者提出了 \textbf{adaLN-Zero} 初始化策略：即强制 MLP 在初始化时输出的 \(\gamma_{(t,c)}\)、\(\beta_{(t,c)}\) 以及残差门控参数 \(\alpha_{(t,c)}\) 全部为零。
+
+这意味着在训练初始阶段，\textbf{每一个 DiT Block 都是一个严格的恒等映射（Identity Function）}：
+
+\[
+h_{l+1}=h_l+0=h_l
+\]
+
+这保证了网络在初始状态下不会因为深层 Transformer 的高方差而崩溃。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{Unpatchification（去块化与预测）}
+\end{enumerate}
+
+在经过 \(N\) 层 DiT Block 后，Token 序列被送入最后一个标准的全连接层，将维度扩张回 \(p\times p\times 2c\)（乘以 2 是因为模型需要同时预测噪声和方差）。随后，将一维序列重新排列（Reshape）回 \(h\times w\times 2c\) 的空间网格结构，输出给后续的损失函数计算或采样。
+我们发现adaLN只能注入定长向量 \(c\)，如 \texttt{{[}CLS{]}} token。但显然一个 token 不够，故可以引入基于多模态双流注意力的MM-DiT：（扩散和自回归结合的模型，自回归上下文越来越长，也是运用了此方法）
+
+先对图像流和文本流各自AdaLN（自适应层归一化）后各自计算Q、K、V，然后将图像的QKV和文本的QKV直接拼接（Concatenate）在一起，在这个拼接好的超长序列上，执行一次全局的自注意力机制，图像、文本可以内部信息融合，也可以让图像提取对应文本提示、文本根据图像更新上下文。
+
+注意力计算完成后，将输出的超长序列重新切开，恢复成图像特征和文本特征。然后分别送入各自的残差连接和前馈神经网络（FFN），并应用AdaLN预测的门控系数。
+
+（此处图片与上文 adaLN-Zero 初始化和 Unpatchification 说明重复，已合并转写。）
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  注意力模块和自回归Transformer的不同点
+\end{enumerate}
+
+对于扩散模型，在任何一个注意力层，所有的 token 必须同时相互计算注意力，最终也会同时输出所有 token 对应的向量。这就要求在显存中实打实地实例化一个 \(N\times N\) 的注意力分数矩阵。而且如果扩散 \(K\) 步，就要对这个矩阵计算 \(K\) 次。对于视频生成模型，\(N=\mathcjk{帧数}\times\mathcjk{patch\mathcjk{数}}\)，这也就是为什么很多视频生成模型采用``块内扩散、块间自回归''的方式。
+
+\textbf{训练阶段工作流}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{图像编码}：将原始图像 \(x\) 输入冻结权重的 VAE 编码器，提取潜在特征 \(z_0\)。
+\item
+  \textbf{随机加噪}：随机采样一个时间步 \(t\sim U(1,T)\) 和标准高斯噪声 \(\epsilon\sim\mathcal{N}(0,I)\)。根据前向公式计算得到加噪后的潜在变量 \(z_t\)。
+\item
+  \textbf{块化处理（Patchify）}：将 \(z_t\) 切分为多个 Patch，展平并加上位置编码，形成输入序列。
+\item
+  \textbf{条件嵌入}：将时间步 \(t\) 和图像对应的类别标签 \(c\) 转化为条件向量（通过 Embedding 层和 MLP）。
+\item
+  \textbf{DiT 前向传播}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    将 Token 序列输入 \(N\) 层 DiT Block。
+  \item
+    在每一层内部，条件向量动态生成 adaLN 的缩放和平移参数，对 Token 进行自适应归一化。
+  \end{itemize}
+\item
+  \textbf{特征还原（Unpatchify）}：将最后一层的输出序列恢复为与 \(z_t\) 相同的空间维度形状。
+\item
+  \textbf{损失计算与反向传播}：网络输出预测的噪声 \(\epsilon_\theta\) 和协方差矩阵对角线元素。计算 \(L_{\mathrm{simple}}+L_{\mathrm{vlb}}\)，并通过梯度下降更新 Transformer 的权重。
+\end{enumerate}
+
+\textbf{推理（生成）阶段工作流}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{噪声初始化}：从标准正态分布中采样一个纯噪声张量 \(z_T\sim\mathcal{N}(0,I)\)，并指定想要生成的类别标签 \(c\)。
+\item
+  \textbf{逐步去噪循环}：对于时间步 \(t=T,T-1,\ldots,1\) 执行以下操作：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    将当前的 \(z_t\) 切分为 Patch 序列。
+  \item
+    将序列连同时间步 \(t\) 和类别 \(c\) 送入 DiT 网络。
+  \item
+    网络通过 adaLN-Zero 机制处理上下文，预测出当前步骤的噪声 \(\epsilon_\theta\) 和方差 \(\Sigma_\theta\)。
+  \item
+    使用预测结果，根据 DDPM 或 DDIM 采样算法的数学公式，计算出上一步的潜在变量 \(z_{t-1}\)。
+  \end{itemize}
+\item
+  \textbf{图像解码}：循环结束后得到去噪完毕的 \(z_0\)。将 \(z_0\) 送入冻结权重的 VAE 解码器，重建出最终的高清像素图像 \(\hat{x}\)。
+\end{enumerate}
+
+\hypertarget{ux4e8cux8badux7ec3ux76eeux6807}{%
+\subsection{二、训练目标}\label{ux4e8cux8badux7ec3ux76eeux6807}}
+
+在 DiT 的训练中，网络 \(\theta\) 实际上需要同时预测加入的噪声 \(\epsilon_\theta\) 以及方差 \(\Sigma_\theta\)。
+
+为了预测噪声，使用简化的均方误差损失（Simplified Loss）：
+
+\[
+L_{\mathrm{simple}}=\mathbb{E}_{z_0,\epsilon,t}\left[\lVert \epsilon-\epsilon_\theta(z_t,t,c)\rVert_2^2\right]
+\]
+
+为了学习方差 \(\Sigma_\theta\)，模型额外引入了完整的变分下界（Variational Lower Bound, VLB）损失。总损失函数为两者的结合，通常对 \(L_{\mathrm{vlb}}\) 施加一个较小的权重以防止干扰主目标的优化：
+
+\[
+L=L_{\mathrm{simple}}+L_{\mathrm{vlb}}
+\]
+
+\hypertarget{ux4e09ux65b9ux5deeux7684ux9884ux6d4b}{%
+\subsection{三、方差的预测}\label{ux4e09ux65b9ux5deeux7684ux9884ux6d4b}}
+
+\hypertarget{ux4e00ux4e3aux4ec0ux4e48ux76eeux6807ux51fdux6570ux542bux9884ux6d4bux65b9ux5deeux9879}{%
+\subsubsection{（一）为什么目标函数含预测方差项？}\label{ux4e00ux4e3aux4ec0ux4e48ux76eeux6807ux51fdux6570ux542bux9884ux6d4bux65b9ux5deeux9879}}
+
+在逆向去噪过程 \(p_\theta(z_{t-1}\mid z_t)\) 中，我们需要假设一个高斯分布：
+
+\[
+p_\theta(z_{t-1}\mid z_t)=\mathcal{N}(z_{t-1};\mu_\theta(z_t,t),\Sigma_\theta(z_t,t))
+\]
+
+在最初的 DDPM（Ho et al., 2020）中，作者发现真正的后验分布方差存在两个理论上的极端边界（上界和下界）：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{上界}：\(\beta_t\)（假设真实图像完全是标准正态噪声）。
+\item
+  \textbf{下界}：\(\tilde{\beta}_t=\frac{1-\bar{\alpha}_{t-1}}{1-\bar{\alpha}_t}\beta_t\)（假设真实图像 \(z_0\) 是完全已知且确定的）。
+  具体解释：
+\end{enumerate}
+
+既然模型只能看到一张充满噪点的图 \(z_t\)，那么从模型的视角来看，\(z_0\) 就绝对不是一个确定的点，而是一个\textbf{充满无数种可能性的概率分布}。
+
+我们可以构建一个直观的思想实验：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{极端情况 A（\(t\) 很大，接近纯噪声）}：假设 \(z_t\) 就像是一台完全没有信号的雪花屏电视。模型看着这片雪花，它能确定原本的画面是一只猫、一只狗，还是一辆车吗？完全不能。因为有成千上万种不同的 \(z_0\) 在加上大量噪声后，都会坍缩成这同一片雪花。此时，模型对真实的 \(z_0\) 极度不确定，这导致它推断上一步图像的方差极大，逼近理论上界 \(\beta_t\)。
+\item
+  \textbf{极端情况 B（\(t\) 很小，接近去噪尾声）}：假设 \(z_t\) 是一张非常清晰的猫咪照片，只是上面落了几粒灰尘（微小噪声）。模型看着这张图，非常笃定这原本就是一只猫（此时其他 \(z_0\) 的可能性已经极小）。此时，模型对 \(z_0\) 非常确定，逆向去噪的方差极小，逼近理论下界 \(\tilde{\beta}_t\)。
+  在我们训练的时候，我们知道真实图像就在训练集里，完全已知且确定，但模型不知道；模型在推理的时候，若对真实的 \(z_0\) 是什么完全没有把握，则 \(z_{t-1}\) 的方差取上界；若对真实的 \(z_0\) 是什么完全确定，则 \(z_{t-1}\) 的方差取下界。
+\end{itemize}
+
+上界为什么为 \(\beta_t\)：
+
+在逆向过程中，我们想要推导的是 \(q(z_{t-1}\mid z_t)\)。根据贝叶斯公式，我们可以将其展开为：
+
+\[
+q(z_{t-1}\mid z_t)=\frac{q(z_t\mid z_{t-1})q(z_{t-1})}{q(z_t)}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \(q(z_t\mid z_{t-1})\) 是前向加噪过程，这是完全已知的：\(\mathcal{N}(z_t;\sqrt{\alpha_t}z_{t-1},\beta_t I)\)。
+\item
+  \textbf{关键点来了}：在不确定性最大的极端情况（通常在 \(t\) 很大、接近扩散末期时），图像已经被破坏得面目全非。此时如果我们假设完全不知道 \(z_0\) 是什么，那么对于 \(z_{t-1}\) 边缘分布的最合理假设，就是它已经退化成了一个\textbf{标准正态分布（先验分布）}：
+\end{itemize}
+
+\[
+q(z_{t-1})\approx\mathcal{N}(0,I)
+\]
+
+于是有：
+
+\[
+q(z_{t-1}\mid z_t)\propto q(z_t\mid z_{t-1})q(z_{t-1})
+\]
+
+\[
+q(z_{t-1}\mid z_t)\propto \exp\left(-\frac{1}{2}\left[\frac{(z_t-\sqrt{\alpha_t}z_{t-1})^2}{\beta_t}+z_{t-1}^2\right]\right)
+\]
+
+配方后，根据正态分布的系数可确定方差。
+
+初代 DDPM 认为，只要总的扩散步数 \(T\) 足够大（例如 \(T=1000\)），每一步的变化极小，此时 \(\beta_t\) 和 \(\tilde{\beta}_t\) 几乎相等。因此，\textbf{初代模型选择不预测方差}，而是直接将方差暴力固定为一个常数矩阵：
+
+\[
+\Sigma_\theta(z_t,t)=\sigma_t^2 I
+\]
+
+其中 \(\sigma_t^2\) 被硬编码为 \(\beta_t\) 或 \(\tilde{\beta}_t\)。
+
+\textbf{致命痛点：}
+
+这种做法在 \(T=1000\) 时效果很好，但如果我们想\textbf{加速采样}，比如只用 50 步（大步长采样），这两个方差边界就会产生巨大的分歧。此时如果仍然使用固定的方差，模型就会被强制拉入次优的概率分布，导致生成的图像充满噪点或极其模糊。
+
+\hypertarget{ux4e8cux5982ux4f55ux9884ux6d4bux65b9ux5dee}{%
+\subsubsection{（二）如何预测方差？}\label{ux4e8cux5982ux4f55ux9884ux6d4bux65b9ux5dee}}
+
+为了解决大步长采样带来的方差不确定性，Improved DDPM 提出（并被 DiT 采用），让神经网络自己根据当前的特征 \(z_t\) 和时间步 \(t\) 来动态预测最合适的方差。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{方差的参数化（Parameterization）}
+\end{enumerate}
+
+直接让模型输出绝对的方差数值是不稳定的。因此，模型被设计为输出一个插值系数向量 \(v\in[0,1]^d\)，在对数空间内对理论的上下界进行线性插值：
+
+\[
+\log\Sigma_\theta(z_t,t)=v\odot\log\beta_t+(1-v)\odot\log\tilde{\beta}_t
+\]
+
+注：这也是为什么在 DiT 的最后一个全连接层，特征维度会扩展到 \(2c\)。其中 \(c\) 个通道用于预测噪声 \(\epsilon_\theta\)，另外 \(c\) 个通道正是用来预测这个插值向量 \(v\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{梯度的阻断与损失函数（Stop-Gradient and Loss）}
+\end{enumerate}
+
+为了训练这个动态方差，我们必须引入完整的变分下界（Variational Lower Bound, VLB）损失：
+
+\[
+L_{\mathrm{vlb}}=\sum_{t=1}^{T}D_{\mathrm{KL}}\left(q(z_{t-1}\mid z_t,z_0)\parallel p_\theta(z_{t-1}\mid z_t)\right)
+\]
+
+由于 \(L_{\mathrm{vlb}}\) 在计算时同时包含了均值 \(\mu_\theta\) 和方差 \(\Sigma_\theta\)，直接优化它会导致均值预测的梯度变得极其不稳定，反而破坏图像质量。
+
+因此，DiT 在计算 \(L_{\mathrm{vlb}}\) 时，对均值预测施加了\textbf{停止梯度（Stop-Gradient）}操作。这意味着 \(L_{\mathrm{vlb}}\) 的反向传播梯度只用来更新方差 \(v\) 的权重，而完全不干扰噪声 \(\epsilon_\theta\) 的学习。
+
+最终的混合损失函数表示为：
+
+\[
+L=L_{\mathrm{simple}}+\lambda L_{\mathrm{vlb}}
+\]
+
+在 DiT 中，通常设置 \(\lambda=0.001\)，以确保方差学习不会干扰主体的噪声预测。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-157}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-157}}
+
+\begin{itemize}
+\tightlist
+\item
+  Dosovitskiy, A., Beyer, L., Kolesnikov, A., et al.~(2021). \href{https://arxiv.org/abs/2010.11929}{An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale}. ICLR.
+\item
+  Peebles, W., \& Xie, S. (2023). \href{https://arxiv.org/abs/2212.09748}{Scalable Diffusion Models with Transformers}. ICCV.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6269ux6563ux6a21ux578bux5982ux4f55ux89e3ux51b3ux6298ux4e2dux95eeux9898}{%
+\section{扩散模型如何解决``折中问题''}\label{ux6269ux6563ux6a21ux578bux5982ux4f55ux89e3ux51b3ux6298ux4e2dux95eeux9898}}
+
+\hypertarget{ux4e00ux6298ux4e2dux95eeux9898}{%
+\subsection{一、折中问题}\label{ux4e00ux6298ux4e2dux95eeux9898}}
+
+假设我们的动作空间是一维的（比如方向盘转角）。根据专家的驾驶数据，前方有树时，向左躲（对应 \(x=-1\) ）的概率是 50\%，向右躲（对应 \(x=1\) ）的概率是 50\%。直接往前开（对应 \(x=0\)，即撞树）的概率是 0\%。
+
+在这个定义下，真实的概率密度函数 \(p(x)\) 是一个\textbf{双峰分布（Bimodal Distribution）}：
+
+\begin{itemize}
+\tightlist
+\item
+  在 \(x=-1\) 和 \(x=1\) 处，函数 \(p(x)\) 取得极大值（山峰）。
+\item
+  在 \(x=0\) 处，函数 \(p(x)\approx 0\)（深谷或鞍点）。
+\end{itemize}
+
+如果你训练一个神经网络 \(f_\theta(s)\) 直接输出动作 \(x\)，并使用 MSE 损失函数：
+
+\[
+Loss=\mathbb{E}_{x\sim p(x)}\left[\lVert f_\theta(s)-x\rVert^2\right]
+\]
+
+这时，损失最小等价于对于所有训练数据的联合概率密度最大。本问题中，其最优解为输出整个分布的数学期望：
+
+\[
+\hat{x}=\int x\cdot p(x)dx=0.5\times(-1)+0.5\times(1)=0
+\]
+
+你看，虽然 \(x=0\) 的真实概率密度 \(p(0)\) 为 0，但 MSE 强行输出了这个``折中点''。\textbf{因为 MSE 拟合的是分布的``均值''，根本不关心概率密度本身的形状。}
+在图像生成中也是类似的，很容易取不同图片像素的均值，生成一个``四不像''的东西。
+
+\hypertarget{ux4e8cux6269ux6563ux6a21ux578bux5982ux4f55ux907fux514dux6298ux4e2d}{%
+\subsection{二、扩散模型如何避免``折中''？}\label{ux4e8cux6269ux6563ux6a21ux578bux5982ux4f55ux907fux514dux6298ux4e2d}}
+
+扩散模型学习的是对数概率密度的梯度，即得分函数 \(\nabla_x\log p(x)\)。
+
+想象你站在 \(p(x)\) 这个双峰地形图上。郎之万动力学的工作流如下：
+
+【郎之万动力学多模态采样的算法工作流】
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Step 1：随机初始化。} 从高斯噪声中采样初始点 \(x_T\)。假设运气极其不好，点恰好落在 \(x=0\)（撞树均值点）。在这个鞍点上，理论梯度 \(\nabla_x\log p(0)=0\)。
+\item
+  \textbf{Step 2：注入噪声（打破平衡）。} 模型在此刻加上了随机噪声 \(\sqrt{\Delta t}z\)。原本停在 \(x=0\) 的点，被随机推了一把，变成了 \(x=0.01\)（稍微偏右一点）。
+\item
+  \textbf{Step 3：梯度引导（爬坡）。} 一旦离开了绝对的中心鞍点，在 \(x=0.01\) 处，右侧山峰的引力开始显现。\(\nabla_x\log p(0.01)\) 将产生一个强烈的\textbf{向右（正方向）}的梯度向量。
+\item
+  \textbf{Step 4：迭代坍缩。} 在接下来的迭代中，由于梯度不断指向上坡方向（向右），同时虽然有噪声注入，但由于退火机制，噪声方差越来越小。这个点会顺着梯度迅速``爬''到 \(x=1\) 的峰顶，并稳定在那里。
+\end{itemize}
+
+\textbf{结论}：郎之万动力学是在概率密度曲面上寻找局部的极大值（Mode）。因为 \(x=0\) 是概率密度的低谷（或鞍点），梯度会将点推离均值，最终随机（取决于初始噪声和注入噪声）坍缩到左边（对应 \(x=-1\) ）或右边（对应 \(x=1\) ）的某一个确定峰值上。\textbf{它绝对不会停留在概率密度极低的折中点。}
+\#\#\# 三、自回归模型能否处理这样的分布？
+
+可以，但是只适合处理离散化的分布。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{自回归模型在``离散空间''的表现（如语言生成）}
+\end{enumerate}
+
+当 GPT 预测下一个词时，它输出的是整个词表的概率分布（通过 Softmax 和 Cross-Entropy Loss）。
+
+如果正确的下一个词是``向左''或``向右''，模型会给``左''和``右''各分配 0.5 的概率。在推理时，我们通过\textbf{采样（Sampling）或贪婪搜索（Greedy Search）}，必然会选中``左''或``右''其中一个 Token。它永远不会输出一个并不存在的``中间词''，因为词表是离散的。所以，AR 模型在离散空间完美解决了多模态问题。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{自回归模型在``高维连续空间''的困境（如具身动作或像素）}
+\end{enumerate}
+
+具身智能的动作空间（如机械臂的关节扭矩向量 \([0.12, -0.45, 1.23, \ldots]\) ）或高分辨率图像的像素空间，是连续且高维的。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{如果 AR 用 MSE 回归}：它立刻就会退化成我们前面说的``折中均值（撞树）''，无法表达多模态。
+\item
+  \textbf{如果把连续空间强制离散化再用 AR}：就像 VQ-VAE 将图像变成离散 Token 然后用 Transformer 自回归生成（比如早期的 VideoPoet 或 Parti）。这种方法可以避免折中，但随之而来的是极其恐怖的计算量和上面提到过的\textbf{曝光偏差（Exposure Bias）}，导致长序列生成的误差成倍放大。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-158}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-158}}
+
+\begin{itemize}
+\tightlist
+\item
+  Song, J., Meng, C., \& Ermon, S. (2021). \href{https://arxiv.org/abs/2010.02502}{Denoising Diffusion Implicit Models}. ICLR.
+\item
+  Karras, T., Aittala, M., Aila, T., \& Laine, S. (2022). \href{https://arxiv.org/abs/2206.00364}{Elucidating the Design Space of Diffusion-Based Generative Models}. NeurIPS.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{just-image-transformerux8bbaux6587}{%
+\section{Just Image Transformer（论文）}\label{just-image-transformerux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-17}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-17}}
+
+当今主流的扩散模型（如 DDPM）和流匹配模型（Flow Matching）通常训练神经网络去预测噪声 \(\epsilon\) 或速度 \(v\)。JiT 指出，预测干净数据（x-prediction）与预测含噪量（\(\epsilon\) 或 v-prediction）在数学本质上是完全不同的。
+
+这一结论建立在\textbf{流形假设（Manifold Assumption）}之上：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{干净图像}：记为 \(x\)，高维像素空间 \(\mathbb{R}^D\) 中的自然图像并非均匀分布，而是高度集中在一个极低维的流形 \(\mathcal{M}\) 上（\(d\ll D\)）。
+\item
+  \textbf{噪声}：记为 \(\epsilon\)，高斯噪声是各向同性的，它游离于流形之外（off-manifold），散布在整个高维空间 \(\mathbb{R}^D\) 中。
+\item
+  \textbf{速度}：记为 \(v\)，在流匹配中，\(v=\epsilon-x\)，同样是高维空间中游离于流形之外的量。
+\end{itemize}
+
+当网络被要求预测 \(\epsilon\) 或 \(v\) 时，它被迫去拟合一个覆盖整个高维空间的无结构映射。而当网络被要求直接预测 \(x\) 时，其预测目标被严格限制在低维的自然图像流形 \(\mathcal{M}\) 上。这种目标的降维极大地降低了神经网络的拟合难度，使得模型能够在不依赖 Latent 空间降维的情况下，直接在高分辨率像素空间（如 \(512\times512\)）中高效运作。
+\#\#\# 二、模型架构
+
+JiT 的架构可以说是``除了标准的图像 Transformer，什么都没有''。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{无 Tokenizer 与无 Latent 空间}：完全抛弃了主流架构中使用的 VAE 预训练模型，直接对原始像素（Raw Pixels）进行操作。
+\item
+  \textbf{大图像块（Large Patch Size）}：为了处理高分辨率图像带来的序列长度爆炸，JiT 采用了非常大的 Patch Size（如 \(16\times16\) 甚至 \(32\times32\) 和 \(64\times64\)）。
+\item
+  \textbf{信息瓶颈（Bottleneck Design）}：实验发现，在 x-prediction 模式下，大幅压缩 Transformer 的线性嵌入维度（Embedding Dimension）不仅不会导致模型崩溃，反而能保持鲁棒性。这从侧面印证了流形假设：因为目标 \(x\) 本质是低维的，所以低容量（``under-capacity''）的网络瓶颈足以捕获其特征；而预测高维噪声 \(\epsilon\) 时，缩小网络容量则会导致灾难性失效。
+\item
+  \textbf{无预训练与无额外损失}：不需要任何形式的预训练，也不依赖感知损失（Perceptual Loss）或对抗损失（Adversarial Loss）。
+  唯一新增的模块是在Transformer后加的一个全连接层，把生成的低维嵌入向量映射为高维的图像。这样做有效的原因在于，真实世界的高维图像斑块并不是随机杂乱的，它们具有极强的空间连贯性和规律，因此它们被紧紧约束在一个极低维的``流形''上。Transformer内部的低维隐变量已经足以捕捉这些低维的结构信息，最后的那个全连接层，本质上只是把这个低维结构``旋转''并``映射''回高维空间中对应的流形位置而已。
+\end{enumerate}
+
+时间步和Diffusion Transformer一样，通过自适应层归一化的方式注入。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  \textbf{时间步嵌入（Time Embedding）}：
+
+  首先，标量时间步 \(t\) 会通过正弦位置编码（Sinusoidal Positional Encoding）映射为高维向量，然后再通过一个多层感知机（MLP）提取特征，生成全局的时间特征向量 \(E_t\)。
+\item
+  \textbf{生成调制参数（Modulation Parameters）}：
+
+  每个 Transformer Block 外部设有一个简单的线性回归层（Linear Layer）。该层接收 \(E_t\) 作为输入，并直接回归出该 Block 所需的几组调制参数（通常是缩放因子 \(\gamma\)、平移因子 \(\beta\) 以及用于残差连接的门控因子 \(\alpha\)）。
+\item
+  \textbf{自适应调制（Adaptive Modulation）}：
+
+  在输入的视觉 Token 序列进入多头自注意力层（MSA）或前馈神经网络（FFN）之前，先对 Token 进行标准的 Layer Normalization。随后，使用刚才回归出的 \(\gamma\) 和 \(\beta\) 对归一化后的特征进行逐元素的仿射变换：
+\end{enumerate}
+
+\[
+\mathrm{AdaLN}(x,t)=\gamma(t)\cdot\mathrm{LayerNorm}(x)+\beta(t)
+\]
+
+在这里，归一化的尺度和偏移完全由当前的时间步 \(t\) 动态决定。
+4. \textbf{Zero 初始化（Zero Initialization）}：
+这是 adaLN-Zero 的核心创新点。回归 \(\gamma,\beta,\alpha\) 的线性层，其权重和偏置在网络初始化时会被严格设为 \(0\)。这意味着在训练之初，缩放因子不起作用，平移为零，且残差块的门控因子 \(\alpha=0\)。这使得每一个 Transformer Block 在初始化时等效于一个恒等映射（Identity Mapping）。这种设计极大地稳定了深层网络在训练早期的梯度流动，这对于在原始高维像素空间直接训练大规模 Transformer 尤为重要。
+
+\hypertarget{ux4e09ux65e2ux7136ux5982ux6b64ux4e3aux4ec0ux4e48ux4e1aux754cux4ecdux7136ux4f7fux7528ux539fux59cbux6269ux6563ux6a21ux578b}{%
+\subsection{三、既然如此，为什么业界仍然使用原始扩散模型？}\label{ux4e09ux65e2ux7136ux5982ux6b64ux4e3aux4ec0ux4e48ux4e1aux754cux4ecdux7136ux4f7fux7528ux539fux59cbux6269ux6563ux6a21ux578b}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  潜在空间已经避免了维度灾难
+\end{enumerate}
+
+何恺明的论文主要针对的是\textbf{原始像素空间（Pixel Space）}的高维灾难，但当前工业界的世界模型几乎全部采用 Latent Diffusion 架构。
+
+\textbf{潜在空间（Latent Space）已经规避了``高维诅咒''}。它们通过 VAE（变分自编码器）将极其高维的视觉/图像帧压缩到一个非常低维的潜在空间（Latent Space）\(z\in\mathbb{R}^k\) 中。
+
+由于 VAE 本身就是一个极其强大的流形学习器（Manifold Learner），潜在空间本身已经是一个被高度压缩的低维流形。在如此较低维的空间里，去预测噪声 \(\epsilon\) 或速度 \(v\)，其难度和维度惩罚已经被大幅削减。
+
+如果在原始像素（Pixel Space）上直接进行扩散，哪怕生成一段 \(1\) 分钟的 \(1080\)P 视频，其维度也高达：
+
+\[
+1920\times1080\times3\times60\times60\times2.2\times10^{10}
+\]
+
+在如此惊人的高维空间中进行梯度计算和马尔可夫链采样，不仅计算成本无法承受，还会遭遇严重的``维度灾难''。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  动作空间的多样性
+\end{enumerate}
+
+为了解决上述问题，具身智能领域引入了 Diffusion Policy，扩散模型彻底放弃了直接输出动作值，而是去学习动作分布的能量场（Energy Field）或得分函数（Score Function）。
+
+工作流与 Langevin Dynamics 机制：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{学习得分函数（Score Matching）}：扩散模型的核心训练是训练一个网络去拟合真实数据分布对数据本身的梯度，即 Score 为 \(\nabla_a\log p(x)\)。也可以把它想象成一个指向``最合理动作''的指南针。
+\item
+  \textbf{反向去噪采样（Langevin Dynamics）}：在推理时，模型从纯高斯随机噪声 \(x_T\sim\mathcal{N}(0,I)\) 开始，通过如下方式分步更新状态：
+\end{enumerate}
+
+\[
+x_{t-\Delta t}=x_t+\frac{1}{2}\Delta t\nabla_x\log p(x_t)+\sqrt{\Delta t}z
+\]
+
+其中 \(z\sim\mathcal{N}(0,I)\) 是注入的随机噪声。
+
+为什么它不会落在沟壑（缝隙）？
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{根据上升（寻找 Mode）}：公式中的 \(\nabla_x\log p(x_t)\) 会牵引样本朝概率高、即动作最优的区域移动，即从一些概率密度很低的地方移向概率密度高的地方。
+\item
+  \textbf{噪声注入（打破对称性）}：公式末尾的 \(\sqrt{\Delta t}z\) 是噪声之源。在向左和向右两个峰值之间的``均值点''（缝隙点）时，其实是一个概率上的鞍点（Saddle Point）或局部低谷。随机注入的噪声会打破平衡，将生成轨迹随机推向左边或右边的``引力盆地''，从而最终掉进其中一个确定的、安全的 Mode（动作 \(A\) 或动作 \(B\)），完美实现了迭代求精与多模态决策。
+\end{itemize}
+
+注意：这里的p(x)不是训练数据的联合概率密度，而是对于新数据本身的概率分布。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  高噪声条件下的稳定性
+\end{enumerate}
+
+在扩散的最初阶段（\(t\to T\) 时），图像几乎是纯高斯噪声。此时 \(x_t\) 中属于 \(x_0\) 的信息被严重掩没。在数学上，如果直接让模型从纯噪声中预测出一张极其清晰的 \(x_0\)，会因为方差过大而导致严重的数值不稳定，模型往往会输出一张极其模糊的平均图。而在这个阶段预测噪声 \(\epsilon\) 或速度 \(v\)，在数值梯度和损失函数加权（SNR Weighting）上被证明更加稳定，这也是 Flow Matching（流匹配）能在工业界大行其道的原因。
+
+\[
+v=x_1-x_0
+\]
+
+其中 \(x_1\) 是纯噪声，\(x_0\) 是清晰图像。
+
+你可以通过代数变换发现：预测 \(v\)，其实就是根据当前时间步的信噪比，动态地、自动地在``预测噪声''和``预测原图''之间进行插值切换。
+
+它既规避了早期预测 \(x_0\) 的方差爆炸，又规避了晚期预测 \(\epsilon\) 的信噪比问题，而且由于轨迹是直接的（ODE），它大幅减少了推理步数，这才是世界模型（生成高帧率视频）真正渴求的特性。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-159}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-159}}
+
+\begin{itemize}
+\tightlist
+\item
+  Li, T., \& He, K. (2025). \href{https://arxiv.org/abs/2511.13720}{Back to Basics: Let Denoising Generative Models Denoise}. arXiv:2511.13720.
+\item
+  Ho, J., Jain, A., \& Abbeel, P. (2020). \href{https://arxiv.org/abs/2006.11239}{Denoising Diffusion Probabilistic Models}. NeurIPS.
+\item
+  Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., \& Le, M. (2023). \href{https://arxiv.org/abs/2210.02747}{Flow Matching for Generative Modeling}. ICLR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6d41ux5339ux914dux6a21ux578b}{%
+\section{流匹配模型}\label{ux6d41ux5339ux914dux6a21ux578b}}
+
+\hypertarget{ux4e00ux6d41ux5339ux914dux7684ux57faux672cux601dux8defux53caux4e0eux6269ux6563ux6a21ux578bux7684ux5bf9ux6bd4}{%
+\subsection{一、流匹配的基本思路及与扩散模型的对比}\label{ux4e00ux6d41ux5339ux914dux7684ux57faux672cux601dux8defux53caux4e0eux6269ux6563ux6a21ux578bux7684ux5bf9ux6bd4}}
+
+流匹配（Flow Matching）和扩散模型都是生成模型，它们的目标都是将简单的分布（如高斯噪声，\(p_0\)）变换为复杂的数据分布（如图像或文本，\(p_1\)）。
+
+扩散模型的思路是：像墨水在水中扩散一样，数据逐渐加噪变成噪声。生成过程则是逆转这个扩散过程，像``去噪''一样一步步还原数据。这通常被建模为随机微分方程（SDE），路径是离散、曲折的。
+
+流匹配的思路是：希望从加噪后的分布直接得到加噪前的分布。直接定义一个向量场，这个场告诉粒子（数据点）在每一时刻 \(t\) 应该往哪个方向移动。
+
+流匹配中的几个基本概念：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{起始状态}：在 \(t=0\) 时刻，所有样本都服从一个简单分布 \(p_0(x)\)，例如标准高斯噪声，这就像一团散沙。
+\item
+  \textbf{目标状态}：在 \(t=1\) 时刻，样本汇聚成了我们想要生成的复杂数据分布 \(p_1(x)\)，例如精美的图片集合，就像沙子堆成的城堡。
+\item
+  \textbf{速度场}：记为 \(v(t,x)\)，在任意时刻 \(t\in[0,1]\) 和高维空间的任意位置 \(x\)，存在一个``风向标''或者说``力场''，它指示了位于该位置的粒子在下一瞬间应该往哪个方向移动、速度有多快。
+\item
+  \textbf{常微分方程的作用}：粒子的运动轨迹 \(x_t\) 随时间的变化率（即速度），正是由该位置的速度场决定的。这在数学上天然地被表达为一个常微分方程：
+\end{itemize}
+
+\[
+\frac{dx_t}{dt}=v(t,x_t)
+\]
+
+如果我们知道每个时刻和位置的风向（即神经网络学到的速度场），我们就必须通过积分（求解这个 ODE）来推导出这粒沙子最终会被吹到哪里。
+
+我们希望让特定数据 \(a\) 从 \(x_0\)（噪声位置，已知）以给定的速度分布（也就是``速度场''中对应位置对应时间的值）趋近 \(x_1\)（有意义的位置，未知）。事实上，上述常微分方程可写成积分形式：
+
+\[
+x_1-x_0=\int_0^1 v_t\,dt
+\]
+
+由于我们不关心加噪的过程经历了什么，因此我们不妨假设一个理想情况，即所有数据都沿着我们希望的速度和方向匀速直线运动。因此，我们的目标就是要学习这个速度场，使之接近我们假设的理想情况。如果我们把大量噪声点扔进这个场里，它们最终会汇聚成有意义的数据。
+
+\hypertarget{ux4e8cux6570ux5b66ux539fux7406}{%
+\subsection{二、数学原理}\label{ux4e8cux6570ux5b66ux539fux7406}}
+
+流匹配的核心在于定义和学习这个``速度场''。
+
+\hypertarget{a.-ux6982ux7387ux8defux5f84probability-path}{%
+\subsubsection{A. 概率路径（Probability Path）}\label{a.-ux6982ux7387ux8defux5f84probability-path}}
+
+我们不需要像扩散模型那样模拟复杂的物理扩散过程。我们可以直接定义一条从噪声 \(x_0\) 到数据 \(x_1\) 的路径。最简单且最高效的方法是线性插值（Linear Interpolation）：
+
+\[
+x_t=(1-t)x_0+tx_1,\quad t\in[0,1]
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  当 \(t=0\) 时，\(x_t=x_0\)，全是噪声。
+\item
+  当 \(t=1\) 时，\(x_t=x_1\)，全是数据。这条路径是直线的，这对于快速生成非常重要。
+\end{itemize}
+
+\hypertarget{b.-ux901fux5ea6ux573avelocity-field}{%
+\subsubsection{B. 速度场（Velocity Field）}\label{b.-ux901fux5ea6ux573avelocity-field}}
+
+既然有了位置 \(x_t\) 随时间 \(t\) 的变化公式，我们就可以算出粒子移动的速度（对时间求导）：
+
+\[
+u_t(x_t\mid x_0,x_1)=\frac{d}{dt}x_t=x_1-x_0
+\]
+
+这个 \(u_t\) 就是条件流匹配（Conditional Flow Matching）的目标速度。它告诉我们：如果要在时间 \(t=1\) 到达 \(x_1\)，当前的粒子应该以什么速度和方向移动。
+
+\hypertarget{c.-ux8badux7ec3ux76eeux6807flow-matching-objective}{%
+\subsubsection{C. 训练目标（Flow Matching Objective）}\label{c.-ux8badux7ec3ux76eeux6807flow-matching-objective}}
+
+在训练时，我们无法预知终点 \(x_1\)，这里只是我们想生成的。因此，我们需要训练一个神经网络 \(v_\theta(x_t,t)\)，让它在只知道当前位置 \(x_t\) 和时间 \(t\) 的情况下，去预测上述的目标速度。
+
+损失函数非常简单，就是回归（Regression）问题：
+
+\[
+\mathcal{L}_{FM}(\theta)=\mathbb{E}_{t,x_0,x_1}\left[\left\|v_\theta(x_t,t)-u_t(x_t\mid x_0,x_1)\right\|^2\right]
+\]
+
+也就是说，让神经网络预测的``流速度''尽可能接近真实的``流速度''。
+
+当然，实际上在图像生成等任务中，预测 \(v\) 时已知的信息包括当前位置 \(x_t\)、时间 \(t\) 和条件 \(c\)。
+
+在给定终点的情况下，我们希望速度应为指向终点的常数。或许你会问，那为什么还需要用神经网络拟合呢？这是因为我们在推理的时候并不知道终点是什么，不同的扩散起点（也就对应不同``粒子''）、不同的附加条件都会对应不同的终点和不同的``理想速度''。但在巨大的高维向量场中，实际在执行特定任务时的速度（该位置的场的方向）往往不是直指向终点的匀速，流匹配模型就是尽量去在每个给定的点拟合我们想要的速度方向。
+
+\hypertarget{ux4e09ux8badux7ec3ux65b9ux6cd5ux4ee5ux6d41ux5339ux914dvlaux6a21ux578bux4e3aux4f8b}{%
+\subsection{三、训练方法（以流匹配VLA模型为例）}\label{ux4e09ux8badux7ec3ux65b9ux6cd5ux4ee5ux6d41ux5339ux914dvlaux6a21ux578bux4e3aux4f8b}}
+
+以目前最先进的最优传输流匹配（Optimal Transport Flow Matching，类似于 \(\pi_0\) 中的设计）为例。假设基础噪声分布为 \(\pi_0\sim p_0=\mathcal{N}(0,I)\)，真实动作轨迹分布为 \(\pi_1\sim p_1\)。多模态条件为 \(c=\mathrm{Encoder}(o_t,I_t)\)。
+
+模型构建了一条连接噪声与真实动作的直线概率路径：
+
+\[
+x_t=(1-t)x_0+tx_1
+\]
+
+动作生成器 \(v_\theta\) 的目标是拟合真实的速度场（Velocity Field），其目标函数定义为：
+
+\[
+\mathcal{L}_{FM}(\theta)=\mathbb{E}_{x_0,x_1,t}\left[\left\|v_\theta(x_t,t,c)-(x_1-x_0)\right\|^2\right]
+\]
+
+这里 \((x_1-x_0)\) 是真实路径的恒定速度。相较于传统的 DDPM 扩散模型，流匹配的 ODE 轨迹更加平滑且笔直，能够在较少的推理步数（甚至几步内）生成高保真的连续动作信号。
+
+在训练时，我们对于每一组 \(x_0\) 和 \(x_1\)，都希望其连线上每个位置的速度尽可能满足从 \(x_0\) 指向 \(x_1\)，且大小在数值上等于二者之差。当然事实上，由于空间中的速度场是连续的，因此只能尽量拟合上述需求。当多条连线同时汇聚于一个点时，该点速度近似等于各连线对应速度的平均值。
+
+工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{特征提取}：VLM 接收当前相机观测 \(o_t\) 和语言 \(l\)，前向传播生成多模态条件向量 \(c\)。
+\item
+  \textbf{噪声初始化}：从标准正态分布中采样一段长度为 \(H\) 的轨迹高斯噪声 \(x_0\sim\mathcal{N}(0,I)\)。
+\item
+  \textbf{常微分方程求解（ODE Solving）}：在时间步 \(t\in[0,1]\) 之间，动作生成器 \(v_\theta(x_t,t,c)\) 结合上下文 \(c\) 计算当前状态的梯度。通过数值积分器（如 Euler 法或 Heun 法）逐步更新 \(x_t\)。
+\item
+  \textbf{动作执行}：将 ODE 终点 \(x_1\) 作为预测的动作块 \(A_0\)。系统采用``模型预测控制（MPC / Receding Horizon Control）''策略，仅执行前 \(k\) 个动作，随后重新获取新的视觉观测，进入下一轮闭环推理。
+\end{enumerate}
+
+这里的时间步是连续的，但神经网络只能处理离散的 \(t\) 值输入。故往往采取采样的方法，如每隔 \(0.02\) 的时间间隔进行一次采样，用该时刻网络输出的值对时间间隔积分，让 \(x_t\)``走一小步''。
+
+\hypertarget{ux56dbux5e94ux7528-1}{%
+\subsection{四、应用}\label{ux56dbux5e94ux7528-1}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  生成高分辨率、高质量的图像，性能可与Stable Diffusion等扩散模型媲美甚至更优，且通常生成速度更快（因为轨迹更直，从而需要的采样步数更少） 。
+\item
+  用于生成连续的视频帧序列，处理高维度的时空数据。
+\item
+  用于科学计算与模拟，如模拟物理系统（如流体动力学）、分子构象生成（蛋白质 3D 结构预测）等，因为这些问题本质上就是对连续变量变化（高维空间中点的移动速度随时空的变化）的建模。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-160}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-160}}
+
+\begin{itemize}
+\tightlist
+\item
+  Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., \& Le, M. (2023). \href{https://arxiv.org/abs/2210.02747}{Flow Matching for Generative Modeling}. ICLR.
+\item
+  Liu, X., Gong, C., \& Liu, Q. (2023). \href{https://arxiv.org/abs/2209.03003}{Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow}. ICLR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux79bbux6563ux6d41ux5339ux914dux8bbaux6587}{%
+\section{离散流匹配（论文）}\label{ux79bbux6563ux6d41ux5339ux914dux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux63d0ux51faux80ccux666f-6}{%
+\subsection{一、提出背景}\label{ux4e00ux63d0ux51faux80ccux666f-6}}
+
+目前的生成模型（如Stable Diffusion）在连续空间（像素值是连续的实数）非常成功。但文本是离散的（token ID是整数，如105, 2099），离散空间没有``微小变化''的概念（105变成105.1没有意义），因此直接应用连续扩散模型很困难。
+
+\hypertarget{ux4e8cux6838ux5fc3ux601dux60f3-4}{%
+\subsection{二、核心思想}\label{ux4e8cux6838ux5fc3ux601dux60f3-4}}
+
+连续流匹配通过定义一个向量场v\_t(x)，描述样本点x随时间t如何在空间中移动，微分方程为dx/dt=v\_t(x)。在离散空间，我们不能对离散跳变的位置x求导，但概率分布p\_t(x)是随时间连续变化的，我们可以通过连续时间马尔可夫链（CTMC）来建模。
+
+作者发现，如果我们关注从噪声分布p平滑过渡到真实数据分布q的``路径''，定义``概率速度''来描述x的概率分布如何从p转移向q的状态，那么离散版本的公式和连续版本的公式在数学形式上是统一的。这使得很多在连续扩散中好用的技巧（如调度器设计、去噪参数化）可以直接迁移过来。
+
+\hypertarget{ux4e09ux6570ux5b66ux8868ux8fbe-3}{%
+\subsection{三、数学表达}\label{ux4e09ux6570ux5b66ux8868ux8fbe-3}}
+
+注意：以下表达式中样本可以取的值的数量（样本空间的元素数）是有限的，概率的值是离散的，p指的是取该样本的实际概率，而不是概率密度函数。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  概率路径
+\end{enumerate}
+
+背景：生成模型的目标是将一个简单的随机噪声分布 \(p_0\)（比如全是掩码 mask 或随机乱码）变成真实的数据分布 \(p_1\)（比如通顺的句子）。
+
+插值 \(p_t\)：我们需要定义一条路径时间 \(t\)（从 \(0\) 到 \(1\)）变化的路径 \(p_t\)：
+
+\begin{itemize}
+\tightlist
+\item
+  当 \(t=0\) 时，\(p_0\) 完全是噪声。
+\item
+  当 \(t=1\) 时，\(p_1\) 完全是真实数据。
+\item
+  这条路径是在定义中间过程，在 \((0,1)\) 时，概率分布 \(p_t\) 是如何计算的。
+\end{itemize}
+
+\[
+p_t(x)=\sum_{x_0,x_1\in\mathcal{D}}p_t(x\mid x_0,x_1)\pi(x_0,x_1)
+\]
+
+这个公式描述了整体路径是如何由无数个``个体路径''组成的。
+其中，pi(x\_0,x\_1)表示``起始状态为x\_0且终止状态为x\_1的概率''；p\_t(x\textbar x\_0,x\_1)表示``在起始状态为x\_0且终止状态为x\_1的前提下，特定样本x在t时刻出现的概率''（这里x,x\_0,x\_1分别是三个不同样本）。所以这条表达式实际上是全概率公式，通过对不同的(x\_0,x\_1)下在t时刻得到向量x的概率求和，求解出了t时刻采样得到x的总概率。
+
+其中的``个体路径''p\_t(x\textbar x\_0,x\_1)又可以表示为m个概率分布的凸组合：
+
+\[
+p_t(x^i\mid x_0,x_1)=\sum_{j=1}^m\kappa_t^j w^j(x^i\mid x_0,x_1)
+\]
+
+左边的 \(p_t(x^i\mid x_0,x_1)\) 表示：
+
+\begin{itemize}
+\tightlist
+\item
+  这是目标条件概率。
+\item
+  它回答了这样一个问题：``如果我们已知起点是 \(x_0\)（比如掩码 \texttt{{[}MASK{]}}），终点是 \(x_1\)（比如单词``猫''），那么在中间某个时刻 \(t\)（比如进度 \(50\%\) 时），第 \(i\) 个位置的 token 取某个值的概率是多少？''
+\end{itemize}
+
+右边的 \(\sum_{j=1}^m\) 表示：
+
+\begin{itemize}
+\tightlist
+\item
+  这是一个加权求和。这表明最终的概率分布是由 \(m\) 个基础分布混合而成的。
+\end{itemize}
+
+基础分布（Basis Distribution）记为 \(w^j(x^i\mid x_0,x_1)\)，含义如下：
+
+\begin{itemize}
+\tightlist
+\item
+  这是基本的构造块。
+\item
+  每一个 \(w^j\) 代表一种简单的概率行为。例如：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    \(w^1\) 可能代表``保持为起点 \(x_0^i\)''。
+  \item
+    \(w^2\) 可能代表``变成终点 \(x_1^i\)''。
+  \item
+    \(w^3\) 可能代表``变成完全随机的噪声''。
+  \end{itemize}
+\end{itemize}
+
+因此，该公式定义的是概率的混合：在时刻 \(t\)，这个位置有 \(\kappa_t^1\) 的概率服从分布 \(w^1\)，有 \(\kappa_t^2\) 的概率服从分布 \(w^2\)，以此类推。
+
+对于点x\_i，最终的概率分布是这m个基础分布的加权（凸组合）。若m=2：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \(w^1\) 是``保持起点噪声 \(x_0\)''的概率（\(\delta_{x_0}\)）。
+\item
+  \(w^2\) 是``变成终点数据 \(x_1\)''的概率（\(\delta_{x_1}\)）。
+\end{enumerate}
+
+那么公式就变成了：
+
+\[
+p_t(x^i\mid x_0,x_1)=(1-\kappa_t)\delta_{x_0^i}+\kappa_t\delta_{x_1^i}
+\]
+
+\textbf{物理意义解释}：这句话的意思是，在时间 \(t\)，这个位置的词有 \(\kappa_t\) 的概率已经变成了最终的词 \(x_1\)，有 \(1-\kappa_t\) 的概率还停留在初始的噪声词 \(x_0\)。随着时间 \(t\) 推移，\(\kappa_t\) 逐渐增大，整个序列就慢慢从噪声``流''向了真实数据。
+
+相当于m=2是``在w\_1、w\_2间的线段上取点''，m=3就变成``在w\_1、w\_2、w\_3组成的三角形内取点''，以此类推。几何解释：
+
+假设我们的词表里只有 3 个词：猫、狗、鸟，即 \(d=3\)。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{离散状态}：任何一个确定的词（比如``猫''）都可以表示为一个 One-hot 向量：\([1,0,0]\)。
+\item
+  \textbf{概率分布}：模型输出的不是确定的词，而是一个概率分布，比如 \([0.7,0.2,0.1]\)（\(70\%\) 是猫，\(20\%\) 是狗\ldots\ldots）。
+\item
+  \textbf{单纯形（Simplex）}：满足``所有元素非负且和为 \(1\)''的向量集合，在几何上构成了一个单纯形。
+
+  \begin{itemize}
+  \tightlist
+  \item
+    对于 3 个词，单纯形是一个三维空间中的等边三角形。
+  \item
+    三角形的三个顶点分别是 \([1,0,0]\)、\([0,1,0]\)、\([0,0,1]\)，代表确定的词。
+  \item
+    三角形内部的任何一点都代表一个中间的概率状态。
+  \end{itemize}
+\end{itemize}
+
+\[
+p_t(x^i\mid x_0,x_1)=\sum_{j=1}^{m}\kappa_t^{i,j}w^j(x^i\mid x_0,x_1)
+\]
+
+其中的 \(\sum \kappa=1\) 且 \(\kappa\ge 0\)，这正是几何学中``凸组合''的定义。这意味着，无论怎样设计基础路径 \(w^j\)，只要满足这个公式，生成的概率分布 \(p_t\) 永远不会跑出单纯形之外。它保证了模型产生的总是合法的概率分布。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  生成概率速度
+\end{enumerate}
+
+\textbf{连续性方程（The Continuity Equation）} 为了定义离散流匹配，我们使用连续时间马尔可夫链（CTMC）范式。样本 \(X_t\) 在离散状态间跳跃。我们需要预测每个 token 概率变化的\textbf{速率}。连续性方程描述了状态概率的变化率 \(\dot{p}_t(x)\) 与通量（flux）之间的关系：
+
+\[
+\dot{p}_t(x)+\mathrm{div}_x(p_tu_t)=0
+\]
+
+其中 \(\mathrm{div}_x\) 是散度算子。在离散情况下，散度定义为流出通量减去流入通量：
+
+\[
+\mathrm{div}_x(v)=\sum_{z\in\mathcal{D}}[v(z,x)-v(x,z)]
+\]
+
+\textbf{定理 2（边际速度）} 给定生成条件概率路径 \(p_t(x\mid x_0,x_1)\) 的条件概率速度 \(u_t^i(x^i,z\mid x_0,x_1)\)，其边际速度 \(u_t\) 由下式给出：
+
+\[
+u_t^i(x^i,z)=\sum_{x_0,x_1\in\mathcal{D}}u_t^i(x^i,z\mid x_0,x_1)p_t(x_0,x_1\mid z)
+\]
+
+这与连续流匹配中的逻辑一致：边际向量场是条件向量场的后验期望。
+
+\textbf{定理 3（闭式解）} 对于由 Eq. 9 定义的路径（即线性插值路径），边际生成概率速度具有非常简洁的闭式解，且与连续流匹配的形式惊人一致：
+
+\[
+u_t^i(x^i,z)=\frac{\dot{\kappa}_t}{1-\kappa_t}[p_{1\mid t}(x^i\mid z)-\delta_z(x^i)]
+\]
+
+其中 \(p_{1\mid t}(x^i\mid z)=\mathbb{E}[X_1\mid X_t=z]\) 是\textbf{概率去噪器（Probability Denoiser）}。这意味着速度场可以通过学习一个预测目标 \(X_1\) 分布的神经网络来参数化。
+3. 训练目标
+
+\textbf{定理 3 的威力}：它把复杂的``速度计算''转化为了一个简单的监督学习任务。公式 \(u_t\propto p_{1\mid t}-\delta_z\) 告诉我们：只要训练一个神经网络，输入当前带噪声的句子 \(z\) 和时间 \(t\)，预测原始干净句子 \(X_1\) 的概率分布 \(p_{1\mid t}\)，这个网络就自动定义了正确的``流''速度。
+
+\textbf{训练损失函数}：基于上述推导，训练目标简化为最小化交叉熵损失（Cross Entropy）：
+
+\[
+\mathcal{L}(\theta)=-\sum_i\mathbb{E}_{t,data}\log p_{1\mid t}(X_1^i\mid X_t;\theta)
+\]
+
+这就是标准的\textbf{去噪（Denoising）}目标：给模型看加了噪声/掩码的数据 \(X_t\)，让它预测原数据 \(X_1\)。这解释了为什么 BERT 风格的 Masked Language Modeling（MLM）实际上是在训练一个流模型。
+
+当然，这与BERT的掩码语言模型（MLM）训练有一个关键区别：掩码率是动态的。在t=0时几乎全被掩盖，在t=1时几乎全是真实数据。模型的输入不只有加噪数据X\_t，而是为(X\_t,t)，意味着它需要通过学习来具备在不同噪声水平（与时间t对应）下恢复原始数据X\_1的能力。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-161}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-161}}
+
+\begin{itemize}
+\tightlist
+\item
+  Gat, I., Remez, T., Shaul, N., Kreuk, F., Chen, R. T. Q., Synnaeve, G., Adi, Y., \& Lipman, Y. (2024). \href{https://arxiv.org/abs/2407.15595}{Discrete Flow Matching}. arXiv:2407.15595.
+\item
+  Campbell, A., Yim, J., Barzilay, R., Rainforth, T., \& Jaakkola, T. (2024). \href{https://arxiv.org/abs/2402.04997}{Generative Flows on Discrete State-Spaces: Enabling Multimodal Flows with Applications to Protein Co-Design}. arXiv:2402.04997.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux4eceux975eux7eafux566aux58f0ux5f00ux59cbux7684ux6d41ux5339ux914dux8bbaux6587}{%
+\section{从非纯噪声开始的流匹配（论文）}\label{ux4eceux975eux7eafux566aux58f0ux5f00ux59cbux7684ux6d41ux5339ux914dux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-4}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-4}}
+
+在机器人控制领域，基于扩散模型的策略在处理多模态和高精度任务上取得了巨大成功。然而，这些模型通常遵循``从零开始去噪（denoise-from-scratch）''的范式，即从随机的高斯噪声开始迭代采样以生成动作。生成单个动作往往需要几十个去噪步骤，导致推理延迟极高，成为实时机器人控制的重大瓶颈。
+
+\textbf{A2A 的核心洞察}：现代机器人配备了丰富的本体感受器，能提供关于物理状态和近期执行历史的连续反馈。这些历史反馈本身就构成了强大的先验信息。因此，论文提出不需要从毫无信息的随机高斯噪声开始生成动作。A2A 通过学习一个将``历史动作分布''直接传输到``未来动作分布''的流（Flow），绕过了昂贵的去噪过程。
+
+\hypertarget{ux4e8ca2aux6d41ux5339ux914dux7684ux6838ux5fc3ux7b97ux6cd5}{%
+\subsection{二、A2A流匹配的核心算法}\label{ux4e8ca2aux6d41ux5339ux914dux7684ux6838ux5fc3ux7b97ux6cd5}}
+
+A2A 框架将历史动作的分布直接转换为未来动作的分布，这一过程在共享的高维潜在空间 \(Z\) 中完成。以下是该算法的具体工作流与网络架构：
+
+\hypertarget{ux5386ux53f2ux52a8ux4f5cux7f16ux7801ux8d77ux70b9ux521dux59cbux5316}{%
+\subsubsection{1. 历史动作编码（起点初始化）}\label{ux5386ux53f2ux52a8ux4f5cux7f16ux7801ux8d77ux70b9ux521dux59cbux5316}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{输入}：系统接收包含 \(n\) 帧的历史动作序列 \(a_{\le t}=\{a_{t-n+1},\cdots,a_t\}\)。
+\item
+  \textbf{操作}：使用基于 1D 卷积神经网络（CNN，具有大小为 5 的卷积核）的动作编码器 \(E_a\) 将这些低维历史动作压缩并映射到 512 维的紧凑潜在空间中，作为生成的起点 \(z_0\)。
+\end{itemize}
+
+\hypertarget{ux89c6ux89c9ux6761ux4ef6ux63d0ux53d6ux5168ux5c40ux6761ux4ef6ux751fux6210}{%
+\subsubsection{2. 视觉条件提取（全局条件生成）}\label{ux89c6ux89c9ux6761ux4ef6ux63d0ux53d6ux5168ux5c40ux6761ux4ef6ux751fux6210}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{输入}：包含 \(m\) 帧的多模态视觉图像流 \(I_{\le t}=\{I_{t-m+1},\cdots,I_t\}\)。
+\item
+  \textbf{操作}：视觉编码器 \(E_I\)（基于 ResNet-18 主干网络）提取图像特征，然后通过多层感知机（MLP）线性投影，生成用于指导动作生成的全局条件向量 \(c\)。
+\end{itemize}
+
+\hypertarget{ux6f5cux5728ux7a7aux95f4ux4e2dux7684ux6d41ux5339ux914dux52a8ux4f5cux6d41ux4f20ux8f93}{%
+\subsubsection{3. 潜在空间中的流匹配（动作流传输）}\label{ux6f5cux5728ux7a7aux95f4ux4e2dux7684ux6d41ux5339ux914dux52a8ux4f5cux6d41ux4f20ux8f93}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{机制}：在潜在空间 \(Z\) 中，定义一个随时间变化的向量场 \(v_{\tau}\)，其中流时间 \(\tau\in[0,1]\)。
+\item
+  \textbf{操作}：使用由 4 个 AdaLN-MLP 块构建的 Flow Net 预测向量场，该网络以全局条件 \(c\) 为指导，通过常微分方程（ODE）积分，将起点 \(z_0\) 平滑地传输到目标潜在状态 \(z_1\)。
+\end{itemize}
+
+\hypertarget{ux672aux6765ux52a8ux4f5cux89e3ux7801ux7269ux7406ux6267ux884cux8f93ux51fa}{%
+\subsubsection{4. 未来动作解码（物理执行输出）}\label{ux672aux6765ux52a8ux4f5cux89e3ux7801ux7269ux7406ux6267ux884cux8f93ux51fa}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{操作}：残差 MLP 解码器 \(D_a\) 接收目标潜在表示 \(z_1\)，并将其转换重构为未来 \(n\) 帧的动作序列 \(\hat{a}_{>t}\) 供机器人执行。
+\end{itemize}
+
+\hypertarget{ux52a0ux566aux6536ux76caux4f53ux73b0ux591aux6a21ux6001ux89e3ux7801}{%
+\subsubsection{加噪收益体现（多模态解码）}\label{ux52a0ux566aux6536ux76caux4f53ux73b0ux591aux6a21ux6001ux89e3ux7801}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{加噪收益}：得益于第 1 步注入的局部随机性，最终解码出的 \(\hat{a}_{>t}\) 不再是``所有可能动作的死板平均值''。面对多模态任务（例如同一个障碍物，可以从左绕也可以从右绕），该机制能让机器人随机且合理地采样出不同的物理动作解，并极大提升对外部未知干扰的 OOD（Out-of-Distribution）泛化能力。
+\end{itemize}
+
+\hypertarget{ux4e09ux635fux5931ux51fdux6570-1}{%
+\subsection{三、损失函数}\label{ux4e09ux635fux5931ux51fdux6570-1}}
+
+为了确保生成的动作既具备极高的精确度，又能在物理层面上连贯执行，A2A 采用了多任务联合优化的损失函数 \(L_{total}\)，由三个部分组成：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{流匹配损失（Flow Matching Loss）}：
+  其主要目标是在潜在空间 \(Z\) 中回归随时间变化的向量场 \(f_{\theta}(z_{\tau},\tau,c)\)，确保模型学习到从起点 \(z_0\) 到目标 \(z_1\) 的最优传输路径。这基于传统的流匹配方程：
+\end{itemize}
+
+\[
+\mathcal{L}_{FM}=\mathbb{E}_{\tau\sim U[0,1],q(x_0,x_1)}\left\|f_{\theta}(x_{\tau},\tau,c)-v_{\tau}(x_{\tau})\right\|^2
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{自编码器重构损失（Autoencoder Reconstruction Loss）}：
+  为了保证潜在空间 \(Z\) 能够保留动作空间的拓扑结构，该算法对动作自编码器应用了 \(l_1\) 重构损失，正则化编码器和解码器以维持动作块的高保真度。
+\end{itemize}
+
+\[
+\mathcal{L}_{AE}=\mathbb{E}_{a_{>t}}\left\|a_{>t}-D_a(E_a(a_{>t}))\right\|_1
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{推理一致性损失（Inference Consistency Loss）}：
+  为了弥合抽象的潜在生成与实际物理执行之间的差距，论文引入了推理一致性损失，旨在使通过 ODE 推理出的潜在向量 \(\hat{z}_1\) 与真实动作在潜在空间和原始动作空间中对齐。
+\end{itemize}
+
+\[
+\mathcal{L}_{IC}=\mathbb{E}_{\hat{z}_1}\left\|\hat{z}_1-E_a(a_{>t})\right\|_1+\lambda_0\left\|D_a(\hat{z}_1)-a_{>t}\right\|_1
+\]
+
+\hypertarget{ux53c2ux8003ux6587ux732e-162}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-162}}
+
+\begin{itemize}
+\tightlist
+\item
+  Jia, J., Li, G., Chen, X., An, T., Hu, Y., Li, J., Guo, X., \& Yang, J. (2026). \href{https://arxiv.org/abs/2602.07322}{Action-to-Action Flow Matching}. arXiv:2602.07322.
+\item
+  Lipman, Y., Chen, R. T. Q., Ben-Hamu, H., Nickel, M., \& Le, M. (2023). \href{https://arxiv.org/abs/2210.02747}{Flow Matching for Generative Modeling}. ICLR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux57faux4e8erlux7684ux6269ux6563ux6a21ux578bux8c03ux53c2ux8bbaux6587}{%
+\section{基于RL的扩散模型调参（论文）}\label{ux57faux4e8erlux7684ux6269ux6563ux6a21ux578bux8c03ux53c2ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666fux4e0eux6838ux5fc3ux601dux60f3}{%
+\subsection{一、问题背景与核心思想}\label{ux4e00ux95eeux9898ux80ccux666fux4e0eux6838ux5fc3ux601dux60f3}}
+
+目前主流的图像生成模型（无论是连续状态的 Diffusion/Rectified Flow，还是离散 Token 的 MaskGIT/Autoregressive）都遵循一个基本原理：\textbf{将复杂的生成任务分解为多个可处理的迭代步骤}。
+
+然而，这种多步策略引入了一个重大挑战：\textbf{在每一步中，都有许多特定的生成策略参数需要配置}。例如扩散模型中的去噪步长 \(\kappa_t\) 和无分类器引导尺度 \(w_t\)，或 MaskGIT 中的掩码比例 \(m_t\) 和温度 \(\tau_t\)。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{现有做法的缺陷}：现有的生成模型通常依赖人工设计的、静态的调度规则（Scheduling Rules）。这种静态策略不仅需要耗费大量专家经验进行试错，更致命的是，它对所有的生成样本都采用相同的参数，无法根据每个样本的独特特征进行自适应调整，从而导致生成效果并非最优。
+\end{itemize}
+
+AdaGen 的核心思想是用一个轻量级的\textbf{策略网络（Policy Network）}取代人工设计的静态规则。该网络通过强化学习（RL）进行训练，能够在生成过程中的每一步，观察当前的生成状态，并动态、自适应地决定下一步的最优生成参数。
+
+\hypertarget{ux4e8cux57faux672cux539fux7406}{%
+\subsection{二、基本原理}\label{ux4e8cux57faux672cux539fux7406}}
+
+\hypertarget{ux4e00ux9a6cux5c14ux53efux592bux51b3ux7b56ux8fc7ux7a0bux5efaux6a21}{%
+\subsubsection{（一）马尔可夫决策过程建模}\label{ux4e00ux9a6cux5c14ux53efux592bux51b3ux7b56ux8fc7ux7a0bux5efaux6a21}}
+
+为了能够让神经网络学习这种迭代过程，作者巧妙地将``确定最优生成策略''的过程建模为一个 \(T\) 步的马尔可夫决策过程（MDP）：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{状态空间（State）}：记为 \(S\)，状态 \(s_t\) 包含当前的生成步数 \(t\) 以及第 \(t\) 步的中间生成结果，例如部分去噪的图像或部分解码的 Token。
+\item
+  \textbf{动作空间（Action）}：记为 \(A\)，动作 \(a_t\) 表示从步骤 \(t\) 到 \(t + 1\) 所需的具体生成策略参数，例如 \(\tau_t, w_t\) 等。策略网络 \(\eta_\phi\) 是一个智能体，它根据状态输出动作：\(a_t = \eta_\phi(s_t)\)。为了在训练中鼓励探索，作者使用了随机策略：
+\end{itemize}
+
+\[
+\pi_\phi(a_t \mid s_t) \triangleq \mathcal{N}(\eta_\phi(s_t), \sigma I)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{转移概率（Transition）}：记为 \(P\)，根据底层生成模型的机制（确定性或随机性）更新生成状态。
+\item
+  \textbf{奖励函数（Reward）}：记为 \(R\)，由于只关注最终生成的图像质量，奖励仅在最后一步 \(t = T\) 时给出：
+\end{itemize}
+
+\[
+R(s_t, a_t) \triangleq \mathbb{I}(t = T) \cdot r(x)
+\]
+
+这里 \(r(x)\) 用于评估最终图像 \(x\) 的质量。通过近端策略优化（PPO）算法，策略网络通过最大化预期累积奖励来更新参数。
+
+\hypertarget{ux4e8cux5bf9ux6297ux6027ux5956ux52b1}{%
+\subsubsection{（二）对抗性奖励}\label{ux4e8cux5bf9ux6297ux6027ux5956ux52b1}}
+
+奖励信号 \(r(x)\) 的设计是 RL 训练成败的关键。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{简单奖励的失败}：如果直接使用 FID 这类统计学指标，或者使用预训练的图像偏好模型（PRM），策略网络很容易``过拟合''。它会找到奖励模型的漏洞，生成一些预期奖励很高、但实际视觉质量极差或缺乏多样性（风格同质化）的图像。
+\item
+  \textbf{对抗性奖励（AdaGen 的解法）}：受到 GAN 启发，作者提出引入一个对抗性奖励模型 \(r_\psi\)（类似判别器）。该模型与策略网络联合更新，形成一个极大极小博弈。策略网络不断生成图像以骗过奖励模型；奖励模型也不断学习区分``真实数据分布''与``策略网络生成的假图像''。其目标函数为：
+\end{itemize}
+
+\[
+\begin{aligned}
+\max_\phi \min_\psi J(\phi, \psi)
+&= \mathbb{E}_{x_{\mathrm{fake}} \sim p_\theta(x \mid \pi_\phi)}
+\left[\log r_\psi(x_{\mathrm{fake}})\right] \\
+&\quad + \mathbb{E}_{x_{\mathrm{real}} \sim p_{\mathrm{data}}}
+\left[\log(1 - r_\psi(x_{\mathrm{real}}))\right]
+\end{aligned}
+\]
+
+这种动态变化的奖励信号有效防止了策略网络的过拟合，保证了生成图像的``高保真度''与``高多样性''的平衡。
+
+\hypertarget{ux4e09ux52a8ux4f5cux5e73ux6ed1ux5316}{%
+\subsubsection{（三）动作平滑化}\label{ux4e09ux52a8ux4f5cux5e73ux6ed1ux5316}}
+
+当生成步数变多（例如从 \(T = 8\) 增加到 \(T = 32\)）时，动作空间急剧膨胀，导致策略网络输出的参数序列出现不必要的剧烈震荡，训练变得非常不稳定。作者发现，渐进式的图像生成不需要参数产生高频的非单调波动。因此引入了信号处理中的指数移动平均（EMA）滤波器，对策略网络输出的原始动作 \(\tilde{a}_t\) 进行因果低通滤波：
+
+\[
+a_t = \beta a_{t-1} + (1 - \beta)\tilde{a}_t
+\]
+
+通过超参数 \(\beta\) 控制平滑程度，极大稳定了探索轨迹，并进一步提升了最终性能。
+
+\hypertarget{ux4e09ux57faux4e8eux8badux7ec3ux526fux4ea7ux7269ux7684ux8fdbux9636ux529fux80fd}{%
+\subsection{三、基于训练副产物的进阶功能}\label{ux4e09ux57faux4e8eux8badux7ec3ux526fux4ea7ux7269ux7684ux8fdbux9636ux529fux80fd}}
+
+\hypertarget{ux4e00ux63a8ux7406ux65f6ux89c4ux5212}{%
+\subsubsection{（一）推理时规划}\label{ux4e00ux63a8ux7406ux65f6ux89c4ux5212}}
+
+在强化学习训练结束后，对抗性奖励模型 \(r_\psi\) 和状态价值网络 \(V_\phi\) 通常会被丢弃。但作者发现它们是非常优秀的``现成''感知评估器：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{重复采样（Repeated Sampling）}：利用 \(r_\psi\) 对最终生成的多个样本进行打分，直接挑选得分最高的输出。
+\item
+  \textbf{前瞻采样（Lookahead Sampling）}：对于具有随机状态转移的模型（如 MaskGIT），可以在生成过程的每一步采样 \(K\) 个分支，利用价值函数 \(V_\phi(s_{t+1}^{(k)})\) 预测各分支的未来预期奖励，并贪婪地选择期望最高的状态转移路径：
+\end{enumerate}
+
+\[
+\begin{aligned}
+k^\star &= \arg\max_k V_\phi(s_{t+1}^{(k)}), \\
+s_{t+1} &= s_{t+1}^{(k^\star)}
+\end{aligned}
+\]
+
+这使得生成质量在不引入任何外部模型的情况下得到了额外提升。
+
+\hypertarget{ux4e8cux4fddux771fux5ea6ux4e0eux591aux6837ux6027ux7684ux6743ux8861}{%
+\subsubsection{（二）保真度与多样性的权衡}\label{ux4e8cux4fddux771fux5ea6ux4e0eux591aux6837ux6027ux7684ux6743ux8861}}
+
+针对某些只追求极致画质而可以牺牲多样性的特殊应用场景，AdaGen 提供了一个控制旋钮 \(\lambda\)：作者额外训练了一个只关注保真度的策略网络（使用预训练的 ImageReward 作为奖励）。在推理时，将原策略的输出 \(a_t\) 与保真策略的输出 \(a'_t\) 进行线性插值：
+
+\[
+a_t^{\mathrm{blend}} = (1 - \lambda)a_t + \lambda a'_t
+\]
+
+用户可以通过滑动 \(\lambda \in [0, 1]\)，平滑地控制生成结果是倾向于``丰富的多样性''还是``极致的视觉质量''。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-163}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-163}}
+
+\begin{itemize}
+\tightlist
+\item
+  Black, K., Janner, M., Du, Y., Kostrikov, I., \& Levine, S. (2023). \href{https://arxiv.org/abs/2305.13301}{Training Diffusion Models with Reinforcement Learning}. arXiv:2305.13301.
+\item
+  Fan, Y., Watkins, O., Du, Y., Liu, H., Ryu, M., Boutilier, C., Abbeel, P., Ghavamzadeh, M., Lee, K., \& Lee, K. (2023). \href{https://arxiv.org/abs/2305.16381}{DPOK: Reinforcement Learning for Fine-tuning Text-to-Image Diffusion Models}. NeurIPS.
+\item
+  Wallace, B., Gokul, A., Ermon, S., \& Naik, N. (2024). \href{https://arxiv.org/abs/2311.12908}{Diffusion Model Alignment Using Direct Preference Optimization}. CVPR.
+\item
+  Ni, Z., Wang, Y., Hua, Y., Zhou, R., Guo, J., Song, J., Zheng, B., \& Huang, G. (2026). \href{https://arxiv.org/abs/2603.06993}{AdaGen: Learning Adaptive Policy for Image Synthesis}. arXiv:2603.06993.
+\end{itemize}
+
+\clearpage

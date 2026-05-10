@@ -1,0 +1,1363 @@
+\hypertarget{ux5f3aux5316ux5faeux8c03ux7684ux524dux6cbfux63a2ux7d22}{%
+\chapter{强化微调的前沿探索}\label{ux5f3aux5316ux5faeux8c03ux7684ux524dux6cbfux63a2ux7d22}}
+
+\hypertarget{dapoux7b97ux6cd5ux8bbaux6587}{%
+\section{DAPO算法（论文）}\label{dapoux7b97ux6cd5ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+DeepSeek的成功证明了GRPO范式的有效性和优越性。但是，GRPO仍然存在稳定性问题，容易导致训练崩溃。DeepSeek拥有足够多的数据，可以使其趋于稳定。但对于中小规模的强化微调，如果数据批量较小，就必须对算法本身进行改进。
+
+DAPO（Decoupled Clip and Dynamic Sampling Policy Optimization）就是其中一种改进，它基本上沿用了GRPO的算法原理，但做出了一些工程策略上的改进。
+
+\hypertarget{ux4e00ux6539ux8fdbux70b9}{%
+\subsection{一、改进点}\label{ux4e00ux6539ux8fdbux70b9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Clip-Higher 机制（解耦 Clip）
+\end{enumerate}
+
+这是 DAPO 最显著的数学改进。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{原理}：传统 PPO/GRPO 使用对称的裁剪范围 \((1-\epsilon, 1+\epsilon)\)。DAPO 将上界和下界解耦，设为 \((1-\epsilon_{\mathrm{low}}, 1+\epsilon_{\mathrm{high}})\)。
+\item
+  \textbf{目的}：训练早期，模型需要探索那些原本概率较低但可能正确的 token。
+\item
+  \textbf{操作}：通过增大 \(\epsilon_{\mathrm{high}}\) 的值（例如设置得比 \(\epsilon_{\mathrm{low}}\) 更大），允许模型在``变好''的方向上，即概率比 \(r_t(\theta)>1\) 时迈出更大的步子，而不会被过早截断。这能显著提升模型在训练早期的熵（Entropy），即探索能力。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  动态采样
+\end{enumerate}
+
+这是一个数据效率层面的改进。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{原理}：在数学推理等任务中，如果对于同一个问题 \(q\)，模型采样的 \(G\) 个答案 \(\{o_1,\ldots,o_G\}\) 全对（Reward 全为 1）或者全错（Reward 全为 0），那么这组数据提供的梯度信息非常有限，甚至无效，因为没有对比。
+\item
+  \textbf{操作}：DAPO 引入过滤条件：
+\end{itemize}
+
+\[
+0 < \left|\{o_i \mid \mathrm{isEquivalent}(a,o_i)\}\right| < G
+\]
+
+只有当一组样本中既有正样本又有负样本时，才进行训练。这意味着它会自动过滤掉那些``太简单''或``太难''的 prompt，只保留有``有效梯度''的样本。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  Token级策略梯度损失（为什么这样更公平的原因见后）
+\end{enumerate}
+
+这是对损失函数聚合方式的改进。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{原理}：标准实现通常先计算每个样本的 Loss，然后对 Batch Size 取平均。但这忽略了样本长度差异。长序列包含更多 token，如果简单对样本取平均，长序列中每个 token 的贡献会被稀释。
+\item
+  \textbf{操作}：DAPO 对 Batch 内的所有 token 一起求和并取平均，即除以总 token 数：
+\end{itemize}
+
+\[
+\mathcal{L}
+=
+\frac{1}{\sum_i |o_i|}
+\sum_i \sum_t \mathcal{L}_{i,t}.
+\]
+
+这保证了无论回复长短，每个 token 对梯度的贡献都是公平的。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  超长奖励调整
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{原理}：为了防止模型为了``刷分''而生成无限长的废话，这是 Reward Hacking 的一种。
+\item
+  \textbf{操作}：定义一个最大长度阈值，超过该阈值后施加``Soft 惩罚''，越长罚得越重。
+\end{itemize}
+
+\hypertarget{ux4e8cux5de5ux4f5cux6d41ux5bf9ux6bd4}{%
+\subsubsection{（二）工作流对比}\label{ux4e8cux5de5ux4f5cux6d41ux5bf9ux6bd4}}
+
+GRPO：
+
+GRPO 标准工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{采样（Rollout）}：对于每个问题 \(q\)，从旧策略 \(\pi_{\theta_{\mathrm{old}}}\) 采样一组 \(G\) 个输出 \(\{o_1,o_2,\ldots,o_G\}\)。
+\item
+  \textbf{奖励计算（Evaluation）}：计算每个输出的奖励 \(\{r_1,r_2,\ldots,r_G\}\)。
+\item
+  \textbf{优势估计（Advantage）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    计算组内奖励的均值和标准差。
+  \item
+    标准化优势：
+  \end{itemize}
+\end{enumerate}
+
+\[
+A_i
+=
+\frac{r_i-\mathrm{mean}(r)}
+{\mathrm{std}(r)+\epsilon}.
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  \textbf{损失计算（Loss）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    计算每个样本的 PPO 损失。
+  \item
+    聚合方式是对 \(G\) 个样本的损失取平均：
+  \end{itemize}
+\end{enumerate}
+
+\[
+\frac{1}{G}\sum_i \mathcal{L}_i.
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  \textbf{反向传播}：更新模型参数。
+\end{enumerate}
+
+DAPO：
+
+DAPO 的工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{过采样（Over-Sampling）}：对于每个问题 \(q\)，先进行采样，可能采样多于 \(G\) 个，或者采样 \(G\) 个后再进行筛选。
+\item
+  \textbf{奖励计算（Evaluation）}：计算奖励，判断每个答案是否正确（Reward 为 1 或 0）。
+\item
+  \textbf{动态采样筛选（Dynamic Sampling）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    检查这一组样本的奖励分布。
+  \item
+    如果这一组答案全部正确（Reward 全为 1）或全部错误（Reward 全为 0），则直接丢弃整组数据，不进行训练。
+  \item
+    原理是全对或全错意味着没有``相对优势''差异，产生的梯度无效或噪声大。DAPO 只训练那些模型处于``懂与不懂之间''的边界样本。
+  \end{itemize}
+\item
+  \textbf{优势估计（Advantage）}：对保留下来的有效组，计算组内相对优势 \(\hat{A}_{i,t}\)。
+\item
+  \textbf{解耦损失计算（Decoupled Loss）}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    计算 token 级别的概率比 \(r_{i,t}(\theta)\)。
+  \item
+    \textbf{Clip-Higher}：使用非对称截断范围 \([1-\epsilon_{\mathrm{low}},1+\epsilon_{\mathrm{high}}]\) 计算损失。
+  \item
+    \textbf{聚合方式}：不对样本取平均，而是对所有 token 求和，最后除以总 token 数：
+  \end{itemize}
+\end{enumerate}
+
+\[
+\frac{1}{\sum_i |o_i|}
+\sum_i \sum_t \mathcal{L}_{i,t}.
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{5}
+\tightlist
+\item
+  \textbf{反向传播}：更新模型参数。
+\end{enumerate}
+
+\hypertarget{ux4e09ux4e3aux4ec0ux4e48ux76eeux6807ux51fdux6570ux6309tokenux5e73ux5747}{%
+\subsubsection{（三）为什么目标函数按token平均？}\label{ux4e09ux4e3aux4ec0ux4e48ux76eeux6807ux51fdux6570ux6309tokenux5e73ux5747}}
+
+这里需要区分两个概念：``样本权重''和``决策权重（token 权重）''。
+
+在大模型中，每一个 token 的生成都是一次独立的决策（Action）。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{短样本（10 tokens）}：模型做了 10 次决策。
+\item
+  \textbf{长样本（1000 tokens）}：模型做了 1000 次决策。
+\end{itemize}
+
+如果使用 GRPO/PPO 的标准平均（Sample-level Averaging）：
+
+\[
+\mathcal{L}
+=
+\frac{1}{\mathrm{BatchSize}}
+\sum_i \mathcal{L}_{\mathrm{sample},i}
+\]
+
+这相当于``做 10 次决策的考试''和``做 1000 次决策的考试''权重一样。
+
+\begin{itemize}
+\tightlist
+\item
+  短样本中，每一个 token（每一次决策）的梯度权重是 \(\frac{1}{10}\)。
+\item
+  长样本中，每一个 token（每一次决策）的梯度权重是 \(\frac{1}{1000}\)。
+\end{itemize}
+
+结论是，GRPO 的这种做法实际上会极度偏袒短样本。它认为短样本中的每一个字比长样本中的每一个字重要 100 倍，导致模型倾向于走捷径，因为长推理链条中间的错误修正被稀释了。
+
+如果使用 DAPO 的求和平均（Token-level Averaging）：
+
+\[
+\mathcal{L}
+=
+\frac{1}{\mathrm{TotalTokens}}
+\sum_i \sum_t \mathcal{L}_{i,t}
+\]
+
+这相当于说：每一个决策（token）都是平等的。无论是在短句子里，还是在长篇大论里，每一个 token 贡献的梯度权重都是 \(\frac{1}{\mathrm{TotalTokens}}\)。
+
+总结与应用：GRPO更能保证模型对每一个样本训练充分，DAPO则避免二值奖励中长链推理样本的关键逻辑步骤梯度过小，更适合提高复杂推理的收敛效率和逻辑密度。可以根据不同需要，选择合适的训练方法。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-107}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-107}}
+
+\begin{itemize}
+\tightlist
+\item
+  Yu, Q., Zhang, Z., Zhu, R., et al.~(2025). \href{https://arxiv.org/abs/2503.14476}{DAPO: An Open-Source LLM Reinforcement Learning System at Scale}. arXiv:2503.14476.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{vapoux7b97ux6cd5ux8bbaux6587}{%
+\section{VAPO算法（论文）}\label{vapoux7b97ux6cd5ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+VAPO（Value-model-based Augmented Proximal Policy Optimization）回归了Actor-Critic，是PPO的一种改进算法，也融合了PPO以及GRPO/DAPO的一些设计思想。
+
+\hypertarget{ux4e00ux4e3bux8981ux6539ux8fdb}{%
+\subsection{一、主要改进}\label{ux4e00ux4e3bux8981ux6539ux8fdb}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  价值预训练（Value Pre-training）
+\end{enumerate}
+
+在正式强化学习（RL）之前，先在一个高质量数据集上专门训练Critic（价值模型）。在 RLHF 初期，如果Critic是随机初始化的，它对长序列的价值估计是一团糟。Actor会被错误的Critic 带偏，浪费算力。预训练让Critic在``上岗''前就已经学会了判断什么是有希望的推理路径，从而在RL开始的第一步就能提供准确的长期回报（Long-term Return）估计，避免让Actor白白浪费大量算力。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  解耦GAE（Decoupled GAE）
+\end{enumerate}
+
+强化学习中，``偏差-方差权衡''是一个重要的话题。蒙特卡洛方法（舍弃Critic网络）无偏，但是方差大，训练不稳定；时序差分方法（运用Critic网络）每一步Critic估计的偏差会不断累积，导致在几百步的推理中，最关键的最终答案的奖励很难传导回第一步。
+
+VAPO算法提出了解耦GAE方法，将这二者结合起来。
+
+其核心优势估计可以写成：
+
+\[
+\hat{A}_t^{\mathrm{VAPO}}
+=
+\beta\cdot(R_{\mathrm{final}}-V(s_t))
++
+(1-\beta)\cdot A_t^{\mathrm{GAE}}(\lambda).
+\]
+
+其中，前半部分是 GRPO/蒙特卡洛成分，用真实最终回报校正方向；后半部分是 PPO/Critic 成分，依赖时序差分提供更平滑的估计。
+
+也可以在计算 GAE 的递归过程中强制注入真实回报：
+
+\[
+A_t
+=
+\delta_t
++
+(\gamma\lambda)A_{t+1}
++
+\eta\cdot(R-V(s_t)).
+\]
+
+最后一项是解耦修正项，用来把最终真实回报直接注入每一步的优势估计。
+
+这里 \(R\) 就是蒙特卡洛估计中的 \(G_t\)：
+
+\[
+G_t
+=
+r_t+\gamma r_{t+1}+\gamma^2 r_{t+2}
++\cdots+
+\gamma^{T-t}R_{\mathrm{final}}.
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  在数学推理中，通常只有最后有奖励，且 \(\gamma=1\)。
+\item
+  所以 \(G_t=R_{\mathrm{final}}\)，最终奖励是多少，这里就是多少。
+\end{itemize}
+
+解耦GAE方法最重要的意义是在早期Critic有偏差时引入蒙特卡洛方法准确估计，在后期蒙特卡洛方法不稳定时用Critic促进收敛。因此，参数 \(\beta\) 一般会随时间递增而衰减，如从 \(1.0\) 到 \(0.1\)。（事实上，即便不调整 \(\beta\)，\(R_{\mathrm{final}}-V(s_t)\) 的绝对值一般也会随着 \(V(s_t)\) 估计趋稳而减小，但衰减效果更好）
+
+早期（Critic 弱时），需要更强的 MC 信号（GRPO 成分）来告诉模型``什么是对的''。解耦项保证了即使 Critic 预测 \(V(s_{t+1})\) 很差，最终回报 \(R\) 也能直接越过中间环节，给 \(A_t\) 修正方向。
+
+后期（Critic 强时），Critic 已经学会了每一步的精细价值。此时 \(A_t^{\mathrm{GAE}}\)（PPO 成分）会变得更准确，能够区分``最后答案虽然对了，但中间第 5 步其实有点问题''这类细微差别。
+
+可以把 VAPO 的优势理解为：
+
+\[
+A_t^{\mathrm{VAPO}}
+\approx
+w_1\cdot A_t^{\mathrm{MC}}
++
+w_2\cdot A_t^{\mathrm{Critic}}.
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  它利用 GRPO 的``真''（真实回报）来纠正 Critic 的偏差。
+\item
+  它利用 PPO 的``稳''（Critic 提供的密集信号）来降低长序列蒙特卡洛采样的方差。
+\end{itemize}
+
+这种设计使得 VAPO 既能像 GRPO 那样在大模型推理初期快速找到正确方向，又能像 PPO 那样在后期细致打磨每一步的逻辑质量。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  长度自适应GAE（Length-Adaptive GAE）
+\end{enumerate}
+
+长度自适应GAE和解耦GAE一样，也是平衡偏差与方差的重要方法。但区别在于，解耦GAE（Decoupled GAE）解决的是``信号源准不准''的问题（对抗 Critic 的早期无能），长度自适应GAE（Length-Adaptive GAE）解决的是``信号传得远不远''的问题（对抗数学上的指数衰减），以适应不同长度的推理问题。
+
+定义有效视野：
+
+\[
+\mathrm{Horizon}
+\approx
+\sum_{t=0}^{\infty}\lambda^t
+=
+\frac{1}{1-\lambda}.
+\]
+
+这本质上是用几何分布的数学期望定义的。可以理解为：持续获取回报，但每次衰减 \(\lambda\)，期望上等价于：假设一个人从 \(t\) 处出发，专门负责收取后面的回报，用于更新 \(A_t\)。此人每次有 \(\lambda\) 的概率能继续往前走，获取下一轮回报，有 \(1-\lambda\) 的概率被拦住（也就是以后的回报全部被直接``截留''，不能被 \(A_t\) 获取），则在数学期望上能一直走到第 \(1/(1-\lambda)\) 轮，即 \(A_t\) 可以获取前 \(1/(1-\lambda)\) 轮的回报，这就是``有效视野''。
+
+一个固定的 \(\lambda\)（如 \(0.95\)，Horizon \(=20\)）不能适应不同长度要求。对于一个10步的回答，看20步太远了（远处样本权重偏大，而远处样本是蒙特卡洛采样获得，有随机性，方差大）；对于一个1000 步的推理，看20步简直是``鼠目寸光''（偏差大，看不见结尾的奖励）。因此，我们希望有效视野 \(H\) 和序列长度 \(L\) 成正比（\(H=\alpha L\)），得到 \(\lambda=1-\frac{1}{\alpha L}\)。下面以 \(\alpha=1\) 为例：
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.19}}
+  >{\raggedleft\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.25}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.19}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.19}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 8\tabcolsep) * \real{0.19}}@{}}
+\toprule
+样本类型 & 长度 \(L\) & 标准 GAE（\(\lambda=0.95\)） & 自适应 GAE（\(\lambda=1-1/L\)） & 效果分析 \\
+\midrule
+\endhead
+短对话 & 20 & \(\lambda=0.95\) & \(\lambda=0.95\) & 两者一致，视野合适。 \\
+中等推理 & 100 & \(\lambda=0.95\) & \(\lambda=0.99\) & 标准 GAE 开始看不清结尾；自适应 GAE 强行提升 \(\lambda\)，减少衰减。 \\
+超长 CoT & 1000 & \(\lambda=0.95\) & \(\lambda=0.999\) & 标准 GAE 信号几乎完全消失；自适应 GAE 将 \(\lambda\) 推向极限，确保第 1000 步的奖励能传回第 1 步。 \\
+\bottomrule
+\end{longtable}
+
+对于长样本（Long CoT），它通过增大 \(\lambda\)（接近1），将算法行为推向蒙特卡洛，容忍高方差，但确保信号不丢失；对于短样本（Short QA），它保持适中的 \(\lambda\)，利用时序差分的低方差特性，让训练更稳定。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  Token级损失
+\end{enumerate}
+
+同DAPO，对所有token的损失进行平均（而非对样本平均），所有token对最终损失的贡献均匀分配，避免关键错误被稀释。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  组采样
+\end{enumerate}
+
+标准PPO假设环境是平稳的。但在数学推理中，如果模型很弱，采样1次大概率是错的（Reward=0）。如果一直采样一直错，Critic就学不到东西。VAPO的Group Sampling则是对每个Prompt，一次采4个或8个，只要其中有一个是对的，Critic 就能通过对比（解耦GAE中利用真实回报）学到什么是对的。
+
+\hypertarget{ux4e8cux5de5ux4f5cux6d41ux4e0eppoux5bf9ux6bd4}{%
+\subsection{二、工作流与PPO对比}\label{ux4e8cux5de5ux4f5cux6d41ux4e0eppoux5bf9ux6bd4}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化
+\end{enumerate}
+
+PPO 与 VAPO 在初始化上的差异：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{PPO}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    通常直接初始化 Actor（来自 SFT 模型）和 Critic（通常基于 Reward Model 初始化）。
+  \item
+    不同点是直接开始训练，没有专门针对 Critic 的预热环节。
+  \end{itemize}
+\item
+  \textbf{VAPO}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    新增步骤：Value Pretraining（价值预训练）。
+  \item
+    不同点是在进入 RL 循环前，先使用 SFT 数据或推理数据监督训练 Value Model \(V_\psi\)。
+  \item
+    目的是消除奖励模型带来的偏差，让 Critic 在``上岗''第一天就能比较准确地预测长序列价值，防止 PPO 早期崩盘。
+  \end{itemize}
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  数据采样
+\end{enumerate}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}@{}}
+\toprule
+维度 & 标准 PPO（Standard PPO） & VAPO（Augmented PPO） \\
+\midrule
+\endhead
+采样策略 & 单次采样（Single/Random Sampling） & 组采样（Group Sampling） \\
+具体操作 & 对于一个 prompt \(q\)，通常采样 1 个回答 \(a\)，或者 batch 内不同 prompt 各采一个。 & 对于一个 prompt \(q\)，强制策略 \(\pi_\theta\) 生成一组 \(G\) 个不同的回答 \(\{o_1,\ldots,o_G\}\)。 \\
+数据形态 & 轨迹 \(\{s_t,a_t,r_t\}\) 是独立的。 & 数据以组为单位存在，组内包含成功和失败的样本。 \\
+目的 & 获取环境反馈，计算梯度。 & 增强对比信号：通过生成多个回答，提高采样到正确答案的概率，确保活下来的样本中有正向信号可学。 \\
+奖励计算 & 通常只看结果奖励（Outcome Reward）或稀疏奖励。 & 密集奖励：通常结合结果奖励和过程奖励（Process Reward）。 \\
+Value 计算 & 在采样时顺便计算 \(V(s_t)\)。 & 同样需要计算 \(V(s_t)\)，但用于后续更复杂的解耦计算。 \\
+\bottomrule
+\end{longtable}
+
+注：同时处理若干个Prompt，都存入经验回放池。如同时处理16个Prompt，标准PPO在每个Prompt下各生成64个token的回答，就会往经验回放池存入1024个数据；VAPO在每个Prompt下各生成8组各64个token的回答，就会存入8192个数据。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  优势估计
+\end{enumerate}
+
+PPO 与 VAPO 在优势估计上的差异：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{PPO}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    算法是标准 GAE（Generalized Advantage Estimation）。
+  \item
+    公式为：
+  \end{itemize}
+\end{itemize}
+
+\[
+A_t
+=
+\sum_{\ell\ge 0}(\gamma\lambda)^\ell\delta_{t+\ell}.
+\]
+
+\begin{itemize}
+\item
+  特征是 \(\lambda\) 是固定常数，例如 0.95。
+\item
+  局限是对长短不一的序列使用相同视野，容易导致长序列信号丢失。
+\item
+  \textbf{VAPO}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    算法是解耦 GAE + 长度自适应 GAE。
+  \item
+    步骤 1：先计算每个回答 \(o_i\) 的长度 \(l_i\)。
+  \item
+    步骤 2：为每个样本单独计算 \(\lambda_i\)，满足：
+  \end{itemize}
+\end{itemize}
+
+\[
+\frac{1}{1-\lambda_i}
+=
+\alpha l_i.
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  步骤 3：结合 Critic 预测 \(V(s)\) 和真实回报 \(R\)，使用解耦公式计算 \(\hat{A}_t\)，确保信号穿透整个长序列。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  优化更新
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{PPO}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    Loss 聚合通常计算 Sample-level Mean，也就是把一个 batch 内所有样本的 loss 求平均。
+  \item
+    问题是长文本（1000 token）和短文本（10 token）权重相同，导致长文本中每个 token 的梯度被稀释 100 倍。
+  \item
+    更新时同时更新 \(\theta\) 和 \(\phi\)。
+  \end{itemize}
+\item
+  \textbf{VAPO}：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    Loss 聚合使用 Token-level Loss。
+  \item
+    操作上，将所有样本的所有 token 损失求和，即 \(\sum_i\sum_t \mathcal{L}_{i,t}\)，然后除以总 token 数。
+  \item
+    目的在于实现 token 平权，保证长链推理中的每一个步骤都对梯度有足够贡献，避免关键错误被稀释。
+  \end{itemize}
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-108}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-108}}
+
+\begin{itemize}
+\tightlist
+\item
+  Zhang, Z., et al.~(2025). \href{https://arxiv.org/abs/2504.05118}{VAPO: Efficient and Reliable Reinforcement Learning for Advanced Reasoning Tasks}. arXiv:2504.05118.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{gspoux7b97ux6cd5ux8bbaux6587}{%
+\section{GSPO算法（论文）}\label{gspoux7b97ux6cd5ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux5e8fux5217ux7ea7ux4f18ux5316sequence-level-optimization}{%
+\subsection{一、序列级优化（Sequence-Level Optimization）}\label{ux4e00ux5e8fux5217ux7ea7ux4f18ux5316sequence-level-optimization}}
+
+GRPO 在``评价''和``优化''上存在着不匹配：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{整体奖励（Global Reward）}：在大多数任务（如数学推理、代码生成）中，环境只会在模型生成完整个回答后，给出一个分数（Reward）。例如``这句话是对的''或者``这个答案是错的''。这个分数是对整个序列（Sequence）的评价，而不是对某个字（Token）的评价。
+\item
+  \textbf{局部优化（Local Optimization）}：虽然奖励是针对整体的，但在 GRPO 的数学公式中，重要性采样（Importance Sampling）是在 token 级别进行的。回顾 GRPO 的核心项：
+\end{itemize}
+
+\[
+\rho_{i,t}
+=
+\frac{\pi_\theta(\mathrm{token}_t)}
+{\pi_{\mathrm{old}}(\mathrm{token}_t)}.
+\]
+
+这意味着，模型在更新参数时，会逐个审视每一个 token。即使整个句子得分很高，如果某个具体的 token \(t\) 在新策略下的概率变低了（\(\rho<1\)），模型在更新该 token 的参数时仍可能受到抑制。
+
+后果是，这种机制假设每个 token 对最终结果的贡献是独立的。但在长逻辑链中，很多 token 只有组合在一起才有意义。对单个 token 进行独立微调，往往忽略上下文的整体连贯性，容易引入高方差噪声。
+
+GSPO则将二者进行了统一：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{整体优化（Global Optimization）}：GSPO 摒弃逐 token 计算比率的做法，转而计算整个序列的联合概率比率：
+\end{itemize}
+
+\[
+s_i(\theta)
+\approx
+\frac{P_\theta(y_i)}
+{P_{\mathrm{old}}(y_i)}.
+\]
+
+这意味着，模型不再纠结于某个 token 的概率变化，而是看生成整句话的概率是变大了还是变小了。
+
+\begin{itemize}
+\tightlist
+\item
+  如果整句话的奖励很高，GSPO 会统一增强这句话中所有 token 的权重；反之则统一抑制。
+\item
+  裁剪（Clipping）也发生在序列级：一旦整句话的概率变化超标，就停止更新。这保证了模型不会因为某一句话学得太猛而崩塌。
+\end{itemize}
+
+\hypertarget{ux4e8cux957fux5ea6ux5f52ux4e00ux5316}{%
+\subsubsection{（二）长度归一化}\label{ux4e8cux957fux5ea6ux5f52ux4e00ux5316}}
+
+如果不做归一化，序列概率计算公式是所有 token 概率的连乘：
+
+\[
+P(\mathrm{sequence})
+=
+p_1\times p_2\times\cdots\times p_L.
+\]
+
+这会带来两个致命问题：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{数值下溢（Numerical Underflow）}：每个 token 的概率 \(p_t\) 都是小于 1 的数。例如 0.9，当序列长度 \(L\) 达到几百甚至几千时，连乘结果会迅速趋近于 0，例如 \(0.9^{1000}\approx 1.7\times 10^{-46}\)。计算机无法精确处理这么小的数，计算新旧概率比值时会数值极不稳定。
+\item
+  \textbf{长度偏见（Length Bias）}：长序列的联合概率天然比短序列低得多。短回答（5 个词）的联合概率可能是 \(10^{-5}\)，长回答（100 个词）的联合概率可能是 \(10^{-100}\)。如果不归一化，长回答的概率比率（Importance Ratio）波动会极其剧烈，模型会倾向于只生成短句子，因为短句子的概率更容易优化。
+\end{enumerate}
+
+GSPO使用几何平均：
+
+\[
+s_i(\theta)
+=
+\left(
+\prod_{t=1}^{L}
+\frac{\pi_\theta(t)}
+{\pi_{\mathrm{old}}(t)}
+\right)^{1/L}.
+\]
+
+取对数后就是概率比值对数的算术平均：
+
+\[
+\log s_i(\theta)
+=
+\frac{1}{L}
+\sum_{t=1}^{L}
+\log\left(
+\frac{\pi_\theta(t)}
+{\pi_{\mathrm{old}}(t)}
+\right).
+\]
+
+这样，每个序列L个概率比值（大小是L次方级别）的1/L次方就和概率的一次方处于同一大小级别了。这样做实际上是在衡量``平均每个Token的生成质量提升了多少''（取对数之后，就是概率比值对数的算术平均），使得长回答（详细推理）和短回答（直接给出答案）站在了同一起跑线上进行比较，消除了长度带来的不公平影响。
+
+因此，GSPO的梯度更新也就和GRPO不同。GSPO的目标函数在未被截断时为：
+
+\[
+\mathcal{J}_{\mathrm{GSPO}}(\theta)
+=
+\mathbb{E}
+\left[
+s_i(\theta)\cdot \hat{A}_i
+\right].
+\]
+
+从而策略梯度：
+
+\[
+\nabla \mathcal{J}_{\mathrm{GSPO}}
+\approx
+\sum_{t=1}^{|y_i|}
+\left[
+s_i(\theta)
+\cdot
+\frac{\hat{A}_i}{|y_i|}
+\cdot
+\nabla_\theta \log \pi_\theta(t)
+\right].
+\]
+
+这里将常数项移入了求和内部，便于和 GRPO 对比。关键现象是，缩放系数是 \(s_i(\theta)\cdot \hat{A}_i\)。注意，\(s_i(\theta)\) 是基于整个序列算出来的，对于序列中的第 1 个词还是第 100 个词，这个 \(s_i(\theta)\) 的数值完全一样。
+
+结果是统一增强或抑制：
+
+\begin{itemize}
+\tightlist
+\item
+  如果整句话奖励高（\(\hat{A}_i>0\)）且序列概率比正常（\(s_i\approx 1\)），整个序列中每一个 token 的 log 概率梯度都会乘以同一个正系数。模型会``一视同仁''地增加这句话中所有词的生成概率。
+\item
+  如果发生 clipping，GSPO 检查的是 \(s_i(\theta)\) 是否越界。一旦 \(s_i\) 越界，剪切操作会让整个序列的梯度变为 0（或被限制）。这意味着要么全改，要么全不改，不会出现``前半句猛改、后半句不改''的分裂情况。
+\end{itemize}
+
+对比GRPO的策略梯度：
+
+GRPO 的梯度是局部视角：
+
+\[
+\nabla \mathcal{J}_{\mathrm{GRPO}}
+\approx
+\sum_{t=1}^{|y_i|}
+\left[
+\rho_{i,t}(\theta)
+\cdot
+\hat{A}_i
+\cdot
+\nabla_\theta \log \pi_\theta(t)
+\right].
+\]
+
+这里的缩放系数包含 \(\rho_{i,t}\)，也就是单个 token 的概率比。即使整句话的优势 \(\hat{A}_i\) 是正的，如果句子中间第 5 个词的 \(\rho_{i,5}\) 很小（新模型不太想生成它），那么第 5 个词的更新幅度就会变小，甚至方向可能被 clip 截断。换句话说，每个 token 获得的推力是不一样的。
+
+因此，如果整句话的奖励很高，GSPO会统一增强这句话中所有token的权重；反之则统一抑制。这增强了奖励和惩罚的整体性，能更准确地对不同推理链条做出全局性的判断，避免被某些局部细节过度干扰。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-109}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-109}}
+
+\begin{itemize}
+\tightlist
+\item
+  Zheng, C., et al.~(2025). \href{https://arxiv.org/abs/2507.18071}{Group Sequence Policy Optimization}. arXiv:2507.18071.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{gfpoux7b97ux6cd5ux8bbaux6587}{%
+\section{GFPO算法（论文）}\label{gfpoux7b97ux6cd5ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux63d0ux51faux80ccux666f-1}{%
+\subsection{一、提出背景}\label{ux4e00ux63d0ux51faux80ccux666f-1}}
+
+GFPO（Generative Filtered Preference Optimization）的核心目标是解决GRPO在处理多属性优化（如同时优化准确性和简洁性）时的局限性，特别是解决大模型为了追求高准确率而倾向于生成冗长回复的问题。
+
+\hypertarget{ux4e8cux6838ux5fc3ux601dux60f3-2}{%
+\subsection{二、核心思想}\label{ux4e8cux6838ux5fc3ux601dux60f3-2}}
+
+GRPO对一个问题生成一组回复，使用所有回复的奖励计算组内平均值和标准差，将每个回复的奖励标准化为优势值。它依赖单一标量奖励。如果奖励函数偏向准确性，模型发现写得越长越容易对，就会导致输出变长。很难通过单一奖励函数平衡``准确''和``简短''两个目标。
+
+而GFPO引入了显式过滤步骤。先生成一组回复，根据特定指标（如长度、格式）进行拒绝采样（Rejection Sampling），筛选出一个子集S。优势值的计算和梯度的更新仅基于筛选后的子集S。不符合条件的回复（即使分数高但太长）会被直接剔除，不参与基线计算，也不贡献梯度。
+
+实质上，这也就是将多个变量耦合的``联合优化''进行分解：我们将硬性指标（如：必须符合 JSON 格式、必须包含某个关键词）作为门槛，用掩码实现；而将软性指标（如：语义准确度）作为奖励。这种分层处理使得优化更稳定，反而让模型更能适应复杂的现实需求。
+
+思考一个问题：如果必须人工指定``我要过滤长度''、``我要过滤格式''，那么模型岂不是变成了一个针对特定规则拟合的专用机器？这是否违背了LLM通用智能的初衷？
+
+并不是的。原因有二：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  训练与推理的解耦：GFPO的过滤只发生在训练阶段，我们在训练时显式定义``短的、正确的回复是好回复''。模型通过梯度下降更新参数，最终学会的是一种倾向。训练好的模型在推理时，不再需要那个外部过滤器。模型已经内化了这种简洁的风格。模型本身依然是通用的神经网络，只是它的参数分布被``推''向了我们期望的子空间。
+\item
+  ``对齐''的本质就是``限制泛化''：强化学习微调阶段的目标，本身就不是为了增加知识或泛化能力，而主要是为了收束模型的行为，使其符合我们需要的偏好。预训练模型既能写诗，也能骂人，还会胡言乱语，RL的目标就是要把这个分布裁剪成一个推理时有逻辑、不啰嗦的助手。因此，在这个阶段，我们通过显式规则来削减模型在输出无用token上的概率，正是我们想要的效果。GFPO更可能用于后训练的后期，在模型推理能力已经较强的情况下，根据我们的偏好对其进行调整。
+\end{enumerate}
+
+\hypertarget{ux4e09ux4f18ux52bfux51fdux6570}{%
+\subsection{三、优势函数}\label{ux4e09ux4f18ux52bfux51fdux6570}}
+
+优势函数 \(\hat{A}_{i,t}^{(m)}\) 被加上了掩码（Mask）：
+
+\[
+\hat{A}_{i,t}^{(m)} = \frac{R(q,o_i)-\mu_S}{\sigma_S} m_i
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  如果样本 \(i\) 被拒绝（\(m_i=0\)），其优势直接变为 \(0\)，对模型更新无任何贡献。
+\item
+  如果样本 \(i\) 被保留，其优势是相对于其他保留样本的相对好坏，而不是相对于那些被拒绝的``垃圾''样本。
+\end{itemize}
+
+\hypertarget{ux56dbux5de5ux4f5cux6d41}{%
+\subsection{四、工作流}\label{ux56dbux5de5ux4f5cux6d41}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{采样（Generation）}：对于给定的问题 \(q\)，使用当前策略 \(\pi_\theta\) 生成一组较大的候选回复 \(G=\{o_1,o_2,\ldots,o_G\}\)。
+
+  \begin{itemize}
+  \tightlist
+  \item
+    注：这里通常会采样比 GRPO 更多的样本，以确保过滤后还有剩余。
+  \end{itemize}
+\item
+  \textbf{评估（Evaluation）}：计算每个回复 \(o_i\) 的基础奖励 \(R(q,o_i)\)，例如答案是否正确。
+\item
+  \textbf{过滤（Filtering - 关键调整步骤）}：根据非奖励属性（Constraints/Metrics）应用硬性规则。
+
+  \begin{itemize}
+  \tightlist
+  \item
+    例如：如果目标是``简短且正确''，规则可能是``长度 \(<200\) tokens''。
+  \item
+    将所有不满足规则的回复标记为 \(m_i=0\)，满足规则的回复放入集合 \(S\)。
+  \end{itemize}
+\item
+  \textbf{计算相对优势（Advantage Calculation）}：仅利用集合 \(S\) 中的样本：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    计算 \(S\) 内的平均奖励 \(\mu_S\) 和标准差 \(\sigma_S\)。
+  \item
+    计算每个样本 \(i \in S\) 的标准化优势值 \(\hat{A}_{i,t}^{(m)}\)。
+  \item
+    对于 \(i \notin S\)，优势值置为 \(0\)。
+  \end{itemize}
+\item
+  \textbf{策略更新（Optimization）}：使用 PPO 目标函数更新模型参数 \(\theta\)。由于被拒绝样本的优势为 \(0\)，模型实际只学习了``既满足约束（如简短）又获得高分（如正确）''的样本分布。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-110}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-110}}
+
+\begin{itemize}
+\tightlist
+\item
+  Shrivastava, V., Awadallah, A., Balachandran, V., Garg, S., Behl, H., \& Papailiopoulos, D. (2025). \href{https://arxiv.org/abs/2508.09726}{Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning}. arXiv:2508.09726.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6700ux5927ux4f3cux7136ux5f3aux5316ux5b66ux4e60ux8bbaux6587}{%
+\section{最大似然强化学习（论文）}\label{ux6700ux5927ux4f3cux7136ux5f3aux5316ux5b66ux4e60ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-9}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-9}}
+
+在RLVR中，对于数学、代码等二值奖励任务，只有对（1）和错（0）两种奖励，但我们的优化目标却是平均奖励（即答对概率）最大，显得并不匹配。借鉴LLM中的交叉熵损失函数，我们想到RLVR也可以视为分类任务，为了让输出分布更接近实际分布，我们引入交叉熵损失函数。对于一个样本，预测出正确答案的概率为 \(p\)，则交叉熵损失为 \(-\log p\)。这带来两个优点：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  对于还不会的任务给予更大的梯度
+\end{enumerate}
+
+\(p\) 接近0时 \(\log(p)\) 的导数值更大，正确答案概率小的那些样本得到更大的``纠正''梯度，把训练重心放在模型还不会的任务上。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  避免``模式崩塌''
+\end{enumerate}
+
+传统RL优化的目标是 \(p\) 本身。如果模型探索到了两条近似正确的路径 \(z_1\) 和 \(z_2\)，RL只要让最后采样出的 \(p\) 变大就行，容易收缩到 \(z_1\) 或 \(z_2\) 中的一条路径，改进该路径并将其概率提得很高，而几乎放弃改进且不采样另一条路径，这样也会让 \(p\) 很大，但鲁棒性和泛化性弱，甚至可能发生``模式崩塌''。
+
+MaxRL优化的目标是 \(\log(p)\)。如果一个近似正确的路径给出正确答案的概率 \(p\) 很小，\(\log(p)\) 会给出很大的梯度，迫使模型主动改进而不放弃这条路径，最终就会产生多种不同正确的路径通向正确答案。这样就可以尽可能避免``模式崩塌''。
+
+\hypertarget{ux4e09ux76eeux6807ux51fdux6570-1}{%
+\subsection{三、目标函数}\label{ux4e09ux76eeux6807ux51fdux6570-1}}
+
+\textbf{定义目标函数}：假设对于输入 \(x\)，模型生成正确答案的概率为 \(p_\theta(x)\)。我们的目标是最大化所有输入 \(x\) 下正确结果的对数似然：
+
+\[
+J_{ML}(\theta)=\mathbb{E}_{x\sim D}[\log p_\theta(x)]
+\]
+
+\textbf{推导过程}：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{利用期望的线性性质}：我们将梯度算子 \(\nabla_\theta\) 放入期望符号内部：
+\end{enumerate}
+
+\[
+\nabla_\theta J_{ML}(\theta)=\mathbb{E}_x[\nabla_\theta \log p_\theta(x)]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\item
+  \textbf{应用微积分中的对数导数法则（Log-derivative Trick）}：根据链式法则，对于任何正函数 \(f(\theta)\)，有 \(\nabla_\theta \log f(\theta)=\frac{\nabla_\theta f(\theta)}{f(\theta)}\)。在这里，\(f(\theta)=p_\theta(x)\)，即模型在输入 \(x\) 下得到正确结果的概率。
+\item
+  \textbf{代入公式}：
+\end{enumerate}
+
+\[
+\nabla_\theta \log p_\theta(x)=\frac{1}{p_\theta(x)}\nabla_\theta p_\theta(x)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  \textbf{最终形式}：
+\end{enumerate}
+
+\[
+\nabla_\theta J_{ML}=\mathbb{E}_x\left[\frac{1}{p_\theta(x)}\nabla_\theta p_\theta(x)\right]
+\]
+
+这个公式的物理意义：为了增加正确概率的对数，我们应该沿着增加正确概率 \(p_\theta(x)\) 的方向更新参数，但更新的步长要乘以 \(1/p_\theta(x)\)。概率越小的样本，步长（权重）越大。
+
+\hypertarget{ux56dbux4f18ux52bfux51fdux6570ux4e0eux5de5ux4f5cux6d41}{%
+\subsection{四、优势函数与工作流}\label{ux56dbux4f18ux52bfux51fdux6570ux4e0eux5de5ux4f5cux6d41}}
+
+GRPO中，对于组中的每个样本，均计算其优势函数。下面推导maxRL方法的优势函数：
+
+\textbf{第一步：计算梯度} 对 \(\theta\) 求导：
+
+\[
+\nabla_\theta J_{ML}=\mathbb{E}_x\left[\frac{1}{p_\theta(x)}\nabla_\theta p_\theta(x)\right]
+\]
+
+\textbf{第二步：展开 \(\nabla_\theta p_\theta(x)\)} 在二元反馈任务中，\(p_\theta(x)\) 其实就是模型生成正确答案的概率，即期望回报 \(\mathbb{E}_{z\sim\pi_\theta}[R(z)]\)。利用强化学习中经典的对数导数技巧（Log-derivative Trick）：
+
+\[
+\nabla_\theta p_\theta(x)=\nabla_\theta\int \pi_\theta(z|x)R(z)dz
+=\mathbb{E}_{z\sim\pi_\theta}\left[R(z)\nabla_\theta\log \pi_\theta(z|x)\right]
+\]
+
+\textbf{第三步：代回原式并引入基线（Baseline）} 将第二步的结果代入第一步：
+
+\[
+\nabla_\theta J_{ML}=\mathbb{E}_x\left[\frac{1}{p_\theta(x)}\mathbb{E}_z\left[R(z)\nabla_\theta\log \pi_\theta(z|x)\right]\right]
+\]
+
+为了减小估计误差，我们可以引入一个不依赖于具体采样 \(z\) 的基线 \(b\)。在 RL 中，最常用的基线是期望回报本身，即 \(b=p_\theta(x)\)。由于 \(\mathbb{E}_z[\nabla_\theta\log\pi_\theta]=0\)，减去基线不改变期望值：
+
+\[
+\nabla_\theta J_{ML}=\mathbb{E}_x\left[\mathbb{E}_z\left[\frac{R(z)-p_\theta(x)}{p_\theta(x)}\nabla_\theta\log\pi_\theta(z|x)\right]\right]
+\]
+
+\textbf{第四步：样本估计} 在实际训练中，我们通过采样 \(N\) 条轨迹来估计。此时，\(p_\theta(x)\) 的最佳无偏估计就是平均回报 \(\bar{r}=\frac{1}{N}\sum_j r_j\)。于是，对于单个采样 \(j\) 的梯度贡献项，其系数（即 Advantage）为：
+
+\[
+A_j^{MaxRL}=\frac{r_j-\bar{r}}{\bar{r}+\epsilon}
+\]
+
+对比：
+
+GRPO：
+
+\[
+\mathrm{advantage}=\frac{\mathrm{reward}-\mathrm{mean\_reward}}{\mathrm{std\_reward}+\epsilon}
+\]
+
+MaxRL：
+
+\[
+\mathrm{advantage}=\frac{\mathrm{reward}-\mathrm{mean\_reward}}{\mathrm{mean\_reward}+\epsilon}
+\]
+
+\hypertarget{ux53c2ux8003ux6587ux732e-111}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-111}}
+
+\begin{itemize}
+\tightlist
+\item
+  Tajwar, F., Zeng, G., Zhou, Y., et al.~(2026). \href{https://arxiv.org/abs/2602.02710}{Maximum Likelihood Reinforcement Learning}. arXiv:2602.02710.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{reinforcement-attention-learningux8bbaux6587}{%
+\section{Reinforcement Attention Learning（论文）}\label{reinforcement-attention-learningux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux63d0ux51faux80ccux666f-2}{%
+\subsection{一、提出背景}\label{ux4e00ux63d0ux51faux80ccux666f-2}}
+
+当前的后训练范式主要使用强化学习（RL）来优化策略，通过奖励来偏好高实用性的词元序列。这种基于下一个词元预测的优化在纯文本推理中效果显著，但在多模态任务（如图像或视频问答）中，仅靠生成冗长的文本思考过程不仅对感知能力的提升有限，甚至可能降低模型的基础感知能力。
+
+多模态任务要求模型精准地识别并关注与任务相关的视觉信息，这一过程由Transformer的注意力机制控制。然而，标准的RL优化的是结果（生成的词元），而非内部信息分配的过程。单纯在词元级别进行优化容易导致``奖励作弊''，即模型过度拟合语言的表面形式，而不是掌握真正的底层跨模态逻辑。
+
+\hypertarget{ux4e8creinforced-attention-learningralux7684ux539fux7406ux4e0eux5de5ux4f5cux6d41}{%
+\subsection{二、Reinforced Attention Learning（RAL）的原理与工作流}\label{ux4e8creinforced-attention-learningralux7684ux539fux7406ux4e0eux5de5ux4f5cux6d41}}
+
+\hypertarget{ux4e00ux7b56ux7565ux7684ux5b9aux4e49}{%
+\subsubsection{（一）策略的定义}\label{ux4e00ux7b56ux7565ux7684ux5b9aux4e49}}
+
+\begin{itemize}
+\tightlist
+\item
+  设总序列为 \(S=(x_1,\cdots,x_T)\)，其中前 \(P\) 个为提示词，后续为生成的回复。
+\item
+  从模型最后一层 Transformer 中提取各个注意力头的权重并求平均，得到生成词元 \(t\) 对之前位置 \(i\) 的注意力权重 \(\alpha_{t,i}\)。
+\item
+  对于每个生成的词元 \(t \in [P+1,T]\)，将其注意力转化为分布策略：
+\end{itemize}
+
+\[
+p_\theta^t(i)=\frac{\alpha_{t,i}}{\sum_{\tau}\alpha_{t,\tau}}
+\]
+
+该公式捕捉了模型如何关注初始指令、视觉输入以及自身正在生成的推理过程。
+
+\hypertarget{ux4e8cux8ba1ux7b97ux4f18ux52bfux52a0ux6743ux7684ux6ce8ux610fux529bux6563ux5ea6}{%
+\subsubsection{（二）计算优势加权的注意力散度}\label{ux4e8cux8ba1ux7b97ux4f18ux52bfux52a0ux6743ux7684ux6ce8ux610fux529bux6563ux5ea6}}
+
+\begin{itemize}
+\tightlist
+\item
+  算法借鉴了 PPO/GRPO 中的重要性采样，通过比较当前策略 \(p_\theta^t\) 与旧策略 \(p_{\mathrm{old}}^t\) 之间的 Jensen-Shannon 散度（JSD）来推导每词元损失。
+\item
+  该散度通过序列级别的优势函数 \(A_t\) 进行加权，目标函数定义为：
+\end{itemize}
+
+\[
+L_{\mathrm{AttnRL}}=\mathbb{E}_t\left[A_t \cdot D\left(p_\theta^t \middle\| p_{\mathrm{old}}^t\right)\right]
+\]
+
+这部分计算的是当前注意力分布 \(p_\theta^t\) 与行为策略（旧分布）\(p_{\mathrm{old}}^t\) 之间的距离。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{为什么使用 JSD}：论文特别指出 \(D(\cdot)\) 应该是一个对称且有界的散度度量，例如 Jensen-Shannon 散度（JSD）。与通常缺乏边界的 KL 散度相比，使用 JSD 能够极大地保证训练的稳定性。
+\item
+  \textbf{防止策略崩溃}：传统的基于词元的 RL 往往会导致模型过度拟合某些高奖励的文本表面形式（即``奖励作弊''），从而丧失多样性。通过约束内部的注意力散度，模型实际上获得了一种结构化正则（structural regularization），它只规范模型``如何收集和整合信息''，而不死板地限制最终输出哪一个特定的词元。
+\end{itemize}
+
+\hypertarget{ux4e09ux5229ux7528ux5956ux52b1ux4fe1ux53f7ux5f15ux5bfcux6ce8ux610fux529bux66f4ux65b0}{%
+\subsubsection{（三）利用奖励信号引导注意力更新}\label{ux4e09ux5229ux7528ux5956ux52b1ux4fe1ux53f7ux5f15ux5bfcux6ce8ux610fux529bux66f4ux65b0}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{当 \(A_t>0\) 时（获得高奖励）}：这说明当前的注意力分配模式促成了一个好的回答。此时最小化 \(L_{\mathrm{AttnRL}}\) 会产生``拉力''，将当前正在更新的注意力策略 \(p_\theta\) 拉向那个成功的旧策略 \(p_{\mathrm{old}}\)。
+\item
+  \textbf{当 \(A_t<0\) 时（获得低奖励）}：这说明当前的注意力分配导致了错误或低质量的输出。此时优化该目标会产生``推力''，迫使当前策略 \(p_\theta\) 远离这种次优的注意力分配模式，从而鼓励模型去探索上下文中其他的多模态线索。
+\end{itemize}
+
+最终的训练目标是标准词元级别策略梯度损失 \(\mathcal{L}_{\mathrm{RL}}\) 与内部注意力正则化项的结合：
+
+\[
+\mathcal{L}_{\mathrm{total}}=\mathcal{L}_{\mathrm{RL}}+\lambda_{\mathrm{attn}}L_{\mathrm{AttnRL}}
+\]
+
+\hypertarget{ux4e09ux5728ux6a21ux578bux84b8ux998fux4e2dux7684ux5e94ux7528}{%
+\subsection{三、在模型蒸馏中的应用}\label{ux4e09ux5728ux6a21ux578bux84b8ux998fux4e2dux7684ux5e94ux7528}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{目标}：让学生模型 \(\pi_\theta\) 继承教师模型 \(\pi_\phi\) 的注意力分布，以学习深层的结构化推理模式。
+\item
+  \textbf{损失函数}：该目标不涉及优势项 \(A_t\)，追求纯粹的结构模仿。损失定义为学生与教师注意力策略间的散度总和：
+\end{itemize}
+
+\[
+\mathcal{L}_{\mathrm{AttnDistill}}=
+\mathbb{E}_{\tau\sim\pi_\theta}
+\left[
+\sum_{t=P+1}^{T}
+JSD\left(p_\theta^t \middle\| p_\phi^t\right)
+\right]
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{整体目标}：最终的同策略蒸馏目标结合了强化学习目标、输出逻辑的广义知识蒸馏（GKD）损失以及注意力蒸馏损失。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-112}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-112}}
+
+\begin{itemize}
+\tightlist
+\item
+  Li, B., Ni, J., Qu, C., et al.~(2026). \href{https://arxiv.org/abs/2602.04884}{Reinforced Attention Learning}. arXiv:2602.04884.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux57faux4e8eux7ecfux9a8cux7684ux5f3aux5316ux5b66ux4e60ux8bbaux6587}{%
+\section{基于经验的强化学习（论文）}\label{ux57faux4e8eux7ecfux9a8cux7684ux5f3aux5316ux5b66ux4e60ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+RLVR天然存在经验浪费的问题，模型生成的推理轨迹只会在被用于更新一轮梯度后就被丢弃，而从来不会像人类那样过一段时间后还会回头复盘。让模型学会``温故而知新''，让模型根据``错题本''，把每一次宝贵的成功经验都内化为自己的能力对训练效率和能力提升都至关重要。下面介绍ExGRPO框架。
+
+\hypertarget{ux4e00ux7ecfux9a8cux7684ux9009ux53d6}{%
+\subsection{一、经验的选取}\label{ux4e00ux7ecfux9a8cux7684ux9009ux53d6}}
+
+选取经验时，应当选取难度合适（模型正确率25-75％）的题目。这也像人类学习，反复巩固已经掌握的内容或者一开始就学太难的内容，效果都不好。
+
+对于同一道题的推理路径，研究发现推理轨迹的Token平均熵是一个优秀的指标，在所有做对的题目中，选择熵值最低者。这是因为那些推理过程逻辑更正确的解法，其对应的熵值显著更低。高熵的正确轨迹很多时候只是幸运的瞎猜，反复学习这些轨迹不仅没有帮助，反而可能污染模型的逻辑能力。
+
+ExGRPO会建立一个``经验回放池''，像一个巨大的``错题本''，专门收集模型在训练过程中所有成功的推理案例，利用高斯分布概率模型，有偏地优先从中等难度的分组中抽取问题。同时，随着模型能力的不断提升，模型已经完全掌握（例如连续多次全部成功解答）的问题会被移出学习队列，让模型始终聚焦于更具挑战性的任务。
+
+\hypertarget{ux4e8cux76eeux6807ux51fdux6570-1}{%
+\subsection{二、目标函数}\label{ux4e8cux76eeux6807ux51fdux6570-1}}
+
+ExGRPO 是在 GRPO 的基础上构建的。对于输入的查询 \(q\)，当前参考策略 \(\pi_{\theta_{\mathrm{old}}}\) 会生成 \(K\) 个轨迹构成的集合 \(\mathcal{G}_q=\{o_i\}_{i=1}^{K}\)。
+
+每个轨迹的优势值 \(\hat{A}\) 通过组内标准化计算（论文跟随 Dr.GRPO 的设置，去除了长度和标准差标准化，仅保留均值中心化）：
+
+\[
+\hat{A}(o_i,\mathcal{G}_q)=r(q,o_i)-\mu_{\mathcal{G}_q}
+\]
+
+ExGRPO采用了一种混合策略的优化目标，除了对重要性采样进行修正外，在每一次训练迭代中，Mini-Batch中一部分计算资源用于让模型探索全新的问题（On-policy），另一部分则用于学习从经验池中精心筛选出的经验（Off-policy），平衡了探索新知和复习旧知。
+
+在每次参数更新时，ExGRPO 会构建一个混合的 Mini-Batch \(\mathcal{B}\)，其中包含来自当前数据集 \(\mathcal{D}\) 的同策略样本 \(\mathcal{B}_{\mathrm{on}}\)，以及来自经验回放缓冲区 \(\mathcal{E}\) 的历史经验样本 \(\mathcal{B}_{\mathrm{exp}}\)。这两部分数据通过超参数 \(\rho\in[0,1)\) 进行比例混合。
+
+\[
+\begin{aligned}
+\mathcal{J}_{\mathrm{ExGRPO}}(\theta)
+=&(1-\rho)\cdot
+\mathbb{E}_{q\sim\mathcal{B}_{\mathrm{on}}}
+\left[
+\frac{1}{K}\sum_{i=1}^{K}
+\mathrm{CLIP}\left(w_i(\theta),\hat{A}(o_i,\mathcal{G}_q)\right)
+\right] \\
+&+\rho\cdot
+\mathbb{E}_{q^*\sim\mathcal{B}_{\mathrm{exp}}}
+\left[
+\frac{1}{K}
+\left(
+\mathrm{CLIP}\left(w^*(\theta),\hat{A}(o^*,\mathcal{G}_{q^*})\right)
++\sum_{i=1}^{K-1}
+\mathrm{CLIP}\left(w_i(\theta),\hat{A}(o_i,\mathcal{G}_{q^*})\right)
+\right)
+\right]
+\end{aligned}
+\]
+
+第一项是同策略目标（On-Policy Objective）：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{权重}：占总目标的 \(1-\rho\) 比例。
+\item
+  \textbf{工作流}：对于从 \(\mathcal{B}_{\mathrm{on}}\) 采样的当前问题 \(q\)，模型 \(\pi_{\theta_{\mathrm{old}}}\) 实时生成 \(K\) 个轨迹并计算 GRPO 损失。
+\item
+  \textbf{重要性采样}：\(w_i(\theta)=\frac{\pi_\theta(o_{i,t}\mid q,o_{i,<t})}{\pi_{\theta_{\mathrm{old}}}(o_{i,t}\mid q,o_{i,<t})}\)，用于限制新旧策略更新幅度。
+\end{itemize}
+
+第二项是经验异策略目标（Experiential Off-Policy Objective）：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{权重}：占总目标的 \(\rho\) 比例。
+\item
+  \textbf{混合组构建}：对于从缓冲区采样的历史问题 \(q^*\)，ExGRPO 会构建一个混合优势估计组 \(\mathcal{G}_{q^*}=\{o^*\}\cup\{o_i\}_{i=1}^{K-1}\)。其中 \(o^*\) 是过去策略 \(\pi_{\theta_{\mathrm{past}}}\) 生成的一条高质量历史轨迹，而剩余的 \(K-1\) 条轨迹 \(o_i\) 是由当前参考策略 \(\pi_{\theta_{\mathrm{old}}}\) 实时生成的。
+\item
+  \textbf{异策略重要性校正}：为了消除直接使用历史数据带来的分布偏移（Distribution Shift）并保证梯度无偏，对于重播的轨迹 \(o^*\)，其重要性权重被专门重新加权为当前策略与生成该轨迹的过去策略之间的比值：\(w^*(\theta)=\frac{\pi_\theta(o_t^{*}\mid q^*,o_{<t}^{*})}{\pi_{\theta_{\mathrm{past}}}(o_t^{*}\mid q^*,o_{<t}^{*})}\)。
+\end{itemize}
+
+\hypertarget{ux4e09ux7b56ux7565ux5851ux5f62}{%
+\subsection{三、策略塑形}\label{ux4e09ux7b56ux7565ux5851ux5f62}}
+
+为解决直接优化低熵历史轨迹可能损害强化学习探索能力的问题，上述目标函数的第二项被改为：
+
+\[
+\rho\cdot
+\mathbb{E}_{q^*\sim\mathcal{B}_{\mathrm{exp}}}
+\left[
+\frac{1}{K}
+\left(
+f\left(w^*(\theta)\right)\cdot\hat{A}(o^*,\mathcal{G}_{q^*})
++\sum_{i=1}^{K-1}
+\mathrm{CLIP}\left(w_i(\theta),\hat{A}(o_i,\mathcal{G}_{q^*})\right)
+\right)
+\right]
+\]
+
+在公式的后半部分（即异策略经验目标中），原有的 \(\mathrm{CLIP}\left(w^*(\theta),\hat{A}(o^*,\mathcal{G}_{q^*})\right)\) 被替换为了 \(f\left(w^*(\theta)\right)\cdot\hat{A}(o^*,\mathcal{G}_{q^*})\)。
+
+这里的 \(f(x)\) 是一个引入小常数 \(\beta\)（在实践中通常设为 0.1）的非线性转换函数：
+
+\[
+f(x)=\frac{x}{x+\beta}
+\]
+
+之所以用 \(f(w)\) 替代标准的 PPO/GRPO \(\mathrm{CLIP}\) 机制，是基于该函数的以下几个关键数学性质及其带来的强化学习收益：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{抑制高概率信号（防止过度拟合）}：当重要性权重 \(w\) 很大时（即当前策略已经非常倾向于生成这个历史动作），\(f(w)\) 的极限趋近于 1。这意味着它起到了类似截断（Clipping）的作用，抑制了极端的权重，控制了异策略学习带来的方差，防止模型在这个已经很确定的轨迹上过度更新。
+\item
+  \textbf{放大低概率信号（鼓励探索新意）}：当重要性权重 \(w\) 很小且接近 0 时（即当前策略不太可能生成这个动作，但在历史经验中它是个好动作），由于 \(\beta\)（如 0.1）的存在，\(f(w)\approx\frac{w}{\beta}\)，这实际上在局部放大了这些微弱的信号。
+\item
+  \textbf{动态权衡}：这种设计使得模型能够从经验轨迹中那些对当前策略来说仍然``新颖''（novel）的部分中学习，而不是盲目地强化那些已经具有高概率的动作，从而在利用经验的同时保持了策略的熵（探索性）。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-113}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-113}}
+
+\begin{itemize}
+\tightlist
+\item
+  Zhan, R., Li, Y., Wang, Z., Qu, X., Liu, D., Shao, J., Wong, D. F., \& Cheng, Y. (2025). \href{https://arxiv.org/abs/2510.02245}{ExGRPO: Learning to Reason from Experience}. arXiv:2510.02245.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux7ed3ux5408ux81eaux84b8ux998fux7684ux5f3aux5316ux5b66ux4e60ux8bbaux6587}{%
+\section{结合自蒸馏的强化学习（论文）}\label{ux7ed3ux5408ux81eaux84b8ux998fux7684ux5f3aux5316ux5b66ux4e60ux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-2}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-2}}
+
+强化学习（RL）已成为语言模型从环境奖励或反馈中学习的核心方法。然而，在处理智能体推理和决策任务时，特别是在任务早期，标准的包含可验证奖励的强化学习（RLVR）面临着显著的挑战：在实际应用中，环境反馈往往是稀疏且延迟的标量信号，信息量极低，容易导致模型陷入一种盲目且反复的试错循环中，难以形成持久的行为修正。
+
+为此，我们可以在强化学习过程中（特别是早期）嵌入一个显式的``经验-反思-巩固''循环。不再仅仅依赖最终的标量结果进行学习，而是将环境反馈转化为结构化的中间推理信号（即反思），指导模型在同一回合（episode）内进行局部行为修正，最终将这些成功的修正内化到模型的基础策略中，有效地将干瘪的标量反馈转化为了具体的行为修正策略。
+
+\hypertarget{ux4e8cux7b97ux6cd5ux5de5ux4f5cux6d41}{%
+\subsection{二、算法工作流}\label{ux4e8cux7b97ux6cd5ux5de5ux4f5cux6d41}}
+
+\hypertarget{ux9996ux6b21ux5c1dux8bd5first-attempt}{%
+\subsubsection{1. 首次尝试（First Attempt）}\label{ux9996ux6b21ux5c1dux8bd5first-attempt}}
+
+对于给定的任务输入 \(x\)，语言模型 \(\pi_\theta\) 首先生成初始尝试 \(y^{(1)}\)：
+
+\[
+y^{(1)} \sim \pi_\theta(\cdot \mid x)
+\]
+
+随后，模型会从环境中获得文本反馈 \(f^{(1)}\) 和奖励 \(r^{(1)}\)。模型会利用标准的强化学习目标对首次尝试进行优化。强化学习的损失函数定义为：
+
+\[
+\mathcal{L}_{policy}(\theta) = -\mathbb{E}[A \log \pi_\theta(y \mid x, \cdot)]
+\]
+
+其中 \(A\) 是基于奖励计算出的优势估计（Advantage estimate）。
+
+\hypertarget{ux95e8ux63a7ux53cdux601dgated-reflection}{%
+\subsubsection{2. 门控反思（Gated Reflection）}\label{ux95e8ux63a7ux53cdux601dgated-reflection}}
+
+ERL 并没有对所有尝试都进行反思，而是设置了一个阈值 \(\tau\)（例如 \(\tau = 1\)）。只有当首次尝试的奖励 \(r^{(1)} < \tau\) 时（即表现不佳或失败），才会触发反思阶段。这可以避免模型对已经成功的轨迹产生``奖励作弊''（reward hacking）行为，并稳定训练。
+
+触发反思后，模型会生成一段结构化的自我反思 \(\Delta\)：
+
+\[
+\Delta \sim \pi_\theta(\cdot \mid x, y^{(1)}, f^{(1)}, r^{(1)}, m)
+\]
+
+这里引入了一个跨回合的反思记忆（reflection memory）\(m\)。\(m\) 保存了之前训练中发现的成功纠正模式，作为上下文先验，帮助稳定反思的生成。
+
+如果一次反思带来了成功的二次尝试（即奖励超过了阈值 \(\tau\)），这个反思就会被保留下来并存入记忆。未来的回合可以提取并重用这些已经验证有效的纠正策略作为上下文先验，从而在整个训练周期内稳定反思生成并实现知识的累积。
+
+\hypertarget{ux4e8cux6b21ux5c1dux8bd5second-attempt}{%
+\subsubsection{3. 二次尝试（Second Attempt）}\label{ux4e8cux6b21ux5c1dux8bd5second-attempt}}
+
+基于生成的反思 \(\Delta\)，模型进行更为精确的第二次尝试 \(y^{(2)}\)：
+
+\[
+y^{(2)} \sim \pi_\theta(\cdot \mid x, \Delta)
+\]
+
+这次尝试会获得新的反馈和奖励 \((f^{(2)}, r^{(2)})\)。反思本身会被赋予奖励 \(\bar{r} = r^{(2)}\)，以此鼓励那些能带来下游性能提升的反思。如果二次尝试成功（即 \(r^{(2)} > \tau\)），该反思 \(\Delta\) 会被存入记忆 \(m\) 中，实现知识积累。同时，二次尝试和反思过程同样会使用上述的 \(\mathcal{L}_{policy}(\theta)\) 进行强化学习更新。
+
+\hypertarget{ux5185ux5316ux4e0eux5de9ux56fainternalization}{%
+\subsubsection{4. 内化与巩固（Internalization）}\label{ux5185ux5316ux4e0eux5de9ux56fainternalization}}
+
+在实际部署（推理）阶段，模型是无法获得环境反馈和显式反思提示的。为了让模型``记住''训练中发现的纠正策略，ERL 引入了内化（internalization）机制。
+
+内化通过选择性知识蒸馏（selective distillation）实现。模型被监督着仅去模仿那些成功的二次尝试，但输入中移除了反思上下文。蒸馏损失函数定义为：
+
+\[
+\mathcal{L}_{distill}(\theta) = -\mathbb{E}[I(r^{(2)} > 0) \log \pi_\theta(y^{(2)} \mid x)]
+\]
+
+其中 \(I(\cdot)\) 是指示函数。这迫使基础策略 \(\pi_\theta\) 学习仅凭借原始输入 \(x\) 就能直接输出改进后的行为 \(y^{(2)}\)，从而确保即使在测试时没有反思，行为的改进也能持久保留。
+
+在整个轨迹中，首次尝试、反思内容本身以及二次尝试，都是通过强化学习目标优化的，即在单次强化学习轨迹内部嵌入了一个``经验-反思-巩固''的完整循环。模型在收到环境的失败反馈后，必须先生成一段结构化的自我反思，以此指导出精确的二次尝试。这意味着，模型不仅在学习``好的结果''，还在利用环境返回的奖励信号不断优化``如何生成有效的反思''这一能力。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-114}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-114}}
+
+\begin{itemize}
+\tightlist
+\item
+  Shi, T., Chen, S., Jiang, B., et al.~(2026). \href{https://arxiv.org/abs/2602.13949}{Experiential Reinforcement Learning}. arXiv:2602.13949.
+\end{itemize}
+
+\clearpage

@@ -1,0 +1,173 @@
+\documentclass[11pt,openany,oneside]{ctexbook}
+
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{graphicx}
+\usepackage[export]{adjustbox}
+\usepackage{longtable,booktabs,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{xurl}
+\usepackage{hyperref}
+\usepackage{bookmark}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+\usepackage{fancyvrb}
+\usepackage{fvextra}
+\usepackage{upquote}
+\usepackage{etoolbox}
+\usepackage{newunicodechar}
+
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\setmonofont{Consolas}
+\IfFontExistsTF{SimSun}{%
+  \IfFontExistsTF{SimHei}{%
+    \IfFontExistsTF{KaiTi}{%
+      \setCJKmainfont[BoldFont=SimHei,ItalicFont=KaiTi]{SimSun}%
+    }{%
+      \setCJKmainfont[BoldFont=SimHei]{SimSun}%
+    }%
+  }{%
+    \setCJKmainfont{SimSun}%
+  }%
+}{}
+\IfFontExistsTF{Microsoft YaHei}{\setCJKsansfont{Microsoft YaHei}}{}
+\newfontfamily\mathcjkfont{SimSun}
+
+\graphicspath{{./}{images/}}
+\setkeys{Gin}{max width=\linewidth,max height=0.46\textheight,keepaspectratio}
+\makeatletter
+\let\latexproject@origincludegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{%
+  \adjustbox{max width=\linewidth,max height=0.46\textheight,center}{%
+    \latexproject@origincludegraphics[#1]{#2}%
+  }%
+}
+\makeatother
+
+\definecolor{latexprojectBlue}{HTML}{1F4E79}
+\definecolor{latexprojectGray}{HTML}{555555}
+
+\hypersetup{
+  unicode=true,
+  bookmarksnumbered=true,
+  bookmarksopen=true,
+  bookmarksopenlevel=1,
+  colorlinks=true,
+  linkcolor=latexprojectBlue,
+  urlcolor=latexprojectBlue,
+  citecolor=latexprojectBlue,
+  pdftitle={A Comprehensive AI Learning Note},
+  pdfauthor={叶逸文}
+}
+
+\linespread{1.16}
+\raggedbottom
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.08em}
+\setlength{\emergencystretch}{4em}
+\setlength{\intextsep}{0.7em}
+\setlength{\textfloatsep}{0.8em}
+\setlength{\floatsep}{0.8em}
+\setlength{\headheight}{14pt}
+\setlength{\LTpre}{0.35em}
+\setlength{\LTpost}{0.35em}
+\setlength{\tabcolsep}{4.5pt}
+\setlength{\abovedisplayskip}{0.65em}
+\setlength{\belowdisplayskip}{0.65em}
+\setlength{\abovedisplayshortskip}{0.45em}
+\setlength{\belowdisplayshortskip}{0.45em}
+\renewcommand{\arraystretch}{1.14}
+\clubpenalty=10000
+\widowpenalty=10000
+\displaywidowpenalty=10000
+\allowdisplaybreaks[2]
+\sloppy
+\setcounter{tocdepth}{1}
+\setcounter{secnumdepth}{1}
+\setlist{leftmargin=2.2em, labelsep=0.5em, itemsep=0.12em, topsep=0.28em, parsep=0.04em}
+\captionsetup{font=small,labelfont=bf,skip=0.35em}
+\Urlmuskip=0mu plus 2mu\relax
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\nouppercase{\leftmark}}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+\renewcommand{\chaptermark}[1]{\markboth{#1}{}}
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \fancyfoot[C]{\small\thepage}%
+  \renewcommand{\headrulewidth}{0pt}%
+}
+\ctexset{
+  part = {
+    format = \centering\Huge\bfseries\color{latexprojectBlue},
+    beforeskip = 0pt,
+    afterskip = 2.2em
+  },
+  chapter = {
+    format = \centering\LARGE\bfseries\color{latexprojectBlue},
+    beforeskip = 1.05em,
+    afterskip = 0.85em,
+    name = {第,章},
+    number = \arabic{chapter},
+    aftername = \quad
+  },
+  section = {
+    format = \Large\bfseries\color{latexprojectBlue!88!black},
+    beforeskip = 0.9em,
+    afterskip = 0.4em,
+    aftername = \quad
+  },
+  subsection = {
+    format = \normalsize\bfseries\color{latexprojectGray},
+    beforeskip = 0.7em,
+    afterskip = 0.25em,
+    numbering = false
+  },
+  subsubsection = {
+    format = \normalsize\bfseries,
+    beforeskip = 0.5em,
+    afterskip = 0.2em,
+    numbering = false
+  }
+}
+
+\AtBeginEnvironment{longtable}{\small}
+\AtBeginEnvironment{quote}{\small\color{latexprojectGray}}
+\RecustomVerbatimEnvironment{verbatim}{Verbatim}{breaklines,breakanywhere,fontsize=\footnotesize,frame=leftline,framerule=0.8pt,framesep=2mm,rulecolor=\color{latexprojectBlue!45}}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,fontsize=\footnotesize,frame=leftline,framerule=0.8pt,framesep=2mm,rulecolor=\color{latexprojectBlue!45},commandchars=\\\{\}}
+\newenvironment{Shaded}{}{}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\passthrough}[1]{#1}
+\providecommand{\pandocbounded}[1]{#1}
+\providecommand{\n}{\textbackslash n}
+\providecommand{\lt}{<}
+\providecommand{\gt}{>}
+\newcommand{\mathcjk}[1]{\mbox{{\mathcjkfont #1}}}
+\newunicodechar{∈}{\ensuremath{\in}}
+
+\title{A Comprehensive AI Learning Note}
+\author{叶逸文}
+\date{2026年5月10日}
+
+\begin{document}
+\makeatletter
+\begin{titlepage}
+\centering
+\vspace*{0.18\textheight}
+{\Huge\bfseries\color{latexprojectBlue}\@title\par}
+\vspace{2.2em}
+{\Large\@author\par}
+\vfill
+{\large\@date\par}
+\end{titlepage}
+\makeatother
+\frontmatter
+\phantomsection
+\pdfbookmark[0]{目录}{toc}
+\tableofcontents
+\input{body.tex}
+\end{document}

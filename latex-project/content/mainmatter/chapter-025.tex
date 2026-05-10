@@ -1,0 +1,772 @@
+\hypertarget{ux68c0ux7d22ux589eux5f3aux751fux6210}{%
+\chapter{检索增强生成}\label{ux68c0ux7d22ux589eux5f3aux751fux6210}}
+
+\hypertarget{ux68c0ux7d22ux589eux5f3aux751fux6210ux7684ux57faux672cux65b9ux6cd5}{%
+\section{检索增强生成的基本方法}\label{ux68c0ux7d22ux589eux5f3aux751fux6210ux7684ux57faux672cux65b9ux6cd5}}
+
+LLM尽管通用能力较强，但知识范围、实时性以及回答时知识定位的精确度都仍然有限。为此我们让模型在回答问题时实时检索，为回答提供参考。
+
+\hypertarget{ux4e00ragux7684ux6807ux51c6ux6d41ux7a0b}{%
+\subsection{一、RAG的标准流程}\label{ux4e00ragux7684ux6807ux51c6ux6d41ux7a0b}}
+
+首先构建知识库，即对自然语言文本等非结构化数据的向量化存储。为了保存语义信息并方便后续的相似度检索，我们将文本裁切为片段，并训练一个嵌入模型，将这些片段分别转换为嵌入向量（embedding vector）并建立索引。
+
+在生成时，我们会用Query（查询）向量在知识库中相似度检索，找到最相关的内容加入上下文（或将其所在的整篇文献加入上下文）。对于文本知识库，我们往往用余弦相似度，因为它更关注语义方向的相似性，而不受文本长度等无关因素的影响。而有时为了避免漏掉精确关键词，往往会和BM25等传统关键字检索方法结合，如finalScore~= (0.7~* vectorScore) + (0.3~* textScore)。
+
+原始的RAG采取``先检索后生成''，即顺序架构：Query -\textgreater{} Retrieve -\textgreater{} Generate。
+
+\hypertarget{ux4e8cux52a8ux6001ux51b3ux5b9aux8c03ux7528ux641cux7d22ux5de5ux5177}{%
+\subsection{二、动态决定调用搜索工具}\label{ux4e8cux52a8ux6001ux51b3ux5b9aux8c03ux7528ux641cux7d22ux5de5ux5177}}
+
+我们可以在模型的词表中加入 token，生成后即调用搜索API。可以通过在训练数据中加入调用示例，或者通过强化学习的方式让模型在自主探索中学会在需要搜索时生成 token，调用检索辅助完成任务。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  架构分类
+\end{enumerate}
+
+（1）条件架构：可以引入``判断器 (Judger/Router)''，根据问题的难度或类型决定是否检索，或如何检索，也可以通过强化学习的方式让模型自主学会判断是否搜索（即是否生成 token）。
+
+（2）分支架构：并行执行多条路径，通过集成或排序来融合结果。
+
+概率集成：将每个检索到的文档分别输入LLM计算生成概率，最后将多个文档对应的生成概率分布进行加权融合。
+
+候选排序：让LLM基于每个文档分别生成答案，然后根据生成的置信度或相关性对这些答案进行排序，选择最好的一个。
+
+（3）循环/迭代架构：检索和生成交替进行，形成闭环，Retrieve \textless-\textgreater{} Generate，适用于长文本生成或复杂多步推理。
+
+交替迭代：生成一部分 -\textgreater{} 拿着生成的内容去检索新信息 -\textgreater{} 基于新信息继续生成 -\textgreater{} 循环。
+
+主动触发：在生成过程中监测生成概率。如果 LLM 对当前生成的词``犹豫不决''（概率低），则立即触发检索，用检索到的信息``纠正''生成方向。
+
+反思与自纠：训练LLM输出特殊的反思Token，判定是否需要检索，检索到的内容是否相关，生成的内容是否有用。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  训练方法
+\end{enumerate}
+
+（1）监督微调：需要高质量标注轨迹，且搜索操作本身的不可微性使得端到端优化变得困难。
+
+（2）结合检索的强化学习：仅通过最终结果的奖励（Outcome-based Reward），让模型自主学会``思考-检索-再思考-回答''的交替流程，用PPO、GRPO等强化学习算法。
+
+需要注意的是，在计算策略梯度时，轨迹y中既包含模型生成的 Token，也包含搜索引擎返回的固定Token。如果不加区分地训练，模型可能会试图``优化''检索到的文本，或者被检索内容的分布带偏。``检索''只是一个动作，模型通过强化学习（RL）的奖励机制学会的是何时输出标记。故我们运用掩码机制，把搜索到的文本Token（不包含 token）加上掩码，只以其他token作为RL优化的策略。
+
+\hypertarget{ux4e09ux81eaux9002ux5e94rag}{%
+\subsection{三、自适应RAG}\label{ux4e09ux81eaux9002ux5e94rag}}
+
+在标准RAG中，在引入需要的信息的同时往往也引入了大量无关信息。为避免上下文无关信息的积累，可将检索到的信息分割成较小的块，每次输入一个块，并调用LLM回答，如此循环，直至得到需要的答案停止。由于KV Cache的存在，时间复杂度仍然是线性增长的（也就是和标准RAG一致），只要需要的信息不是在最后一个块里，理论上就能起到加速作用。
+
+较大的块成功召回需要的信息的概率更大，但同时也会引入更多无关信息（干扰项）；较小的窗口虽能减少干扰，但要求模型在更多块中准确拒绝无关信息块，增加错误拒绝需要的信息块以及累计错误的风险。
+
+\hypertarget{ux56dbux5f3aux63a8ux7406ux578bux4efbux52a1ux7684queryux5c55ux5f00}{%
+\subsection{四、强推理型任务的Query展开}\label{ux56dbux5f3aux63a8ux7406ux578bux4efbux52a1ux7684queryux5c55ux5f00}}
+
+在一些强推理型任务中，对Query也可以做推理展开，即先用原始Query检索一次，然后用LLM提取``有用证据''，写一个推理后的扩展查询/回答性段落作为新Query，再检索，然后将检索结果推理后才输入上下文。该过程用检索加强了对Query的理解，以更好地进行正式检索，引入推理以避免检索过度看表层语义。
+
+本质上来说，该过程是进行了两轮``检索引导的显式推理''。需要一个辅助LLM，以免干扰原模型上下文。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-128}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-128}}
+
+\begin{itemize}
+\tightlist
+\item
+  《动手学大模型智能体》。
+\item
+  Jin, B., Zeng, H., Yue, Z., et al.~(2025). \href{https://arxiv.org/abs/2503.09516}{Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning}. arXiv:2503.09516.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux7a00ux758fux68c0ux7d22}{%
+\section{稀疏检索}\label{ux7a00ux758fux68c0ux7d22}}
+
+稀疏检索即传统关键词检索方法，如BM25：
+
+BM25 的核心思想是通过三个维度衡量查询 \(Q\) 与文档 \(D\) 的相关性：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  词频（TF, Term Frequency）：词在文档中出现的次数越多，相关性越高，但有饱和上限。
+\item
+  逆文档频率（IDF, Inverse Document Frequency）：包含该词的文档越少，该词的权重（信息量）越大。
+\item
+  文档长度归一化（Document Length Normalization）：同样的词频，出现在短文档中比出现在长文档中更重要。
+\end{enumerate}
+
+假设查询 \(Q\) 由单词 \(\{q_1, q_2, \ldots, q_n\}\) 组成，文档 \(D\) 的 BM25 得分计算公式如下：
+
+\[
+\mathrm{Score}(D,Q)=\sum_{i=1}^{n}\mathrm{IDF}(q_i)\cdot \frac{f(q_i,D)\cdot(k_1+1)}{f(q_i,D)+k_1\cdot(1-b+b\cdot\frac{|D|}{\mathrm{avgdl}})}
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(f(q_i,D)\)：单词 \(q_i\) 在文档 \(D\) 中的出现频率。
+\item
+  \(|D|\)：文档 \(D\) 的长度（单词数）。
+\item
+  \(\mathrm{avgdl}\)：语料库中文档的平均长度。
+\item
+  \(k_1\)：词频饱和参数，通常取 \(1.2\sim2.0\)，控制 TF 增长带来的得分上限。
+\item
+  \(b\)：长度惩罚参数，通常取 \(0.75\)，决定文档长度对得分的影响程度。
+\end{itemize}
+
+\(\mathrm{IDF}(q_i)\) 的标准计算方式为：
+
+\[
+\mathrm{IDF}(q_i)=\ln\left(\frac{N-n(q_i)+0.5}{n(q_i)+0.5}+1\right)
+\]
+
+其中 \(N\) 是语料库文档总数，\(n(q_i)\) 是包含单词 \(q_i\) 的文档数。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-129}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-129}}
+
+\begin{itemize}
+\tightlist
+\item
+  Robertson, S., \& Zaragoza, H. (2009). \href{https://doi.org/10.1561/1500000019}{The Probabilistic Relevance Framework: BM25 and Beyond}. Foundations and Trends in Information Retrieval, 3(4), 333-389.
+\item
+  Manning, C. D., Raghavan, P., \& Schutze, H. (2008). \href{https://nlp.stanford.edu/IR-book/html/htmledition/okapi-bm25-a-non-binary-model-1.html}{Introduction to Information Retrieval: Okapi BM25, a non-binary model}. Cambridge University Press.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux7a20ux5bc6ux68c0ux7d22ux4e0eux6df7ux5408ux68c0ux7d22}{%
+\section{稠密检索与混合检索}\label{ux7a20ux5bc6ux68c0ux7d22ux4e0eux6df7ux5408ux68c0ux7d22}}
+
+稠密检索，即利用Embedding向量检索的方法。相较于稀疏检索而言，稠密检索能更好地利用语义层面的信息。
+
+\hypertarget{ux4e00ux5d4cux5165ux5411ux91cfux7684ux9009ux53d6}{%
+\subsection{一、嵌入向量的选取}\label{ux4e00ux5d4cux5165ux5411ux91cfux7684ux9009ux53d6}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  切成片段（Chunk）
+\end{enumerate}
+
+一般而言，一个嵌入向量会取256-1024 tokens，或者一个自然段，以包含一个完整的论点或逻辑段落。还可以计算相邻句子的相似度，如果相似度突降，说明话题变了，就在这里切。
+
+为什么要这么做？如果把每一个词或每一句话单独做成向量，虽然粒度很细，但会因为缺乏上下文而导致语义偏离，检索时容易出错。如一个知识库把一个句子作为一个嵌入向量，有一个句子是``它崩溃了''。将其单独变为embedding向量，向量化后包含了``崩溃''的语义，但缺乏上下文，丢失了主语（是服务器崩溃，还是股市崩溃？）。检索时，在服务器、股市等很多场景检索时，这句话都会被检索到。也就是说，检索时会召回大量无关内容。而如果把整篇5000字的论文做成一个向量，要么需要很高的embedding维度（计算复杂度增大），要么在不改变维度的情况下把文章里不同内容的语义混合在向量里（向量的方向会变得模糊）。所谓``文档向量''，一般实际上就指的是片段对应的向量。
+
+另外，我们不会硬生生切断，通常会设置10\%\textasciitilde20\%的重叠（例如50 Tokens），防止某个关键句子刚好被切在两块的连接处，导致语义断裂。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  切片的改进
+\end{enumerate}
+
+虽然切片是主流，但切片可能失去了上下文（例如，一个切片里写着``这个方案能将准确率提高20％''，但切片里没有写``这个方案''是什么）。对此有两种改进方法：（1）搜索到片段后，把其所在全文都输入给LLM；（2）在片段embedding时，将全文压缩后的摘要作为上下文输入供参考。
+
+\hypertarget{ux4e8cux5d4cux5165ux5411ux91cfux7684ux5b58ux50a8ux4ecbux8d28}{%
+\subsection{二、嵌入向量的存储介质}\label{ux4e8cux5d4cux5165ux5411ux91cfux7684ux5b58ux50a8ux4ecbux8d28}}
+
+一般而言，被检索的嵌入向量保存在CPU内存中（或量化压缩后保存在CPU内存中）。如果数据量过大，可将索引向量压缩在内存，指向的原始文本数据存在SSD中。
+
+由于嵌入向量在CPU内存中，在数据量不大的情况下，在推理时直接运用CPU计算可避免I/O阻塞耗时。如果数据量大、高并发必须使用GPU，则应将量化压缩后的索引向量集存入GPU显存，再取如Top-1000从CPU中取入GPU精确计算。
+
+\hypertarget{ux4e09ux5d4cux5165ux6a21ux578bux7684ux67b6ux6784}{%
+\subsection{三、嵌入模型的架构}\label{ux4e09ux5d4cux5165ux6a21ux578bux7684ux67b6ux6784}}
+
+该方法采用双编码器架构（Bi-Encoder），通常基于 BERT 或 RoBERTa 等 Transformer 模型。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  编码（Encoding）：
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  文档编码：将语料库中的每个文档 \(d\) 输入文档编码器 \(E_D\)，取 \texttt{{[}CLS{]}} 位置的输出或所有 token 的平均池化，得到向量 \(\mathbf{v}_d \in \mathbb{R}^h\)。
+\item
+  查询编码：将用户问题 \(q\) 输入查询编码器 \(E_Q\)，得到向量 \(\mathbf{v}_q \in \mathbb{R}^h\)。
+\end{itemize}
+
+\[
+\mathbf{v}_q=E_Q(q),\quad \mathbf{v}_d=E_D(d)
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  相似度计算（Similarity）：使用点积（Dot Product）或余弦相似度（Cosine Similarity）计算匹配分：
+\end{enumerate}
+
+\[
+s(q,d)=\mathbf{v}_q^\top\mathbf{v}_d\quad \mathrm{or}\quad \frac{\mathbf{v}_q^\top\mathbf{v}_d}{\lVert\mathbf{v}_q\rVert\lVert\mathbf{v}_d\rVert}
+\]
+
+\hypertarget{ux56dbux5d4cux5165ux6a21ux578bux7684ux8badux7ec3}{%
+\subsection{四、嵌入模型的训练}\label{ux56dbux5d4cux5165ux6a21ux578bux7684ux8badux7ec3}}
+
+由于``选取最相关的一些文本加入上下文''运用了不可导的Top-K操作，嵌入模型无法直接和主LLM一起端到端训练，而需要另行训练。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  对比学习
+\end{enumerate}
+
+用语义相似的文本为正样本（如论文和它的摘要、论坛的问题和回答、新闻的标题和正文等），语义不同的为负样本（批次内非正样本均可视为负样本，此外还可以找辨析难度更大的困难样本，如讲水果中的苹果和苹果手机的段落）。
+
+假设我们有一个查询 \(q\)（Query）和一个相关的文档 \(d^+\)（Positive Document），以及 \(N\) 个不相关的文档 \(d^-\)（Negative Documents）。
+
+我们使用 InfoNCE Loss（Information Noise Contrastive Estimation）作为损失函数。这是目前训练 Embedding 最主流的公式：
+
+\[
+\mathcal{L}=-\log \frac{\exp(\mathrm{sim}(q,d^+)/\tau)}{\sum_{i=0}^{N}\exp(\mathrm{sim}(q,d_i)/\tau)}
+\]
+
+其中：
+
+\begin{itemize}
+\tightlist
+\item
+  \(\mathrm{sim}(u,v)\) 是两个向量的余弦相似度：
+\end{itemize}
+
+\[
+\mathrm{sim}(u,v)=\frac{u^\top v}{\lVert u\rVert\lVert v\rVert}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \(d^+\) 是正样本。
+\item
+  \(d_i\) 包含 \(1\) 个正样本和 \(N\) 个负样本。
+\item
+  \(\tau\) 是温度系数（Temperature），用于控制模型对困难样本的敏感度。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  蒸馏生成模型的注意力分布
+\end{enumerate}
+
+字面相似度往往具有欺骗性，嵌入向量``是否相似''应当取决于内容逻辑，这是在复杂的生成过程中体现的。如：Query：``治疗阿尔茨海默病的新靶点。''文档A（字面相似）：一篇综述，标题包含``阿尔茨海默病治疗''，但内容全是老旧信息。文档B（字面不相似）：讨论``蛋白折叠异常与神经元坏死''，没提``阿尔茨海默''这个词，但内容逻辑正是通过解决蛋白折叠来治疗该病。
+
+我们希望用下游任务的效用来监督上游检索的排序。尽管我们无法端到端优化嵌入模型，但可以让它生成的概率模仿生成器的Attention中各个token出现的概率，也就是运用蒸馏的方法：
+
+第一步：获取生成器的``注意力分布'' \(P_{\mathrm{Teacher}}\)。
+
+假设检索回了 \(K\) 个文档 \(\{D_1,D_2,\ldots,D_K\}\)。当生成器生成答案 \(Y\) 时，我们可以查看 Cross-Attention（或者 Decoder-Only 模型的 Self-Attention）层中的权重。
+
+我们将生成器对第 \(i\) 个文档的所有 token 的注意力权重进行聚合（例如求和或取平均），得到该文档的重要性分数 \(A_i\)。然后进行归一化：
+
+\[
+P_{\mathrm{Gen}}(D_i\mid Q)=\frac{\exp(A_i/\tau)}{\sum_{j=1}^{K}\exp(A_j/\tau)}
+\]
+
+这个 \(P_{\mathrm{Gen}}\) 就是真理：它代表了``在生成答案时，第 \(i\) 篇文档实际上贡献了多少''。
+
+第二步：获取检索器的``检索概率'' \(P_{\mathrm{Student}}\)。
+
+检索器（通常是双塔模型）计算 Query 和 Document 的点积分数 \(S_i=E_Q\cdot E_{D_i}\)。我们也对它进行 Softmax 归一化：
+
+\[
+P_{\mathrm{Ret}}(D_i\mid Q)=\frac{\exp(S_i)}{\sum_{j=1}^{K}\exp(S_j)}
+\]
+
+第三步：计算损失并蒸馏（Distillation）。
+
+我们要让检索器的分布 \(P_{\mathrm{Ret}}\) 尽可能接近生成器的分布 \(P_{\mathrm{Gen}}\)。通常使用 KL 散度（Kullback-Leibler Divergence）作为损失函数：
+
+\[
+\mathrm{Loss}=\mathrm{KL}(P_{\mathrm{Gen}}\Vert P_{\mathrm{Ret}})=\sum_i P_{\mathrm{Gen}}(D_i\mid Q)\log\frac{P_{\mathrm{Gen}}(D_i\mid Q)}{P_{\mathrm{Ret}}(D_i\mid Q)}
+\]
+
+关键点：这个 Loss 是可导的，可以通过梯度下降更新检索器的参数（即更新 Query Encoder 的权重），让检索器学会：``原来在这个问题下，虽然文档 B 只有 \(0.6\) 的相似度，但它应该排第一。''
+
+\hypertarget{ux4e94ux6df7ux5408ux68c0ux7d22}{%
+\subsection{五、混合检索}\label{ux4e94ux6df7ux5408ux68c0ux7d22}}
+
+实践中，常采取稠密和稀疏索引结合的方法。如Claude-mem：查询先走Chroma向量检索（基于语义相似度的稠密检索），召回Top 100结果，再做90天时间窗口过滤，最后用SQLite（稀疏检索）按时间顺序补全/重排数据。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-130}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-130}}
+
+\begin{itemize}
+\tightlist
+\item
+  thedotmack. (2026). \href{https://github.com/thedotmack/claude-mem}{claude-mem GitHub repository}.
+\item
+  van den Oord, A., Li, Y., \& Vinyals, O. (2018). \href{https://arxiv.org/abs/1807.03748}{Representation Learning with Contrastive Predictive Coding}. arXiv:1807.03748.
+\item
+  Izacard, G., \& Grave, E. (2021). \href{https://arxiv.org/abs/2012.04584}{Distilling Knowledge from Reader to Retriever for Question Answering}. ICLR 2021.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{faissux52a0ux901f}{%
+\section{Faiss加速}\label{faissux52a0ux901f}}
+
+由于稠密检索需要遍历所有文档（片段）向量并进行逐个维度点乘，时间复杂度为O(n*d)。Faiss加速可以起到降低时间复杂度的作用。
+
+\hypertarget{ux4e00ux67e5ux627eux6b21ux6570ux7684ux964dux4f4ek-meansux805aux7c7bux548cux5012ux6392ux7d22ux5f15ivf-inverted-file-index}{%
+\subsection{一、查找次数的降低：K-means聚类和倒排索引（IVF, Inverted File Index）}\label{ux4e00ux67e5ux627eux6b21ux6570ux7684ux964dux4f4ek-meansux805aux7c7bux548cux5012ux6392ux7d22ux5f15ivf-inverted-file-index}}
+
+IVF是常用的加速手段，其核心思想是``先粗筛，再精选''，类似于图书馆的分层检索。
+
+工作机制：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  聚类：在训练阶段，利用 K-means 算法将整个向量空间划分为 \(k\) 个聚类（Voronoi Cells）。每个聚类中心被称为一个 Centroid。
+\item
+  建立倒排表：每一个原始向量都会被归类到离它最近的一个或多个聚类中心下，形成一个``倒排列表''。
+\item
+  查询加速：检索时，查询向量 \(q\) 首先与 \(k\) 个聚类中心对比，选出最近的 \(nprobe\) 个聚类，只在这几个聚类下的候选向量中进行精细计算。
+\end{enumerate}
+
+改进算法：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  倒排多索引（IMI, Inverted Multi-Index）
+\end{enumerate}
+
+这是一种通过``维度分解''实现的隐式多层聚类。
+
+\begin{itemize}
+\tightlist
+\item
+  数学逻辑：将 \(d\) 维向量切分为两半，每半部分分别进行聚类（假设各有 \(k\) 个中心）。
+\item
+  层级效果：通过这种组合，实际上产生了 \(k\times k=k^2\) 个虚拟桶。
+\item
+  优点：只需要存储 \(2k\) 个中心点，就能达到 \(k^2\) 级别的细分粒度。这在处理数十亿（Billions）级别的向量时非常强大。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  层次聚类树（IndexHierarchicalNSG / Multi-level K-means）
+\end{enumerate}
+
+在训练阶段，Faiss 可以通过多级 K-means 构建一棵树。
+
+工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  先将空间聚类成 \(100\) 个大类。
+\item
+  在每个大类内部，再聚类成 \(100\) 个子类。
+\end{enumerate}
+
+检索：像查字典一样，从树根向下搜索。
+
+\hypertarget{ux4e8cux67e5ux627eux6b21ux6570ux964dux4f4eux7684ux53e6ux4e00ux65b9ux6cd5hnswhierarchical-navigable-small-worldux5206ux5c42ux5bfcux822aux5c0fux4e16ux754c}{%
+\subsection{二、查找次数降低的另一方法：HNSW（Hierarchical Navigable Small World，分层导航小世界）}\label{ux4e8cux67e5ux627eux6b21ux6570ux964dux4f4eux7684ux53e6ux4e00ux65b9ux6cd5hnswhierarchical-navigable-small-worldux5206ux5c42ux5bfcux822aux5c0fux4e16ux754c}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  基本思想
+\end{enumerate}
+
+NSW（导航小世界）：在一个图结构中，如果每个节点都与附近的节点相连（短程边），且存在少量跨度较大的随机连接（长程边），则整个图具有``小世界''特性。搜索时通过贪心算法，从一个起始点开始，不断移动到离目标最近的邻居。在RAG的背景下，这里的每个``节点''是一个向量，每个向量都和离它较近的向量在图中相连。
+
+HNSW的改进：NSW在处理大规模数据时，搜索复杂度会退化。HNSW通过引入类似B+树的分层结构，每个在某层出现的节点在它上面的层必然也出现，搜索时不断``下降''，每次下一层的节点个数约为上一层的M倍（在插入节点时由概率确定该节点出现的最上层是哪一层，上一层的概率为下一层的1/M）。
+
+例如：最高层有6，中间层有369，底层有123456789（一个序号代表一个向量离Query的距离）。从最高层的6出发，下沉到中间层，贪心可在很短的时间（常数时间，这是``小世界''特性带来的）内找到最近的3，再下沉到底层，又可以在常数时间找到1。可以证明，此时检索时间复杂度近似O(logN)，构建这个层级结构的时间复杂度近似O(NlogN)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  检索工作流（O(logN)）
+\end{enumerate}
+
+阶段一：高层快速路由（Greedy Routing）。
+
+\begin{itemize}
+\tightlist
+\item
+  起始点：从最高层唯一的入口点开始。
+\item
+  贪心遍历：在每一层，只保留一个当前最优解，不断跳向比当前更靠近 \(q\) 的邻居。
+\item
+  目标：以极小的计算开销，跨越空间中的``荒漠''，迅速到达 \(q\) 所在的``绿洲''附近。
+\end{itemize}
+
+A. 高层贪心路由
+
+原理：在 \(L_1\) 到 \(L_{\max}\) 层，不使用复杂的队列，只进行简单的贪心跳转。
+
+为什么这么做？
+
+\begin{itemize}
+\tightlist
+\item
+  效率至上：高层节点少，误差容忍度高。快速下降到 \(L_0\) 才是核心任务。
+\item
+  小世界特性：根据 Watts-Strogatz 模型，小世界网络中通过少量的长程边（Long-range edges）即可实现极短的路径长度。高层边正是起到了长程边的作用。
+\end{itemize}
+
+B. 底层束搜索（Beam Search with \(C\) \& \(W\) Queues）
+
+原理：在 \(L_0\) 层使用候选队列 \(C\)（小根堆）和结果队列 \(W\)（大根堆）进行扩展。
+
+为什么这么做？
+
+\begin{itemize}
+\tightlist
+\item
+  克服局部最优：高维空间的向量分布非常复杂。贪心搜索（\(ef=1\)）很容易掉进``局部陷阱''。通过增大 \(efSearch\)，算法可以同时沿着多个可能的方向探索。
+\item
+  计算与精度的平衡：\(W\) 队列维护了目前最优秀的 \(efSearch\) 个候选者，它实际上划定了一个``动态搜索边界''。
+\end{itemize}
+
+阶段二：底层精细搜索（Beam Search at \(L_0\)）。
+
+当下降到 \(L_0\) 层时，算法从贪心策略切换为基于两个优先级队列的束搜索（类似于宽度优先搜索的变种）：
+
+我们采用类似广度优先的算法，但不同的是，这里只把最小邻居（而非所有邻居）压入待访问队列C，使得算法具备一定的贪心性；BFS中的``访问''，也被改成了``加入结果队列W''：
+
+数据结构准备：
+
+\begin{itemize}
+\tightlist
+\item
+  候选队列 \(C\)（Candidate Set）：小根堆，存储``待探索''的节点，离 \(q\) 越近优先级越高。
+\item
+  结果队列 \(W\)（Result Set）：大根堆，存储``目前为止最接近 \(q\)''的 \(efSearch\) 个节点。
+\end{itemize}
+
+循环迭代：
+
+\begin{itemize}
+\tightlist
+\item
+  从 \(C\) 中弹出距离 \(q\) 最近的节点 \(c\)。
+\item
+  获取 \(c\) 的所有邻居 \(e\)。
+\item
+  距离判定：如果 \(\mathrm{dist}(e,q)\) 小于 \(W\) 中最远节点的距离（即大根堆堆顶），则将 \(e\) 同时压入 \(C\) 和 \(W\)。
+\item
+  动态调整：如果 \(W\) 超过了 \(efSearch\) 大小，弹出堆顶最远的点。
+\end{itemize}
+
+收敛条件：
+
+\begin{itemize}
+\tightlist
+\item
+  当 \(C\) 为空，或者 \(C\) 中最近的节点已经比 \(W\) 中最远的节点还要远时，搜索停止。
+\end{itemize}
+
+为什么这样选取收敛条件：
+
+\begin{itemize}
+\tightlist
+\item
+  图的单调性假设：在导航小世界图中，我们假设如果当前能看到的最好机会（\(C\) 的堆顶）都比你已经握在心里的最差结果（\(W\) 的堆顶）还要差，那么在图的更深处找到更好结果的概率已经很小。
+\item
+  大幅减少计算量：这避免了对图进行全量遍历，是 HNSW 实现毫秒级响应的核心。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  构建层级结构工作流（O(NlogN)）
+\end{enumerate}
+
+第一步：确定最大层级 \(l\)。
+
+每个节点在插入前，都会被赋予一个最高可见层级 \(l\)。这通过泊松分布或指数分布随机生成：
+
+\[
+l=\lfloor-\ln(\mathrm{unif}(0,1))\cdot m_L\rfloor
+\]
+
+物理意义：大部分节点只存在于底层（\(L_0\)），只有极少数幸运儿能登上高层。这构成了典型的``金字塔''结构。
+
+第二步：跨层寻找入口点。
+
+系统从整个索引的全局入口点（Enter Point，预定义的最高层节点）开始，自顶向下搜索：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  在每一层执行贪婪搜索：检查当前节点的邻居，找到离 \(\mathbf{v}_{new}\) 最近的一个邻居。
+\item
+  将该邻居作为下一层的起始点，继续下沉。
+\item
+  注意：在进入 \(l\) 层之前，这个过程不建立连接，只为了快速定位。
+\end{enumerate}
+
+为什么这么做？
+
+\begin{itemize}
+\tightlist
+\item
+  快速收敛：高层图相当于空间的``摘要''。在稀疏图中，贪心搜索能以极少的计算量（跨越式地）快速逼近查询向量所在的局部区域。
+\item
+  消除冗余：在高层没必要找 Top-K，因为高层的目的是``导航''而非``精检''。
+\end{itemize}
+
+第三步：逐层建立连接（Layer \(i\in[0,l]\)）。
+
+一旦进入 \(l\) 层及以下层级，系统开始真正的``拉帮结派''：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  确定候选者：在当前层进行类似检索的搜索，维护一个大小为 \(efConstruction\) 的候选节点集合。
+\item
+  选择邻居（\(M\) 个）：从候选中选出 \(M\) 个点与 \(\mathbf{v}_{new}\) 建立双向边。
+\item
+  启发式连接策略（Heuristic）：这是 HNSW 的关键。系统不一定只选最近的 \(M\) 个点，而是会考虑这些点是否``扎堆''。
+\end{enumerate}
+
+\begin{itemize}
+\tightlist
+\item
+  策略：如果候选点 \(A\) 离 \(\mathbf{v}_{new}\) 较近，但 \(A\) 已经和已选中的邻居 \(B\) 靠得太近，系统可能会跳过 \(A\)，转而选择一个稍微远一点但方向不同的点。
+\item
+  目的：确保连接具有方向多样性，避免搜索时陷入``死胡同''。
+\end{itemize}
+
+为什么这么做？
+
+\begin{itemize}
+\tightlist
+\item
+  解决``孤岛''效应：如果只连最近的邻居，节点会倾向于形成密集的簇（Cluster），而簇与簇之间缺乏连接。一旦搜索进入一个簇，就很难跳出来。
+\item
+  模拟相对邻域图（Relative Neighborhood Graph）：这种策略保证了图的全局连通性。即使搜索点离目标较远，也能通过这些``跨度较大''的边快速横跨空间。
+\end{itemize}
+
+\hypertarget{ux4e09ux70b9ux79efux8ba1ux7b97ux548cux5411ux91cfux5b58ux50a8ux590dux6742ux5ea6ux7684ux964dux4f4eux4e58ux79efux91cfux5316pq-product-quantization}{%
+\subsection{三、点积计算和向量存储复杂度的降低：乘积量化（PQ, Product Quantization）}\label{ux4e09ux70b9ux79efux8ba1ux7b97ux548cux5411ux91cfux5b58ux50a8ux590dux6742ux5ea6ux7684ux964dux4f4eux4e58ux79efux91cfux5316pq-product-quantization}}
+
+子空间切分：将 \(d\) 维向量切分为 \(m\) 个子向量，每个子向量的维度为 \(d/m\)。
+
+\[
+x=[x_1,x_2,\ldots,x_m]
+\]
+
+子空间量化：对每个子空间的向量分别进行 K-means 聚类。通常每个子空间聚成 \(k^*=2^8=256\) 个类。这样每个子向量就可以用一个 8-bit 的索引（0-255）来表示。
+
+编码压缩：一个原先需要 \(d\times32\) bits（浮点数）的向量，现在只需要 \(m\times8\) bits。压缩比可达 30-100 倍。
+
+非对称距离计算（ADC）：当查询向量 \(q\) 到来时，系统会预先计算 \(q\) 的每个子向量到该子空间 256 个聚类中心的距离，生成一个距离查找表（Distance Look-up Table）。
+
+\[
+D(q,x)\approx \sum_{i=1}^{m}\mathrm{LUT}_i[\mathrm{code}_i(x)]
+\]
+
+这样我们不需要把Query和n个d维向量逐个点积，而是只需要和m*256个d/m维聚类中心向量点积，对于每个d维向量来说，它的每个子向量（只需要存聚类中心的ID）和Query的点积就是其聚类中心和Query的点积，只需要去距离查找表中查到每个子向量的点积再相加即可。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-131}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-131}}
+
+\begin{itemize}
+\tightlist
+\item
+  Babenko, A., \& Lempitsky, V. (2012). \href{https://ieeexplore.ieee.org/document/6248018}{The Inverted Multi-Index}. CVPR 2012.
+\item
+  Johnson, J., Douze, M., \& Jegou, H. (2017). \href{https://arxiv.org/abs/1702.08734}{Billion-scale similarity search with GPUs}. IEEE Transactions on Big Data.
+\item
+  Malkov, Y. A., \& Yashunin, D. A. (2018). \href{https://arxiv.org/abs/1603.09320}{Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs}. IEEE TPAMI.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux91cdux6392ux5e8fux4e0eux7cbeux70bc}{%
+\section{重排序与精炼}\label{ux91cdux6392ux5e8fux4e0eux7cbeux70bc}}
+
+\hypertarget{ux4e00ux91cdux6392ux5e8fux5668}{%
+\subsection{一、重排序器}\label{ux4e00ux91cdux6392ux5e8fux5668}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  全量重排序
+\end{enumerate}
+
+前面的稀疏和稠密检索可以让我们获得Top-K分数的文档（片段），但都主要集中在整个文档（片段）向量的整体语义上，为了速度牺牲了精度。为此，我们还需要进一步在token级别进行精细化调整，即用重排序器，在检索出的 Top-K（例如前100个）文档上进行排序。具体方法有：
+
+（1）LLM评估法
+
+（2）交叉编码器法
+
+输入构造：将查询 \(q\) 和候选文档 \(d\) 拼接成一个序列，中间用分隔符隔开：
+
+\[
+\mathrm{Input}=[\mathrm{CLS}]\oplus q\oplus[\mathrm{SEP}]\oplus d\oplus[\mathrm{SEP}]
+\]
+
+全注意力交互（Full Self-Attention）：将拼接后的序列输入 Transformer。由于 Self-Attention 机制，查询中的每个 token 都能注意到文档中的每个 token。这使得模型能理解复杂的逻辑关系（如否定词``不''、``但是''）。
+
+评分输出：通常取 \texttt{{[}CLS{]}} 标记的输出向量，经过一个全连接层（Linear Layer），输出一个标量分数 \(s\in[0,1]\)（通常经过 Sigmoid）。
+
+\[
+\mathrm{Score}(q,d)=\sigma(W\cdot \mathrm{Transformer}(\mathrm{Input})_{\mathrm{CLS}}+b)
+\]
+
+可以看到，这里并非Query对文档用互注意力（Bi-Encoder），而是Query和文档拼接后用自注意力打分（Cross-Encoder）。最后取 \texttt{{[}CLS{]}} 标记对应的全局注意力向量，追求极致的精度。（注：\(W\) 为 \(1\times d_{\mathrm{model}}\) 维，和 \texttt{{[}CLS{]}} token 向量的 \(d_{\mathrm{model}}\times 1\) 维相乘为标量）
+
+为什么选择交叉编码器：
+
+\begin{itemize}
+\tightlist
+\item
+  双编码器（Bi-Encoder）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    流程：Query -\textgreater{} Vector \(V_q\)，Doc -\textgreater{} Vector \(V_d\)。
+  \item
+    计算：\(V_q \cdot V_d\)。
+  \item
+    痛点：Query 和 Doc 在生成向量时是互不可见的。所有的语义必须被压缩到一个固定维度的向量中（Vector Bottleneck）。例如，``苹果''这个词，在生成向量时必须同时隐含``水果''和``公司''的含义，非常模糊。
+  \end{itemize}
+\item
+  交叉编码器（Cross-Encoder）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    流程：将 Query 和 Doc 拼接后送入模型。
+  \item
+    优势：Query 和 Doc 在模型的第一层就开始交互。
+  \end{itemize}
+\end{itemize}
+
+``互不可见''指的就是：在生成 \(V_d\) 的那一刻，模型不知道 \(Q\) 是什么；在生成 \(V_q\) 的时刻，模型不知道 \(D\) 是什么。它们是独立编码的。
+
+假设有一篇文档 \(D\)：``苹果发布了新财报，股价大涨。''
+
+\begin{itemize}
+\tightlist
+\item
+  场景 A（Cross-Encoder，无瓶颈）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    Query：``好吃的水果有哪些？'' -\textgreater{} 拼接后模型看到``水果''和``股价''，直接打低分。
+  \item
+    Query：``科技公司动态'' -\textgreater{} 拼接后模型看到``科技''和``股价''，打高分。
+  \item
+    模型在交互中动态理解了语义。
+  \end{itemize}
+\item
+  场景 B（Bi-Encoder，有瓶颈）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    文档 \(D\) 必须被压缩成一个静态向量 \(V_d\)。
+  \item
+    这个 \(V_d\) 必须同时通过 768 个数字来表达``苹果''、``公司''、``赚钱''、``科技''等所有含义。
+  \item
+    多义词灾难：
+
+    \begin{itemize}
+    \tightlist
+    \item
+      如果 \(V_d\) 过分强调``科技''，那遇到 Query ``苹果（水果）''时，虽然语义不符，但因为都含有``Apple''这个词的嵌入信息，向量距离可能还是很近（产生幻觉/误召回）。
+    \item
+      如果 \(V_d\) 试图中庸，既像水果又像科技，那它可能离``纯粹的水果''和``纯粹的科技''都有一段距离，导致谁都搜不到它。
+    \end{itemize}
+  \end{itemize}
+\end{itemize}
+
+总结：Vector Bottleneck 指的是：无论句子多长、含义多丰富、多歧义，双编码器都强行将其压缩进一个固定大小的向量中。由于缺乏查询时的上下文（Context），这个向量只能是一个``模糊的平均值''，丢失了细粒度的语义匹配能力。
+而如果用交叉编码器，模型在Embedding时可直接将Query和文档拼接，根据Query确定把文档的哪些内容放进Embedding。但缺点是这样文档的Embedding依赖于Embedding，必须在每次给出Query后都在线计算，而无法提前单独对文档进行Embedding操作。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  chunk重排序
+\end{enumerate}
+
+在数据量大、对延时要求高、算力相对不足等情形下，对所有的论文进行整个文档的token级计算并不现实，往往每篇论文只能取几个较小的chunk送进重排序器（如果是论文检索等场景，往往除了chunk之外还会加上摘要一并送入重排序器）。一般而言，切分chunk的方法有：
+
+（1）按自然段/一定token数切分：每段或每一定token数为一个chunk，最简便，但有时会丢失一些上下文信息，或出现冗余信息。可以通过加入压缩后的上下文、与相邻chunk 20\%重叠的方式一定程度上解决丢失上下文信息的问题，保证连续性。
+
+（2）按句子切分再合并：先按句子切分，再计算每一句与下一句的embedding向量间的相似度。若高于阈值，则将下一句合并入该句所在chunk；否则二者分入不同chunk。这样可以得到若干chunk。
+
+切分完毕后，计算Query与每个小chunk的embedding向量间的相似度，取每篇论文TopK的chunk，送进重排序器。
+
+\hypertarget{ux4e8cux7cbeux70bcux5668}{%
+\subsection{二、精炼器}\label{ux4e8cux7cbeux70bcux5668}}
+
+检索到的文档往往包含大量无关噪声，直接输入生成器会导致Token浪费甚至产生幻觉。精炼器的目标是提高``信噪比''，故常用精炼器进行精炼后再加入上下文窗口。
+
+精炼方法：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  抽取式精炼：使用一个轻量级的打分模型（甚至可以是另一个 Cross-Encoder）对每个句子评分，判断其是否包含回答问题所需的关键信息。
+\item
+  摘要式精炼：让LLM或小型BERT模型对检索到的内容生成摘要。
+\item
+  LLMLingua压缩：用LLM预测对应token，越能被轻易预测，该token信息量（困惑度）越小，越应压缩。
+\end{enumerate}
+
+\[
+\mathrm{Keep}(x_t)=\mathbf{1}\!\left[-\log P\!\left(x_t \mid x_{1:t-1}\right)>\tau\right]
+\]
+
+\hypertarget{ux53c2ux8003ux6587ux732e-132}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-132}}
+
+\begin{itemize}
+\tightlist
+\item
+  Nogueira, R., \& Cho, K. (2019). \href{https://arxiv.org/abs/1901.04085}{Passage Re-ranking with BERT}. arXiv:1901.04085.
+\item
+  Reimers, N., \& Gurevych, I. (2019). \href{https://arxiv.org/abs/1908.10084}{Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks}. EMNLP 2019.
+\item
+  Xu, F., Shi, W., \& Choi, E. (2023). \href{https://arxiv.org/abs/2310.04408}{RECOMP: Improving Retrieval-Augmented LMs with Compression and Selective Augmentation}. ICLR 2024.
+\item
+  Jiang, H., Wu, Q., Lin, C.-Y., Yang, Y., \& Qiu, L. (2023). \href{https://arxiv.org/abs/2310.05736}{LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models}. EMNLP 2023.
+\end{itemize}
+
+\clearpage

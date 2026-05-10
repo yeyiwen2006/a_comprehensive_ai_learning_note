@@ -1,0 +1,2444 @@
+\hypertarget{ux591aux6a21ux6001ux751fux6210ux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578b}{%
+\chapter{多模态生成与生成式世界模型}\label{ux591aux6a21ux6001ux751fux6210ux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578b}}
+
+\hypertarget{ux81eaux56deux5f52ux6269ux6563ux7684ux7ed3ux5408ux4e0eux65f6ux7a7atransformer}{%
+\section{自回归、扩散的结合与时空Transformer}\label{ux81eaux56deux5f52ux6269ux6563ux7684ux7ed3ux5408ux4e0eux65f6ux7a7atransformer}}
+
+\hypertarget{ux4e00ux81eaux56deux5f52ux751fux6210ux7684ux4e16ux754cux6a21ux578b}{%
+\subsection{一、自回归生成的世界模型}\label{ux4e00ux81eaux56deux5f52ux751fux6210ux7684ux4e16ux754cux6a21ux578b}}
+
+\hypertarget{ux4e00ux81eaux56deux5f52ux751fux6210ux8303ux5f0fux4ee5genie-1ux4e3aux4f8b}{%
+\subsubsection{（一）自回归生成范式：以Genie 1为例}\label{ux4e00ux81eaux56deux5f52ux751fux6210ux8303ux5f0fux4ee5genie-1ux4e3aux4f8b}}
+
+下面以Genie 1为例，介绍自回归生成的经典范式，及其核心架构（如时空Transformer等）。
+
+训练阶段（Training Phase）：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  首先，单独训练视频分词器（Video Tokenizer），实现对原始视频流的压缩。
+\item
+  然后，联合训练潜在动作模型（LAM）和动态模型（Dynamics Model）。LAM 直接从像素视频中提取潜在动作，动态模型则利用视频 Token 进行预测。
+\end{enumerate}
+
+推理/交互阶段（Inference/Play Phase）：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  用户提供一张初始提示图像 \(x_1\) 作为首帧。
+\item
+  分词器将该图像转换为初始 Token \(z_1\)。
+\item
+  用户输入一个离散动作指令 \(a_1\in[0,|\mathcal{A}|)\)。
+\item
+  系统在 VQ Codebook 中检索动作 \(a_1\) 对应的嵌入表示 \(\bar{a}_1\)。
+\item
+  动态模型结合 \(z_1\) 和 \(\bar{a}_1\) 预测下一帧的 Token \(z_2\)。
+\item
+  分词器的解码器将 \(z_2\) 还原为像素图像展现给用户，并不断循环以生成连续的可控视频。
+\end{enumerate}
+
+其中，若用户还输入了其他额外指令或存在其他上下文 \(c_1\)，则将其经过投影后，与 \(z_1\)、\(a_1\) 拼接进行自注意力，或与 \(z_1\)、\(a_1\) 之间进行交叉注意力。
+
+模型架构：
+
+视频分词器（Video Tokenizer）：用于将高维视频帧序列降维压缩为离散的 Token 序列。给定视频帧 \(x_{\le t}\)，分词器将其编码为离散表示 \(z_{\le t}\)。由于编码器和解码器都使用 ST-Transformer 结构，每一个离散编码都融合了过去所有帧的时序动态信息。
+
+潜在动作模型（Latent Action Model, LAM）：该组件是实现无动作标签训练的关键。编码器接收历史帧 \(x_{\le t}\) 和下一帧 \(x_{t+1}\)，推断它们之间的连续动作嵌入 \(\tilde{a}_t\)，随后通过 VQ Codebook 将其量化为离散动作 \(a_t\)。在 Genie 1 中，动作字典大小限制为 \(|\mathcal{A}|=8\)，以确保人类可玩性和控制力。最后，解码器仅根据历史帧序列和潜在动作来重建并预测下一帧 \(\hat{x}_{t+1}\)。这种预测瓶颈迫使模型提取能够引起帧间实质性变化的核心动作信息。
+
+动态模型（Dynamics Model）：这是一个基于 MaskGIT 的自回归解码器模型。在时间步 \(t\)，它接收过去的视频 Token \(z_{\le t-1}\) 以及对应的潜在动作嵌入 \(\bar{a}_{\le t-1}\)，并预测下一帧的 Token。模型通过预测 Token 与真实 Token 之间的交叉熵损失进行训练。训练时采用伯努利分布对输入 Token 随机掩码，掩码率在 0.5 到 1 之间均匀采样。
+关于视频分词器生成的表示：在自回归模型中，一般用离散token ID构成的序列（不同于扩散模型每一个token为高维向量）。
+
+动态模型中过去的视频和动作嵌入如何融合：
+
+视频帧经过分词器（Video Tokenizer）后，会去查分词器的 VQ 码本。论文中提到分词器的码本嵌入维度（latent dim）为 32。动作指令（离散索引）会去查 LAM 的 VQ 码本，其码本嵌入维度同样是 32。
+可以看出，Genie实现互动性是一大进步，但动作仍然局限在少量的可选范围内，远未达到开放真实世界的水平。
+
+动态模型本身有一个很大的隐藏层维度。例如在 0.1B 的 Genie 模型中，\(d_{\mathrm{model}}\) 达到 5120。为了进入 Transformer，视频 Token 嵌入和动作嵌入都会分别通过线性层投影，从 32 维投影到 5120 维。
+
+很多早期世界模型会将动作拼接到视频特征后面（Concatenation），这会导致序列长度增加或特征维度翻倍。Genie 的作者发现，将动作作为 \textbf{加性嵌入（Additive Embeddings）} 直接与对应的视频 Token 相加，既能保持维度不变，又能显著提升视频生成的可控性：
+
+\[
+E_{\mathrm{input}}=E_{\mathrm{video}}+E_{\mathrm{action}}+E_{\mathrm{position}}
+\]
+
+这里还会加上标准的位置编码 \(E_{\mathrm{position}}\)。
+
+\hypertarget{ux4e8cmulti-token-prediction}{%
+\subsubsection{（二）Multi-token Prediction}\label{ux4e8cmulti-token-prediction}}
+
+基于自回归生成的世界模型存在着生成速度慢的问题，但在具身智能等领域，这种延迟会对机器人的灵活性造成较大的影响。为了提高推理速度，可以采用Multi-token prediction的方法，一次生成多个token后并行验证。
+
+\hypertarget{ux4e8cux81eaux56deux5f52ux4e0eux6269ux6563ux7684ux7ed3ux5408ux8303ux5f0f}{%
+\subsection{二、自回归与扩散的结合范式}\label{ux4e8cux81eaux56deux5f52ux4e0eux6269ux6563ux7684ux7ed3ux5408ux8303ux5f0f}}
+
+\hypertarget{ux4e00ux5757ux5185ux6269ux6563ux5757ux95f4ux81eaux56deux5f52}{%
+\subsubsection{（一）块内扩散、块间自回归}\label{ux4e00ux5757ux5185ux6269ux6563ux5757ux95f4ux81eaux56deux5f52}}
+
+这是自回归与扩散结合最常见的范式，即用同一个网络，每次用扩散方法生成一个块，每次扩散生成的块会被存在KV Cache中，块间用自回归方式。
+
+\hypertarget{ux4e8cux81eaux56deux5f52ux9884ux6d4bux4e0eux6269ux6563ux751fux6210ux7684ux89e3ux8026}{%
+\subsubsection{（二）自回归预测与扩散生成的解耦}\label{ux4e8cux81eaux56deux5f52ux9884ux6d4bux4e0eux6269ux6563ux751fux6210ux7684ux89e3ux8026}}
+
+Nvidia在Cosmos中，提出在自回归预测的基础上，运用扩散提高生成质量的方法。和上面不同的地方在于，这里自回归和扩散在两个网络中进行，用自回归网络预测出的块再给扩散网络进行视觉生成，自回归网络每预测一个块时，看到的上下文（即KV Cache中的递归对象）是自回归网络自身而非扩散网络生成的块。
+
+自回归模型使用离散分词器，能够以高压缩率把海量视频信息压缩为少数整数，但这种激进压缩会导致解码出的视频出现模糊或伪影。相比之下，扩散模型使用的连续分词器能保留更多细节。为了弥补这一缺陷，Cosmos 微调了一个 7B 的文本到视频扩散模型（Cosmos-Predict1-7B-Text2Video），将其改造为一个强大的``解码器''。
+
+训练阶段：使用离散分词器的自回归模型输出一个模糊的目标图像，并将其长宽放大2倍以使其像素数与最终清晰的目标图像一致。我们用一个扩散模型，根据扩散模型的训练原理，我们需要给清晰的目标图像加噪作为训练的初始状态，以模糊的目标图像作为上下文，输出去噪后清晰的目标图像，根据与实际的差距计算梯度训练。
+
+推断工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  自回归模型生成高度压缩的``离散 Token 视频''。
+\item
+  将其转化为条件输入，通过微调好的扩散去噪网络（Diffusion Denoiser）上采样并预测出更清晰的``连续 Token 视频''。
+\item
+  最后，将这些连续 Tokens 送入 Cosmos 连续分词器的解码器，还原出更清晰的 RGB 物理世界视频。
+  \#\#\#\# （三）扩散模型的级联
+\end{enumerate}
+
+可以用一个块内扩散、块间自回归的模型生成低分辨率视频，然后一方面上采样并给扩散模型生成可用于解码的高分辨率视频，一方面将低分辨率视频存入KV Cache同步进行下一步生成，可能可减少延迟。
+
+\hypertarget{ux4e09ux65f6ux7a7aux6ce8ux610fux529b}{%
+\subsection{三、时空注意力}\label{ux4e09ux65f6ux7a7aux6ce8ux610fux529b}}
+
+时空 Transformer（ST-Transformer）：传统视频 Transformer 的计算复杂度呈二次方增长，而 ST-Transformer 将空间注意力和时间注意力解耦。在每个 ST 块中，空间注意力仅在单一时间步内的 \(1\times H\times W\) 个 Token 上计算，时间注意力则在跨越 \(T\) 个时间步的 \(T\times 1\times 1\) 个相同空间位置 Token 上计算。这使得核心计算成本随帧数更接近线性增长，而不是直接对全体 \(T\times H\times W\) 个 Token 做全局注意力。
+注意这里的H*W不是一帧的像素个数（甚至可能不是token个数），而是一帧的分块个数。每个分块的向量维度会经过输入投影层压缩。时空Transformer具体架构如下：
+
+第一步：空间特征交互。输入的 Token 首先进入空间注意力层（Spatial Attention），只与同一帧内的其他 Token 交换信息。
+
+第二步：时间特征交互。经过空间层更新后的 Token 作为输入进入时间注意力层（Temporal Attention），与跨越不同帧但处于同一空间位置的 Token 交换信息。
+\#\#\#\# （一）空间注意力
+
+对于任意给定的第 \(t\) 帧，其对应的 Token 矩阵为 \(Z_t\in\mathbb{R}^{S\times D}\)。在这个切片上，计算标准自注意力：
+
+\[
+Q_t^S=Z_tW_Q^S,\quad K_t^S=Z_tW_K^S,\quad V_t^S=Z_tW_V^S
+\]
+
+\[
+\mathrm{SpatialAttention}(Z_t)=\mathrm{Softmax}\left(\frac{Q_t^S(K_t^S)^\top}{\sqrt{d_k}}\right)V_t^S
+\]
+
+这里，\(W_Q^S,W_K^S,W_V^S\in\mathbb{R}^{D\times d_k}\) 是空间注意力层独有的可学习权重矩阵。在这个过程中，每个 Token 只与同一时间步（同一帧）内的 \(1\times H\times W\) 个 Token 计算注意力分布。
+
+复杂度分析：对于单帧，复杂度是 \(O(S^2)\)。因为有 \(T\) 帧并行计算，总计算复杂度为 \(T\times O(S^2)=O(TS^2)\)。此时，占据计算资源主导地位的空间注意力层，其计算复杂度已经降为随帧数 \(T\) 呈线性增长。
+对于存在视觉、文本两类token混合的情况，以Seedance为例：
+
+双流架构（MMDiT Design）：借鉴 Stable Diffusion 3 的设计，空间层采用多模态自注意力（Multi-Modality Self-Attention）整合视觉和文本 Token。
+
+模态隔离的权重参数：由于视觉 Token（来自 VAE）和文本 Token（来自经过微调的 LLM）在特征分布和语义空间上存在很大差异，如果在同一空间内强制共享权重，容易导致优化冲突。因此，Seedance 在空间层为两种模态保留两套完全独立的网络权重，包括自适应层归一化（Adaptive Layer Norm, AdaLN）、\(Q,K,V\) 的投影矩阵（Projection）以及多层感知机（MLP）。
+\#\#\#\# （二）时间注意力
+
+时间注意力仅对视觉token计算，文本token不参与。在每一帧内部执行窗口划分，每个token只与过去时间段内位于同一个窗口的token交互。（下面为了简化，默认一个窗口仅1个token）
+
+对于空间上的任意固定位置 \(s\)，其在时间轴上的 Token 矩阵为 \(Z_s\in\mathbb{R}^{T\times D}\)。在此切片上计算时间维度的自注意力：
+
+\[
+Q_s^T=Z_sW_Q^T,\quad K_s^T=Z_sW_K^T,\quad V_s^T=Z_sW_V^T
+\]
+
+其中自回归生成时：
+
+由于视频具有时间先后顺序，特别是在做自回归预测时，时间层必须引入因果掩码（Causal Mask）\(M\)：
+
+\[
+\mathrm{TemporalAttention}(Z_s)=\mathrm{Softmax}\left(\frac{Q_s^T(K_s^T)^\top}{\sqrt{d_k}}+M\right)V_s^T
+\]
+
+矩阵 \(M\) 是一个上三角矩阵，对角线以上的元素为 \(-\infty\)，对角线及以下的元素为 0。这保证了在计算第 \(t\) 帧的特征时，模型只能``看''到自身和过去的帧，不能``偷看''未来帧。在这个过程中，每个 Token 只与跨越 \(T\) 个时间步的同一空间位置的 \(T\times 1\times 1\) 个 Token 计算注意力。
+对于``块内扩散，块间自回归''的范式，根据块级掩码分析即可。
+
+复杂度分析：单位置的时间注意力复杂度为 \(O(T^2)\)。由于有 \(S\) 个空间位置，总复杂度为 \(S\times O(T^2)=O(ST^2)\)。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-176}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-176}}
+
+\begin{itemize}
+\tightlist
+\item
+  Kondratyuk, D., Yu, L., Gu, X., et al.~(2023). \href{https://arxiv.org/abs/2312.14125}{VideoPoet: A Large Language Model for Zero-Shot Video Generation}. arXiv:2312.14125.
+\item
+  Villegas, R., Yang, J., Hong, S., et al.~(2022). \href{https://arxiv.org/abs/2210.02399}{Phenaki: Variable Length Video Generation from Open Domain Textual Description}. arXiv:2210.02399.
+\item
+  Peebles, W., \& Xie, S. (2023). \href{https://arxiv.org/abs/2212.09748}{Scalable Diffusion Models with Transformers}. ICCV.
+\item
+  Bruce, J., Dennis, M., Edwards, A., et al.~(2024). \href{https://arxiv.org/abs/2402.15391}{Genie: Generative Interactive Environments}. ICML.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux7684ux4e3bux8981ux8badux7ec3ux9636ux6bb5}{%
+\section{视频生成模型与生成式世界模型的主要训练阶段}\label{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux7684ux4e3bux8981ux8badux7ec3ux9636ux6bb5}}
+
+\hypertarget{ux4e00ux9884ux8badux7ec3}{%
+\subsection{一、预训练}\label{ux4e00ux9884ux8badux7ec3}}
+
+视频生成模型或生成式世界模型的预训练一般使用海量无监督视频（现业界还可为含音频的视频）数据，可能有或无文本或图像标签。模型可根据视频前面的状态、文本或图片提示等预测下一个状态，在过程中学习世界表征和物理规律，具体任务可分为 Text-to-Video-Audio、Image-to-Video-Audio、Video-Audio-to-Video-Audio（视频序列延续）、Text-to-Video、Image-to-Video、Video-to-Video 等。
+
+其中在训练视频和音频的联合生成时，模型架构会变化如下：
+
+在求解上述向量场时，网络内部采用双分支结构（Dual-branch）。视频 Token 和音频 Token 在 Transformer 的每一层不仅进行自注意力（Self-Attention）计算，还会通过交叉注意力（Cross-Attention）机制进行信息交换。
+
+在任意时间步 \(t\) 去噪时：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  视频分支会``倾听''当前音频的节奏和语义，从而微调下一帧人物的嘴型或动作幅度。
+\item
+  音频分支会``观察''画面的物理碰撞或环境变化，从而合成出精确同步的音效或回声。
+  训练过程中，针对高分辨率和长视频可增加噪声扰动比例，以提升收敛稳定性。
+\end{enumerate}
+
+训练后期，可采用``课程学习''方式，视频长度逐步扩展；模型逐渐增加流偏移以增加高噪声时间步的权重，有助于在极长的时间跨度内稳定场景级别的全局结构，减少漂移；利用光流评估器挑选高动态数据，针对性增强视频的运动幅度和平滑度。
+
+\hypertarget{ux4e8cux76d1ux7763ux5faeux8c03ux4e2dux671fux8badux7ec3}{%
+\subsection{二、监督微调/中期训练}\label{ux4e8cux76d1ux7763ux5faeux8c03ux4e2dux671fux8badux7ec3}}
+
+\hypertarget{ux4e00ux9488ux5bf9ux52a8ux4f5cux52a8ux6001ux7684ux5faeux8c03}{%
+\subsubsection{（一）针对动作动态的微调}\label{ux4e00ux9488ux5bf9ux52a8ux4f5cux52a8ux6001ux7684ux5faeux8c03}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  数据集准备
+\end{enumerate}
+
+叙事描述（Narrative Caption）：作为全局语义提示（Global Semantic Prompt），将环境信息、相机运动和时间演变结合在一起。在模型前向传播中，这些文本特征通过 DiT 架构中的交叉注意力层（Cross Attention）作为条件注入。
+
+场景静态描述（Scene-static Caption）：刻意忽略所有相机运动和动作信息。这种标注强制模型在学习阶段分离``画面长什么样''和``画面怎么动''，使模型能够学习由控制信号而非纯文本驱动的物理动态规律。
+
+密集时间描述（Dense Temporal Caption）：将长视频按时间区间切片并标注具体事件。这被用来支持时间对齐训练（Temporal Alignment Training），帮助模型理解和预测极细粒度下的时序动作。
+密集时间描述相当于在每一个时间区间 \(s_t\) 的视频后，都在上下文中加入对动作 \(a_t\) 的描述，让模型更好地学习 \(p(s_{t+1}\mid s_t,a_t)\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  微调方法
+\end{enumerate}
+
+在此阶段，模型被注入用户的动作指令以支持交互。
+
+动作表示与注入：将连续的相机旋转（Plücker 嵌入）与离散的键盘输入（多热编码的 W、A、S、D）在通道维度拼接。融合后的动作信号通过自适应层归一化（AdaLN）机制注入到 DiT 块中，动态调节特征生成。
+
+参数高效微调：为了防止模型在学习交互时出现``灾难性遗忘''，即丧失原有的高保真画质，主 DiT 块参数被冻结，仅微调新增的动作适配器层，包括动作嵌入投影和 AdaLN 参数。
+\#\#\#\# （二）Self-Forcing（自展开训练）
+
+预训练本质上是Off-policy的，这意味着长时间的自回归生成依然会导致误差累积。可让模型通过KV Cache读取自己生成的历史帧（和预训练读取``标准答案''的历史帧）、预测下一帧来进行条件训练，强制其学会从自身生成的误差和伪影中恢复。
+
+\hypertarget{ux4e09ux9488ux5bf9ux4e0dux540cux89c6ux9891ux98ceux683cux7684ux5faeux8c03}{%
+\subsubsection{（三）针对不同视频风格的微调}\label{ux4e09ux9488ux5bf9ux4e0dux540cux89c6ux9891ux98ceux683cux7684ux5faeux8c03}}
+
+在数百个基于运动类型和视觉风格精心划分的类别中，使用极高质量的人工校验数据进行微调。可以先分别调出多个专门模型，后合并，以平衡视觉保真度与提示词可控性。
+
+在多风格视频生成中，如果把写实、动漫、3D 渲染等所有数据混在一个数据集里对单一模型进行监督微调（SFT），很容易引发参数优化方向冲突，导致灾难性遗忘或风格污染。
+
+分化训练：团队首先在针对不同视觉风格和运动类型精心构建的多个子数据集上，分别微调出多个专门模型（Specialized Models）。
+
+权重融合：由于这些模型都从同一个预训练 Base 模型出发，它们的参数分布处于同一损失盆地（Loss basin）内，因此无需增加额外训练算力，就可以直接在代数层面对权重矩阵进行合并。常见操作包括：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  权重平均（Weight Averaging）：将多个专家模型的参数矩阵取算术平均。
+\item
+  球面线性插值（SLERP）：在高维超球面上插值，比直接平均更好地保留大矩阵的非线性几何特征。
+\item
+  任务算术（Task Arithmetic）：提取每个专家的任务向量（专家权重减去基础权重），并按比例叠加回基础模型中。
+\end{enumerate}
+
+通过 Merge 操作，最终的单体模型能同时继承不同专家的视觉保真度和提示词控制力，并减少过拟合。
+关于球面线性插值（SLERP）：（仅适用于全量微调的大模型，不适合用LoRA微调的大模型）
+
+要理解 SLERP，可以先对比最简单的线性插值（LERP，即权重平均/Model Soup）。如果把模型权重张量看作高维空间中的两个点，LERP 是直接在两点之间连一条直线。其致命缺点是，直线中间部分会``穿过''球体内部，导致插值后的向量模长（可理解为权重能量或方差）严重衰减，从而丢失模型原有的特征表达能力。
+
+扩散模型的数学底座建立在各向同性的标准正态分布 \(\mathcal{N}(0,I)\) 上。这个极高维高斯分布在几何拓扑上可以看作一个高维超球面。
+
+如果使用线性插值，中间帧的噪声方差会下降，模型会认为这是一种``不合法、被污染''的噪声，从而解码出模糊或结构崩坏的中间帧。只有使用 SLERP 沿着高斯超球面滑动，才能保证每一帧的过渡噪声都符合 \(\mathcal{N}(0,I)\) 的分布要求，从而让扩散模型逐帧去噪生成平滑的渐变动画。
+
+在扩散模型中，权重方差的衰减会直接导致网络输出的激活值幅度剧烈下降。反映在生成的视频或图像上，就是画面发灰、对比度下降、高频细节丢失，这在计算机视觉中可称为``模型坍缩''。
+
+假设有两个单位向量 \(v_1\) 和 \(v_2\)，它们之间的夹角为 \(\Omega\)。引入插值系数 \(t\in[0,1]\)，在它们构成的二维平面上寻找插值向量 \(v(t)\)，使得 \(v(t)\) 也是单位向量，且 \(v_1\) 到 \(v(t)\) 的夹角为 \(t\Omega\)，\(v(t)\) 到 \(v_2\) 的夹角为 \((1-t)\Omega\)。SLERP 公式为：
+
+\[
+v(t)=\frac{\sin((1-t)\Omega)}{\sin\Omega}v_1+\frac{\sin(t\Omega)}{\sin\Omega}v_2
+\]
+
+在实际 AI 工程代码（如广泛使用的 \texttt{mergekit} 工具）中，模型动辄包含数十亿参数的矩阵，不能直接对任意矩阵套用上述公式，需要经过一套严密的工程处理。以合并模型 A（权重 \(\theta_A\)）和模型 B（权重 \(\theta_B\)）为例：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  形状与词表对齐（Tensor Matching）：合并前扫描两者网络结构。如果存在形状或词表（Vocab）不匹配，通过注入空张量（Empty tensors）进行填充（Padding），强制对齐到相同维度。
+\item
+  展平为一维向量（Flattening）：提取网络中对应的张量层，并将其拉平为一维向量 \(\mathbf{v}_A\) 和 \(\mathbf{v}_B\)。
+\item
+  模长提取与归一化（Normalization）：计算两者的原始欧几里得模长 \(\|\mathbf{v}_A\|\) 和 \(\|\mathbf{v}_B\|\)，然后将它们除以各自模长，变成单位超球面上的方向向量 \(\hat{\mathbf{v}}_A\) 和 \(\hat{\mathbf{v}}_B\)。
+\item
+  计算夹角余弦（Dot Product）：计算点积 \(d=\hat{\mathbf{v}}_A\cdot\hat{\mathbf{v}}_B\)，即 \(\cos\Omega\)。
+\item
+  极值与共线保护（Fallback Check）：代码实现中通常会设置阈值，例如 \texttt{DOT\_THRESHOLD\ =\ 0.9995}。如果点积极其接近 1，意味着两个模型在该参数层几乎平行，\(\Omega\approx 0\)，\(\sin\Omega\) 会趋近于 0，导致公式中出现除以零的问题。此时算法会自动退化为普通线性插值（LERP）。
+\item
+  球面插值计算（Apply SLERP）：计算夹角 \(\Omega=\arccos(d)\)，根据设定的融合比例 \(t\) 代入 SLERP 公式，得到方向插值后的新单位向量 \(\hat{\mathbf{v}}_{\mathrm{new}}\)。
+\item
+  模长恢复（Magnitude Scaling）：对原始模长也做一次线性插值：
+\end{enumerate}
+
+\[
+M=(1-t)\|\mathbf{v}_A\|+t\|\mathbf{v}_B\|
+\]
+
+然后把新模长乘到方向向量上：
+
+\[
+\mathbf{v}_{\mathrm{new}}=\hat{\mathbf{v}}_{\mathrm{new}}\times M
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{7}
+\tightlist
+\item
+  重构张量（Reshape）：把一维的 \(\mathbf{v}_{\mathrm{new}}\) 重新折叠回原始多维矩阵形状，替换掉原模型中的权重。
+\end{enumerate}
+
+\hypertarget{ux4e09rl}{%
+\subsection{三、RL}\label{ux4e09rl}}
+
+\hypertarget{ux4e00ux89c6ux9891ux751fux6210ux4e2dux7684rlhf}{%
+\subsubsection{（一）视频生成中的RLHF}\label{ux4e00ux89c6ux9891ux751fux6210ux4e2dux7684rlhf}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  纯净视频预测：不同于语言模型按 Token 输出，扩散模型的每次采样轨迹是连续噪声演变。在训练迭代中，模型模拟完整的视频推理流水线，由当前去噪策略直接预测不带噪声的生成视频。
+\item
+  多维奖励评估：将预测视频送入三个独立奖励模型，包括基础模型（评估图文对齐和结构）、运动模型（惩罚伪影、奖励流畅度）以及美学模型（从关键帧提取视觉质感评分）。
+\item
+  复合梯度反传：将多个奖励模型得分线性组合，通过无 Critic 网络的 GRPO 机制，利用同一 Prompt 下生成组内的相对优势，直接最大化复合奖励，并将梯度反传给扩散模型。
+\item
+  多轮动态博弈：为了防止奖励黑客（Reward Hacking），例如模型为获取高美学分而让画面彻底静止，生成模型和奖励模型之间执行多轮迭代学习，从而稳步提高人类偏好对齐能力。
+\end{enumerate}
+
+\hypertarget{ux4e8cabot-worldux4e2dux5229ux7528rlux5b66ux4e60ux7269ux7406ux89c4ux5f8b}{%
+\subsubsection{（二）ABot-World中利用RL学习物理规律}\label{ux4e8cabot-worldux4e2dux5229ux7528rlux5b66ux4e60ux7269ux7406ux89c4ux5f8b}}
+
+高德通过两个核心组件，把优化目标从像素相似度转向物理一致性：
+
+Proposer module：负责根据当前任务，列一份物理规则清单，说清哪些能做，哪些绝对不行。
+
+Scorer module：对模型生成的多个结果逐帧打分。
+
+然后用Diffusion-DPO强化合规行为，物理正确就奖励，物理错误就扣分。反复纠正下来，模型自然学会了``什么动作不违反物理''，例如能够根据输入的末端位姿和夹爪状态，推演出未来的时空动力学变化，不再只是像素层面的``看起来像''。
+
+\hypertarget{ux56dbux6a21ux578bux84b8ux998fux4e0eself-forcing}{%
+\subsection{四、模型蒸馏与Self Forcing}\label{ux56dbux6a21ux578bux84b8ux998fux4e0eself-forcing}}
+
+通过以上方式训练出的模型，但在与物理世界的交互中，低延时往往非常重要，故需要更少的扩散步数等，这就需要对模型进行蒸馏。此外，有时也会用具有双向注意力的扩散模型作为教师模型，具有因果注意力的自回归模型作为学生模型，使其更具有对未来的全局视野。
+
+此外，视频生成模型或生成式世界模型在预训练时是以 Ground Truth 作为上下文训练的，这是一个 Off-Policy 的过程。长轨迹运行时，如果出现一点误差，就容易进入 OOD 区域导致崩溃，故我们要在训练时让模型适应在自身生成的轨迹作为上下文的条件下，进行生成，完成自主纠偏的过程，即 Self Forcing。研究表明，Self Forcing 需要运用分布匹配蒸馏（DMD）的方法才能稳定训练。
+
+具体方法见扩散模型的蒸馏与Self forcing一节。
+
+\hypertarget{ux4e94ux751fux6210ux5bf9ux6297ux4f18ux5316}{%
+\subsection{五、生成对抗优化}\label{ux4e94ux751fux6210ux5bf9ux6297ux4f18ux5316}}
+
+视频生成模型或生成式世界模型要``模拟真实世界''，一种思路就是让它``模拟得更真实''。
+
+对抗优化（Adversarial Optimization）：因为在纯 DMD 蒸馏中缺乏真实数据的直接监督，学生容易继承教师偏差。为了提升生成质量，在伪分数网络上挂载一个 GAN 分类头 \(D(\cdot)\) 进行对抗训练。其对抗目标函数分别为生成器损失 \(\mathcal{L}_G\) 与判别器损失 \(\mathcal{L}_D\)：
+
+\[
+\begin{aligned}
+\mathcal{L}_G
+&=
+\mathbb{E}_{p(\tilde{x})}
+\left[
+f\left(1-D(\mu_{\mathrm{fake}}(\tilde{x}_t,t,a))\right)
+\right]
+\end{aligned}
+\]
+
+\[
+\begin{aligned}
+\mathcal{L}_D
+&=
+\mathbb{E}_{p(x)}
+\left[
+f\left(D(\mu_{\mathrm{fake}}(x_t,t,a))\right)
+\right]
+\\
+&\quad -
+\mathbb{E}_{p(\tilde{x})}
+\left[
+f\left(1-D(\mu_{\mathrm{fake}}(\tilde{x}_t,t,a))\right)
+\right]
+\end{aligned}
+\]
+
+其中，\(f\) 为 Softplus 函数，\(p(x)\) 与 \(p(\tilde{x})\) 分别为真实视频与合成视频分布。
+
+\hypertarget{ux516dsoarux81eaux6211ux7ea0ux504fux8badux7ec3}{%
+\subsection{六、SOAR：自我纠偏训练}\label{ux516dsoarux81eaux6211ux7ea0ux504fux8badux7ec3}}
+
+腾讯混元团队提出的HY-SOAR让模型在去噪过程中学会自我反思和纠偏。我们知道，SFT只教模型处理``理想轨迹''，但推理时模型走的是自己的轨迹，一旦早期去噪出现偏移，后续状态就进入了训练中从未见过的区域；RL则将数据中丰富的轨迹级信息压缩成了一个标量奖励，大量可用于纠正中间步骤的信号在转化中丢失，当数据质量足够高时，瓶颈在于利用率。RL在利用率上打了折扣，SOAR的目标是把这个折扣拿回来。
+
+SOAR的工作流：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  对真实样本执行一步无梯度前向推理，模拟模型自身可能产生的偏离；
+\item
+  对偏离状态重加噪，构造辅助训练点；
+\item
+  以原始样本为锚点，计算解析的纠正目标。
+\end{enumerate}
+
+SOAR不是要替代RL，而是为RL提供一个更稳定的起点。当前RL的一个核心挑战是基础模型本身的生成轨迹还不够稳定，直接用奖励信号驱动探索，模型容易在不稳定的区域做出过激调整，导致某个指标提升但其他维度崩塌。SOAR可以先把模型的轨迹稳定性拉到一个更高的基线，在此基础上再接入RL做偏好探索，模型就能在一个更安全的区间内进行风格调整和质量优化。
+
+\hypertarget{ux4e03ux6570ux636eux5904ux7406}{%
+\subsection{七、数据处理}\label{ux4e03ux6570ux636eux5904ux7406}}
+
+高质量训练数据是上述模型收敛的基础，数据清洗通常是高度自动化的过滤流水线：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  镜头分割：利用帧间差异检测或预训练检测器，将原始长视频切分为最大 12 秒的连贯片段。
+\item
+  视觉遮挡修复：结合启发式规则和目标检测模型，识别并自适应裁剪水印、字幕等噪声区域。
+\item
+  语义去重：利用内部视频表征模型提取特征向量并进行聚类。在高度相似的簇中，仅保留美学质量得分最高的样本。
+\item
+  长尾分布重平衡：统计视频在动作、风格、分辨率等维度的概率分布。对头部冗余类别进行降采样，对尾部类别进行概率加权，确保联合分布均衡。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-177}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-177}}
+
+\begin{itemize}
+\tightlist
+\item
+  Bruce, J., Dennis, M., Edwards, A., et al.~(2024). \href{https://arxiv.org/abs/2402.15391}{Genie: Generative Interactive Environments}. ICML.
+\item
+  Yang, M., Du, Y., Ghasemipour, S. K. S., Tompson, J., Schuurmans, D., \& Abbeel, P. (2023). \href{https://arxiv.org/abs/2309.17080}{GAIA-1: A Generative World Model for Autonomous Driving}. arXiv:2309.17080.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux6269ux6563ux6a21ux578bux7684ux84b8ux998fux4e0eself-forcing}{%
+\section{扩散模型的蒸馏与Self Forcing}\label{ux6269ux6563ux6a21ux578bux7684ux84b8ux998fux4e0eself-forcing}}
+
+视频扩散模型虽然视觉保真度极高，但由于需要迭代去噪全部帧，生成一段短视频通常需要1到2分钟，这在实时人机交互和机器人领域并不现实。通过改进的蒸馏技术，可将庞大缓慢的模型转化为极速的实时模型。同时，视频生成模型仅以Ground Truth为上文进行Next State Prediction极易导致训练崩溃，需要自主适应长轨迹生成，具备在过程中纠错的能力。
+
+\hypertarget{ux4e00ux4e00ux81f4ux6027ux84b8ux998f}{%
+\subsection{一、一致性蒸馏}\label{ux4e00ux4e00ux81f4ux6027ux84b8ux998f}}
+
+一致性模型（Consistency Models, CM）的原始思想是：无论在概率流 ODE 轨迹上的哪一个时间点 \(t\)，我们都训练一个学生网络 \(f_\theta(x_t,t)\)，让它直接一步映射回轨迹的终点（即干净数据 \(x_0\)）。其数学约束为：
+
+\[
+f_\theta(x_t,t)=f_\theta(x_{t'},t')
+\]
+
+这种方法在训练中一般用于模型轨迹初始化，让学生模型直接利用教师模型生成的轨迹训练，快速学会去噪。由于教师模型往往每生成一帧都需要走较多的步数（如 \(N=48\) 步），但为了降低延迟，学生模型并不能走这么多步，故只采样关键时间步。由于教师模型和学生模型走的步数不同，这里改为预测真实数据，而不是教师预测的噪声。
+
+为了让模型具备快速生成和自回归（逐块生成）的能力，第一步需要为学生模型打下坚实的基础，让它学会用极少的步数完成原本需要很多步的去噪过程。
+
+\begin{itemize}
+\tightlist
+\item
+  工作流：
+
+  \begin{enumerate}
+  \def\labelenumi{\arabic{enumi}.}
+  \tightlist
+  \item
+    系统首先运行庞大的教师模型，生成完整的 \(N=48\) 步去噪轨迹数据 \(\{x_{t_j}\}_{j=0}^{N}\)。
+  \item
+    算法从这条极长的轨迹中，极其精简地子采样出 \(k=4\) 个关键时间步。
+  \item
+    因果学生生成器 \(g_\phi\) 接收带噪潜变量和多模态条件 \(c\)（文本、音频、参考图像），并尝试在这 4 步内直接预测出没有任何噪声的纯净视频块 \(x_0\)。
+  \end{enumerate}
+\item
+  数学公式：
+\end{itemize}
+
+在此阶段，学生模型通过最小化预测值与真实无噪数据之间的均方误差进行学习。
+
+\[
+\mathcal{L}_{ODE}=\mathbb{E}\left[\left\|g_\phi(x_{t_j},c)-x_0\right\|_2^2\right]
+\]
+
+\hypertarget{ux4e8cux8f68ux8ff9ux5206ux6bb5ux4e00ux81f4ux6027ux84b8ux998ftscd}{%
+\subsection{二、轨迹分段一致性蒸馏（TSCD）}\label{ux4e8cux8f68ux8ff9ux5206ux6bb5ux4e00ux81f4ux6027ux84b8ux998ftscd}}
+
+直接让网络跨越极长的时间步去预测 \(x_0\)，对于视频这种高维且高度非线性的数据来说，学习难度极大，容易陷入局部最优并导致画面模糊。引入自 HyperSD 的 TSCD 技术，其核心思想是``分而治之''。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  时间域分段：将完整的时间轨迹 \([0,T]\) 划分为 \(k\) 个连续的子区间：
+\end{enumerate}
+
+\[
+[t_0,t_1],[t_1,t_2],\ldots,[t_{k-1},t_k],\quad t_0=0,\ t_k=T
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\item
+  分段一致性约束：在每一个子区间 \([t_{i-1},t_i]\) 内，学生网络不再被强迫去预测遥远的 \(x_0\)，而是只被要求保持该区间内的一致性。在生成（去噪）时，如果模型当前处于时间点 \(t_i\)，它不再好高骛远地去预测遥远的 \(x_0\)，而是只预测当前分段的下界端点，即更接近真实数据的状态 \(x_{t_{i-1}}\)。
+\item
+  优势：通过将一条极长且曲折的积分曲线切分成多段相对平滑的短曲线，学生模型拟合扩散过程的难度大幅降低。在推理时，模型只需在每个预设的宏观节点跳跃，就能极其精确地逼近完整的扩散轨迹，从而在较少步数下提供速度与保真度的强劲平衡，实现 4 倍加速。
+\end{enumerate}
+
+\hypertarget{ux4e09self-forcingux4e0eux5206ux5e03ux5339ux914dux84b8ux998fdmd}{%
+\subsection{三、Self forcing与分布匹配蒸馏（DMD）}\label{ux4e09self-forcingux4e0eux5206ux5e03ux5339ux914dux84b8ux998fdmd}}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-21}{%
+\subsubsection{（一）核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-21}}
+
+基于 Teacher Forcing 的一致性蒸馏是一个 Off-Policy 的过程。由于学生模型的生成在块间是自回归的，一旦学生模型的生成轨迹发生偏离，就会进入 OOD 区域，这就意味着模型极不稳定。我们希望进行 On-Policy 蒸馏，即 Self Forcing：在学生模型已有生成的基础上，让学生生成的最终数据分布 \(p_\Phi(x)\) 接近真实的物理世界数据分布 \(p_{\mathrm{data}}(x)\)（可以由教师模型近似代替）。
+
+研究表明，在Self forcing中如果直接对学生生成的数据和真实数据用MSE Loss，极易导致训练崩溃，但用分布匹配蒸馏方法能解决这个问题。后续会解释原因。
+
+在概率统计中，衡量两个分布差异最经典的工具是 Kullback-Leibler（KL）散度。我们希望最小化 \(\mathcal{D}_{\mathrm{KL}}(p_\phi\|p_{\mathrm{data}})\)。
+
+重点来了：在 Score-based 扩散模型的数学框架下，要通过梯度下降来缩小这两个分布的差距，其损失函数对生成数据的梯度，恰好等于这两个分布的``分数''（Score）之差：
+
+\[
+\begin{aligned}
+\nabla_x\mathcal{D}_{\mathrm{KL}}(p_\phi\|p_{\mathrm{data}})
+&=\nabla_x\log p_\phi(x)-\nabla_x\log p_{\mathrm{data}}(x)
+\end{aligned}
+\]
+
+第二项是真实去噪数据分布对数的梯度，根据扩散模型的基本原理，教师模型学习真实数据分布，故这一项约等于教师模型输出的噪声预测；第一项是学生模型预测的去噪数据分布对数的梯度，我们用一个``评论家网络''学习学生模型输出数据分布，在其上进行加噪，噪声预测即为本项，从而计算梯度，更新学生模型的参数。
+
+\hypertarget{ux4e8cux5de5ux4f5cux6d41-7}{%
+\subsubsection{（二）工作流}\label{ux4e8cux5de5ux4f5cux6d41-7}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  评论家网络学习学生模型的去噪方式
+\end{enumerate}
+
+评论家网络的工作流如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  学生生成器 \(g_\phi\) 根据高斯噪声 \(z\) 和多模态条件 \(c\) 生成预测视频帧 \(\hat{x}_0\)，即 \(\hat{x}_0=g_\phi(z,0,c)\)。
+\item
+  系统给这个生成的 \(\hat{x}_0\) 重新人为添加 \(\tau\) 时刻的噪声，得到 \(x_\tau\)。
+\item
+  评论家网络 \(s_\psi\) 的任务是充当``裁判''，它需要紧紧追踪学生生成器不断变化的生成分布，尝试对 \(x_\tau\) 进行去噪，以还原出 \(\hat{x}_0\)。
+\end{enumerate}
+
+数学公式为：
+
+\[
+\begin{aligned}
+\mathcal{L}_{\mathrm{critic}}
+&=\mathbb{E}_{\tau}\left[\left\|s_\psi(x_\tau,\tau,c)-\hat{x}_0\right\|_2^2\right]
+\end{aligned}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  根据教师模型与评论家网络的差距，梯度更新学生模型
+\end{enumerate}
+
+现在我们有了不断生成的``学生''和一个能追踪学生水平的``裁判''，最后一步就是引入一个冻结的、拥有绝对正确知识的``金牌教师分数网络'' \(s_\theta\)，来强行纠正学生的错误。
+
+注意：多模态条件 \(c\) 的加入使这里的计算极易崩溃，因此论文才强调必须搭配高质量的训练数据和激进的学习率调度。
+
+整个梯度更新交替进行的工作流如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  单步生成：学生生成器 \(g_\phi\) 根据噪声和条件直接生成预测数据 \(\hat{x}_0\)。
+\item
+  随机加噪：系统给这个生成的 \(\hat{x}_0\) 重新人为添加 \(\tau\) 时刻的噪声，得到加噪数据 \(\hat{x}_\tau\)（文档文字部分也记作 \(x_\tau\)）。
+\item
+  计算分数差异：将同一个加噪数据 \(\hat{x}_\tau\) 和条件 \(c\) 同时喂给``金牌教师''网络 \(s_\theta\) 和``裁判''评论家网络 \(s_\psi\)。
+\item
+  立即反向传播：计算两者给出的分数（梯度）差异，这个差值构成了精准的惩罚信号，并通过链式法则立刻反向传播给学生生成器 \(g_\phi\)，更新其参数。数学公式表示为：
+\end{enumerate}
+
+\[
+\begin{aligned}
+\nabla_\phi\mathcal{L}_{\mathrm{DMD}}
+&=\mathbb{E}_{\tau}\left[
+\frac{\partial\hat{x}_0}{\partial\phi}
+\frac{s_\psi(\hat{x}_\tau,\tau,c)-s_\theta(\hat{x}_\tau,\tau,c)}{\tau}
+\right]
+\end{aligned}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  交替更新：整个 DMD 训练过程就是不断在``更新评论家网络''和``更新学生生成器''之间交替进行。
+\end{enumerate}
+
+这个过程是On-policy的，因为是用学生模型的生成进行加噪后，再作为数据给教师模型和评论家网络。
+
+\hypertarget{ux4e09ux4e3aux4ec0ux4e48dmdux6548ux679cux826fux597dmse-lossux5374ux4f1aux5d29ux6e83}{%
+\subsubsection{（三）为什么DMD效果良好，MSE Loss却会崩溃？}\label{ux4e09ux4e3aux4ec0ux4e48dmdux6548ux679cux826fux597dmse-lossux5374ux4f1aux5d29ux6e83}}
+
+MSE 的致命缺陷（均值回归问题）：如果要求 Student 模型只用 1 步就生成图像，它生成的轨迹必然会和多步的 Teacher 模型不同。比如，给定相同的文本，Teacher 画了一只黄色的猫，Student 画了一只黑色的猫。两者都是合理的，但如果在像素级强行计算 MSE，系统会认为 Student 犯了弥天大错，并强迫 Student 去拟合黄色和黑色的平均值，最终模型会生成一团模糊的灰色。
+
+DMD 的解决方案（分布级对齐）：DMD 放弃了像素级的强对齐，转而使用 KL 散度来衡量``生成分布''和``真实分布''的整体差异。其核心梯度近似为：
+
+\[
+\begin{aligned}
+\nabla_\theta\mathcal{L}_{\mathrm{DMD}}
+&\approx
+\mathbb{E}\left[
+w(t)
+\left(\hat{\epsilon}_{\mathrm{fake}}(\hat{x}_t,t)-\hat{\epsilon}_{\mathrm{real}}(\hat{x}_t,t)\right)
+\frac{\partial\hat{x}_t}{\partial\theta}
+\right]
+\end{aligned}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \(\hat{\epsilon}_{\mathrm{real}}\)：由冻结的强大 Teacher 模型（代表真实数据分布）计算出的分数。
+\item
+  \(\hat{\epsilon}_{\mathrm{fake}}\)：由一个专门拟合 Student 虚假数据的模型计算出的分数。
+\end{itemize}
+
+DMD 的逻辑是：只要 Student 生成的内容（比如黑猫）符合真实世界的概率分布，Teacher 认为黑猫也很合理，\(\hat{\epsilon}_{\mathrm{real}}\) 和 \(\hat{\epsilon}_{\mathrm{fake}}\) 差异很小，就不产生惩罚梯度。
+
+当然，DMD也存在缺点。除算力开销大、需要强大的教师模型外，还需考虑不稳定问题：
+
+MSE 的最大优点是``老实且稳定''。对于任意一个像素点，预测值和真实值的欧氏距离是一个极其平滑的凸函数近似（在局部），这使得损失在极其庞大的集群上进行分布式训练时，能非常稳定地下降，这也是 Scaling Law 的基石。
+
+而分布匹配（无论是基于对抗网络的 GAN Loss，还是基于分数匹配的 DMD）是一个动态博弈的过程。
+
+\begin{itemize}
+\tightlist
+\item
+  不稳定性：在训练过程中，Student 模型和评估分布差异的 Fake 模型（或判别器）相互拉扯。如果其中一方进化过快，梯度就会瞬间爆炸或消失，导致整个耗资巨大的训练集群停摆。
+\item
+  模式崩溃（Mode Collapse）：为了使得全局分布差异最小，模型常常会``投机取巧''。它发现只要反复生成某几种它极其擅长的高质量画面（比如永远只生成慢动作的静止风景），就能在分布评估中获得高分。这会导致模型丧失生成多样性（Diversity）。
+\end{itemize}
+
+\hypertarget{ux56dbux68afux5ea6ux622aux65ad}{%
+\subsubsection{（四）梯度截断}\label{ux56dbux68afux5ea6ux622aux65ad}}
+
+在标准的自回归生成中，如果我们生成一个长度为 \(N\) 的视频序列，且每一帧需要经过 \(T\) 步扩散去噪（Diffusion Denoising Steps），那么完整的计算图深度将是 \(N\times T\)。
+
+如果使用标准的随时间反向传播（BPTT, Backpropagation Through Time），我们需要将这 \(N\times T\) 步的所有前向激活值（Activations）都保存在显存中，以便反向传播时计算梯度。这种操作会导致显存占用随序列长度和扩散步数呈指数级爆炸，即便是拥有 80GB 显存的顶级算力卡（如 H100）也无法承受几秒钟视频的完整 BPTT。
+
+因此，随机梯度截断通过在计算图上进行``剪枝''，在保证模型能够学习到容错能力的前提下，将显存占用限制在一个恒定的、可接受的范围内。
+
+具体截断方法包括以下两种：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  沿时间步数截断
+\end{enumerate}
+
+这指的是第i步生成中的梯度最多回传到第i-m步，防止计算图深度过大。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  沿去噪步数截断
+\end{enumerate}
+
+即使切断了帧与帧之间的梯度，单帧内部的 \(T\) 步去噪（哪怕在使用 Few-step 模型时 \(T=4\)）依然会占用较多显存。
+
+随机截断策略会在训练的每次迭代中，为序列中的每一帧 \(i\) 随机采样一个去噪步数 \(s_i\in\{1,2,\ldots,T\}\)。在反向传播时，只计算从第 \(T\) 步到第 \(s_i\) 步的梯度，直接丢弃更早去噪步骤的计算图。这不仅节省了显存，还引入了随机性，起到了类似 Dropout 的正则化效果。
+
+\hypertarget{ux4e94ux5de5ux7a0bux7b56ux7565}{%
+\subsubsection{（五）工程策略}\label{ux4e94ux5de5ux7a0bux7b56ux7565}}
+
+多模态的引入使得DMD训练极其脆弱。可改进如下：
+
+\begin{itemize}
+\tightlist
+\item
+  优化多模态条件数据：使用视觉大模型（如 Qwen-Image）提升参考图像的质量，并使用 Qwen2.5-VL 强化文本提示词中的动态特征描述，以防止低质量数据引发的误差崩塌。
+\item
+  充分收敛的 ODE 初始化：不同于以往文本到视频的蒸馏，本模型必须在 ODE 阶段训练至完全收敛（20k 步），以此为后续敏感的生成器-评论家博弈提供极其稳固的起点。
+\item
+  激进的优化调度：鉴于多模态蒸馏的有效学习窗口非常短暂（通常在几百步后开始退化），研究团队将学习率翻倍，并大幅提升教师模型的分类器引导（CFG）比例，从而在窗口期内强制模型学会唇轨同步等高难度对齐任务。
+\end{itemize}
+
+\hypertarget{ux56dbux6d41ux5339ux914dux6a21ux578bux4e2dux7684dmd}{%
+\subsection{四、流匹配模型中的DMD}\label{ux56dbux6d41ux5339ux914dux6a21ux578bux4e2dux7684dmd}}
+
+目标是最小化学生生成分布 \(p_{\mathrm{fake}}\) 与真实数据分布 \(p_{\mathrm{real}}\) 之间的 KL 散度。其关于生成器参数 \(\theta\) 的核心梯度表达式如下：
+
+\[
+\begin{aligned}
+\nabla_\theta\mathcal{L}_{\mathrm{DMD}}
+&=
+\mathbb{E}_{z,\epsilon,t}\left[
+\omega(t)
+\left(v_{\mathrm{teacher}}(x_t,t)-v_{\mathrm{fake}}(x_t,t)\right)
+\nabla_\theta G_\theta(z)
+\right]
+\end{aligned}
+\]
+
+其中各变量的含义如下：
+
+\begin{itemize}
+\tightlist
+\item
+  \(z\sim\mathcal{N}(0,I)\) 是输入给学生生成器的初始噪声。
+\item
+  \(G_\theta(z)\) 是学生模型生成的图像（即假样本）。
+\item
+  \(\epsilon\sim\mathcal{N}(0,I)\) 是用于构造中间状态的参考噪声。
+\item
+  \(t\in[0,1]\) 是时间步，通常从均匀分布中采样。
+\item
+  \(x_t=tG_\theta(z)+(1-t)\epsilon\) 是按照最优传输（Optimal Transport）路径在时间步 \(t\) 插值得到的中间状态。
+\item
+  \(v_{\mathrm{teacher}}(x_t,t)\) 是预训练的教师流匹配模型（如 SD3、Flux 等大型流匹配模型）在该状态下预测的真实向量场，它代表指向真实数据流形的方向。
+\item
+  \(v_{\mathrm{fake}}(x_t,t)\) 是一个伴随训练的假向量场预测器（Fake Vector Field Estimator），它负责拟合当前学生模型生成轨迹的向量场。
+\item
+  \(\omega(t)\) 是依赖于时间的权重函数。
+\end{itemize}
+
+要理解上述表达式，我们需要推导流匹配中的向量场 \(v_t(x_t)\) 与边缘得分函数 \(\nabla_{x_t}\log p_t(x_t)\) 之间的内在数学联系。
+
+在最优传输条件流匹配（OT-CFM）中，概率路径定义为从噪声到数据的直线插值：
+
+\[
+x_t=t x_1+(1-t)x_0
+\]
+
+其中 \(x_0\sim\mathcal{N}(0,I)\) 代表高斯先验，\(x_1\sim p_{data}\) 代表目标数据。给定数据终点 \(x_1\) 后，\(x_t\) 的条件分布为一个高斯分布：
+
+\[
+p_t(x_t|x_1)=\mathcal{N}\left(x_t;t x_1,(1-t)^2I\right)
+\]
+
+根据条件高斯分布的性质，边缘得分函数可以表示为条件得分的期望：
+
+\[
+\begin{aligned}
+\nabla_{x_t}\log p_t(x_t)
+&=
+\mathbb{E}_{x_1\sim p(x_1|x_t)}
+\left[
+\nabla_{x_t}\log p_t(x_t|x_1)
+\right]
+\end{aligned}
+\]
+
+对条件分布求导有：
+
+\[
+\begin{aligned}
+\nabla_{x_t}\log p_t(x_t|x_1)
+&= -\frac{x_t-tx_1}{(1-t)^2}
+\end{aligned}
+\]
+
+代入期望中得到边缘得分：
+
+\[
+\begin{aligned}
+\nabla_{x_t}\log p_t(x_t)
+&=
+\frac{t\mathbb{E}[x_1|x_t]-x_t}{(1-t)^2}
+\end{aligned}
+\]
+
+在流匹配中，目标向量场 \(v_t(x_t)\) 定义为路径导数 \(\dot{x}_t=x_1-x_0\) 的条件期望。由于 \(x_0=\frac{x_t-tx_1}{1-t}\)，可以得到：
+
+\[
+\begin{aligned}
+\dot{x}_t=x_1-\frac{x_t-tx_1}{1-t}
+&=
+\frac{x_1-x_t}{1-t}
+\end{aligned}
+\]
+
+取给定 \(x_t\) 的条件期望：
+
+\[
+\begin{aligned}
+v_t(x_t)=\mathbb{E}[\dot{x}_t|x_t]
+&=
+\frac{\mathbb{E}[x_1|x_t]-x_t}{1-t}
+\end{aligned}
+\]
+
+从中可以反解出数据 \(x_1\) 的后验期望：
+
+\[
+\mathbb{E}[x_1|x_t]=x_t+(1-t)v_t(x_t)
+\]
+
+将解出的 \(\mathbb{E}[x_1|x_t]\) 代回得分函数公式：
+
+\[
+\begin{aligned}
+\nabla_{x_t}\log p_t(x_t)
+&=
+\frac{t(x_t+(1-t)v_t(x_t))-x_t}{(1-t)^2}
+\\
+&=
+\frac{(t-1)x_t+t(1-t)v_t(x_t)}{(1-t)^2}
+\\
+&=
+\frac{t v_t(x_t)-x_t}{1-t}
+\end{aligned}
+\]
+
+这样，我们就找到了得分函数和流匹配速度场之间的关系。
+
+设真实数据的得分函数值为 \(s_{real}\)，学生数据的得分函数值为 \(s_{fake}\)，我们知道：
+
+\[
+\begin{aligned}
+\nabla_\theta\mathcal{L}_{DMD}
+&\propto
+\mathbb{E}\left[
+w(t)
+\left(s_{\mathrm{real}}(x_t,t)-s_{\mathrm{fake}}(x_t,t)\right)
+\frac{\partial x_t}{\partial\theta}
+\right]
+\end{aligned}
+\]
+
+而由前面的推导：
+
+\[
+\begin{aligned}
+s_{\mathrm{real}}(x_t,t)-s_{\mathrm{fake}}(x_t,t)
+&=
+\frac{t v_{\mathrm{real}}(x_t,t)-x_t}{1-t}
+\\
+&\quad-
+\frac{t v_{\mathrm{fake}}(x_t,t)-x_t}{1-t}
+\\
+&=
+\frac{t}{1-t}\left(v_{\mathrm{real}}(x_t,t)-v_{\mathrm{fake}}(x_t,t)\right)
+\end{aligned}
+\]
+
+将此结果代回梯度公式，并将链式法则 \(\nabla_\theta x_t=t\nabla_\theta G_\theta(z)\) 展开，便得到了流匹配下的 DMD 核心梯度表达式。由转换带来的系数 \(\frac{t}{1-t}\) 和链式法则产生的 \(t\) 最终被统一吸收到权重函数 \(\omega(t)\) 中。
+
+\hypertarget{ux4e94checkpointed-self-forcing}{%
+\subsection{五、Checkpointed Self Forcing}\label{ux4e94checkpointed-self-forcing}}
+
+\hypertarget{ux4e00self-forcingux7684ux95eeux9898}{%
+\subsubsection{（一）Self Forcing的问题}\label{ux4e00self-forcingux7684ux95eeux9898}}
+
+传统的 Self Forcing 算法要求学生模型和教师模型拥有相同的上下文长度。但在 Solaris 的设计中，为了让学生模型从长上下文的教师模型中获益，必须在生成学生视频时引入滑动窗口（Sliding-window）。
+
+如果在滑动窗口设置下直接进行反向传播，会遇到严重的显存问题：
+
+\begin{itemize}
+\tightlist
+\item
+  计算图冗余：每生成一帧，滑动窗口就会向前移动一步，产生一个新的上下文窗口。例如，第 1 步是帧 \(1:L_s\)，第 2 步是帧 \(2:L_s+1\)。
+\item
+  显存爆炸：深度学习框架（如 Jax）的反向传播需要将所有这些重叠的窗口同时保留在内存中。如果学生上下文长度为 \(L_s\)，总生成步数为 \(L_t\)，那么这种冗余会导致内存成本高达 \(O(L_t\cdot L_s)\)。
+\end{itemize}
+
+\hypertarget{ux4e8ccheckpointed-self-forcingux7684ux6838ux5fc3ux601dux60f3}{%
+\subsubsection{（二）Checkpointed Self Forcing的核心思想}\label{ux4e8ccheckpointed-self-forcingux7684ux6838ux5fc3ux601dux60f3}}
+
+在训练时，放弃每一步用滑动窗口的自回归方式推理，而是并行化、用注意力掩码模拟滑动窗口。但这样就无法保证自回归性，故Checkpointed Self Forcing采用了``先不带梯度进行自回归生成，再带梯度并行训练''的方法。工作流如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  无梯度的自回归展开
+\end{enumerate}
+
+这个阶段的目的是模拟推理时的自回归生成过程，收集训练所需的``历史干净上下文''和``当前带噪目标''，但在代码层面完全禁用梯度图的构建，以节省极大的显存。
+
+\begin{itemize}
+\tightlist
+\item
+  全局初始化：设定教师上下文长度 \(L_t\)（即本次生成的总帧数）和学生上下文长度 \(L_s\)（即滑动窗口的大小）。初始化两个空列表：\(X_0\)（用于存放干净估计帧）和 \(X_s\)（用于存放带噪过渡帧），并初始化一个空的 KV Cache。
+\item
+  随机采样截断步数 \(s\)：在所有的去噪时间步 \(\{t_1,\ldots,t_T\}\) 中，均匀随机抽取一个时间步 \(s\)。这个 \(s\) 就是本轮训练中设定的``停止去噪''的目标时刻，对应前文提到的 \(\sigma_{stop}\)。
+\item
+  逐帧生成循环（Outer Loop）：对于要生成的每一帧 \(i\)（从 1 到 \(L_t\)）：
+
+  \begin{itemize}
+  \tightlist
+  \item
+    注入纯噪声：为第 \(i\) 帧初始化一个纯随机噪声 \(x_{t_T}^{i}\sim\mathcal{N}(0,I)\)。
+  \item
+    内部去噪循环（Inner Loop）：从时间步 \(T\) 开始，一步步往回去噪，直到时间步 \(s\)。
+  \item
+    如果当前步正好等于截断步 \(s\)：说明到达了设定的中间噪声水平。算法会将当前的带噪状态 \(x_{t_s}^{i}\) 存入 \(X_s\) 列表中。接着，模型 \(G_\theta\) 基于这个带噪状态和当前的 KV Cache，预测出对应的干净帧 \(\hat{x}_0^i\)，并将这个干净帧存入 \(X_0\) 列表中。
+  \end{itemize}
+\end{itemize}
+
+阶段结果：我们得到了两个长度为 \(L_t\) 的序列。一个是干净历史帧序列 \(X_0=[\hat{x}_0^1,\ldots,\hat{x}_0^{L_t}]\)，另一个是带噪过渡帧序列 \(X_s=[x_{t_s}^1,\ldots,x_{t_s}^{L_t}]\)。此时显存中没有任何用于反向传播的计算图。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  数据处理
+\end{enumerate}
+
+彻底剥离梯度：对 \(X_s\) 和 \(X_0\) 再次显式调用 \texttt{stop\_grad()}，确保它们作为纯净的常数输入进入下一步。
+
+拼接序列：将长度为 \(L_t\) 的干净帧序列 \(X_0\) 和长度为 \(L_t\) 的带噪帧序列 \(X_s\) 在序列维度上拼接起来，形成一个新的长序列 \(X_{in}=[X_0,X_s]\)。此时输入序列的总长度翻倍，变为了 \(2L_t\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  掩码下的并行重计算与反向传播
+\end{enumerate}
+
+接下来开始并行重计算，每个token从之前任意抽取的噪声水平开始去噪一步。为了模拟滑动窗口注意力，构建特殊的掩码，可用四个象限表示如下：
+
+\begin{itemize}
+\tightlist
+\item
+  右下角（带噪 Queries 看带噪 Keys）：带噪帧 \(x_{t_s}^i\) 只能看它自己，不允许看其他的带噪帧，也不允许看历史的带噪帧，呈现出一条对角线。
+\item
+  左下角（带噪 Queries 看干净 Keys）：带噪帧 \(x_{t_s}^i\) 可以看过去的干净帧 \(\hat{x}_0\)，但必须严格遵守因果关系和滑动窗口限制，即只能看 \(\hat{x}_0^{i-L_s:i-1}\) 的信息，以防发生信息穿越。
+\item
+  左上角（干净 Queries 看干净 Keys）：干净帧 \(\hat{x}_0\) 按照正常的因果滑动窗口规则，看过去的干净帧。
+\item
+  右上角（干净 Queries 看带噪 Keys）：全黑，完全禁止。干净帧绝对不允许看到任何带噪帧的信息，以防发生信息穿越。
+\end{itemize}
+
+这样，显存中只需要保留一份大小为 \(O(L_t)\) 的计算图，就可以进行反向传播。
+
+\hypertarget{ux516dux5faaux73afux5185ux81eaux84b8ux998filsd}{%
+\subsection{六、循环内自蒸馏（ILSD）}\label{ux516dux5faaux73afux5185ux81eaux84b8ux998filsd}}
+
+Google DeepMind在《ELT: Elastic Looped Transformers for Visual Generation》中提出循环内自蒸馏（ILSD），以自由调节扩散模型的去噪循环次数，让每一个中间输出都是有意义的，不至于在没达到预先设定的最大去噪步数时就输出无意义的噪声，从而适配不同硬件算力（如云端用较多去噪步数生成高清图像，端侧用较少去噪步骤数生成普通图像）：
+
+\begin{itemize}
+\tightlist
+\item
+  教师路径（Teacher Path）：运行完整的最大循环次数 \(L_{\max}\)，产生最成熟、最高保真度的内部表征。
+\item
+  学生路径（Student Path）：在每一次训练迭代中，从均匀分布中随机采样一个中途循环次数 \(L_{\mathrm{int}}\)，其中 \(L_{\min}\le L_{\mathrm{int}}\lt L_{\max}\)，并在此时提取输出。
+\end{itemize}
+
+训练的目标不仅是让最终输出逼近真实标签，还要让``中间步骤的学生''去模仿``最终完成的教师''。ILSD 的联合损失函数 \(\mathcal{L}^{ILSD}_{\Theta}\) 融合了三项：
+
+\begin{itemize}
+\tightlist
+\item
+  第一项是教师（\(L_{\max}\)）针对真实数据 \(y\) 的目标损失（Ground-Truth Loss）。
+\item
+  第二项是学生（\(L_{\mathrm{int}}\)）针对真实数据的目标损失。
+\item
+  第三项是蒸馏损失，促使学生拉近与教师输出的距离。\(\mathrm{sg}\) 意味着教师预测在这部分停止梯度传递（stop-gradient）。
+\item
+  \(\lambda\) 是一个随训练进行从 1 线性衰减到 0 的课程学习权重。这迫使共享参数块学会把复杂的变换压缩到更早的循环步骤中。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-178}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-178}}
+
+\begin{itemize}
+\tightlist
+\item
+  Salimans, T., \& Ho, J. (2022). \href{https://arxiv.org/abs/2202.00512}{Progressive Distillation for Fast Sampling of Diffusion Models}. ICLR.
+\item
+  Song, Y., Dhariwal, P., Chen, M., \& Sutskever, I. (2023). \href{https://arxiv.org/abs/2303.01469}{Consistency Models}. ICML.
+\item
+  Yin, T., Gharbi, M., Zhang, R., Shechtman, E., Durand, F., Freeman, W. T., \& Park, T. (2024). \href{https://arxiv.org/abs/2311.18828}{One-step Diffusion with Distribution Matching Distillation}. CVPR.
+\item
+  Huang, X., Li, Z., He, G., Zhou, M., \& Shechtman, E. (2025). \href{https://arxiv.org/abs/2506.08009}{Self Forcing: Bridging the Train-Test Gap in Autoregressive Video Diffusion}. arXiv:2506.08009.
+\item
+  Savva, G., Michel, O., Lu, D., Waiwitlikhit, S., Meehan, T., Mishra, D., Poddar, S., Lu, J., \& Xie, S. (2026). \href{https://arxiv.org/abs/2602.22208}{Solaris: Building a Multiplayer Video World Model in Minecraft}. arXiv:2602.22208.
+\item
+  Goyal, S., Agrawal, S., Anil, G. G., Jain, P., Paul, S., \& Kusupati, A. (2026). \href{https://arxiv.org/abs/2604.09168}{ELT: Elastic Looped Transformers for Visual Generation}. arXiv:2604.09168.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux4e2dux7684ux591aux79cdux6269ux6563ux8303ux5f0fux8bbaux6587}{%
+\section{视频生成模型与生成式世界模型中的多种扩散范式（论文）}\label{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux4e2dux7684ux591aux79cdux6269ux6563ux8303ux5f0fux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6d41ux5339ux914dux6a21ux578bux7684ux6b65ux957fux62fcux63a5}{%
+\subsection{一、流匹配模型的步长拼接}\label{ux4e00ux6d41ux5339ux914dux6a21ux578bux7684ux6b65ux957fux62fcux63a5}}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-5}{%
+\subsubsection{（一）问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-5}}
+
+在视频生成或动力学建模中，传统扩散模型（Diffusion Models）或流匹配（Flow Matching）为了生成高质量的下一帧状态 \(x_{t+1}\)，通常需要数十步去噪迭代，例如 \(K=64\) 步。这在需要极快推理速度的强化学习交互中是不可接受的。
+
+为了减少需要的步数，Dreamer 4 采用 Shortcut Forcing，提高大步长下的生成能力。
+
+\hypertarget{ux4e8cux6838ux5fc3ux601dux60f3-5}{%
+\subsubsection{（二）核心思想}\label{ux4e8cux6838ux5fc3ux601dux60f3-5}}
+
+模型训练时会随机抽取一个步长 \(d\)，例如 \(d\in\{1/64,2/64,4/64,\ldots,1\}\)。根据采样步长 \(d\) 选择不同损失函数，本质上是在构建一个从小步试探到大步跨越的自举蒸馏阶梯。
+
+当采样到最小步长 \(d=1/64\) 时，模型只需要进行一次很小的去噪，选择流匹配损失 \(\mathcal{L}_{\mathrm{flow}}\)。传统扩散模型大多采用 \(v\)-prediction，即预测速度方向：
+
+\[
+v=\epsilon-x
+\]
+
+其中 \(x\) 是干净数据，\(\epsilon\) 是高斯噪声。从频域（Fourier Transform）角度看，目标包含白噪声项。自然图像频谱通常近似遵循 \(1/f\) 规律，低频能量更高，而白噪声频谱是平坦的。强迫网络学习含有大量高频成分的 \(v\)，容易在长视频序列生成中导致误差累积（Error Accumulation）和高频伪影。
+
+Shortcut Forcing 采用 \(x\)-prediction，即直接让网络预测干净的潜在表征。无论当前噪声时间步 \(\tau\in[0,1]\) 是多少，网络都尝试直接看透噪声，输出无噪的最终状态。为了让跨步预测保持一致，它引入 Bootstrap Loss：先将网络输出转换回 \(v\)-space，再通过 \((1-\tau)^2\) 的因子把 Bootstrap 损失缩放回 \(x\)-space 尺度进行优化。
+
+Dreamer 4 强制模型在任意噪声水平 \(\tau\in[0,1]\) 下，直接输出对最终干净表征的预测：
+
+\[
+\hat{x}_1=f_\theta(x_\tau,\tau,c)
+\]
+
+基础流匹配损失在 \(x\) 空间内直接计算均方误差：
+
+\[
+\mathcal{L}_{\mathrm{flow}}=\left\|f_\theta(x_\tau,\tau,c)-x\right\|_2^2
+\]
+
+当采样到较大步长 \(d=1/8\) 时，算法希望模型能够一步顶过好几步。如果直接让模型跨很大步长拟合真实数据，步长过大可能产生模糊或不符合物理规律的伪影。因此训练时使用自举一致性损失 \(\mathcal{L}_{\mathrm{bootstrap}}\)。工作流如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  算法先让模型用当前能力走两步较小的半步，即连续走两次 \(d/2=1/16\)。
+\item
+  将两次半步累加得到的结果作为临时教师答案（Teacher Target）。
+\item
+  再让模型直接跨越一个完整大步，即 \(d=1/8\)。
+\item
+  计算 \(\mathcal{L}_{\mathrm{bootstrap}}\)，强迫走一大步的输出必须等于走两小步的输出。
+\end{enumerate}
+
+由于直接在 \(x\) 空间计算跨步损失尺度不一致，Dreamer 4 会把预测出的 \(\hat{x}_1\) 转换回 \(v\) 空间：
+
+\[
+\hat{v}_\tau=\frac{\hat{x}_1-x_\tau}{1-\tau}
+\]
+
+计算两者的 MSE 后，再乘以 \((1-\tau)^2\) 的缩放因子，将损失重新拉平到 \(x\) 空间尺度：
+
+\[
+\mathcal{L}_{\mathrm{bootstrap}}=(1-\tau)^2\left\|\hat{v}_\tau-v_{\mathrm{target}}\right\|_2^2
+\]
+
+为了让模型把有限参数容量集中在信息量最大的去噪阶段，也就是靠近干净数据的阶段，Dreamer 4 引入随信号水平线性递增的权重函数：
+
+\[
+w(\tau)=0.9\tau+0.1
+\]
+
+最终整体损失根据采样步长 \(d\) 选择 \(\mathcal{L}_{\mathrm{flow}}\) 或 \(\mathcal{L}_{\mathrm{bootstrap}}\)，并乘以权重 \(w(\tau)\) 进行优化。
+
+\hypertarget{ux4e8cux81eaux9002ux5e94ux76eeux6807ux7684ux6269ux6563ux6a21ux578b}{%
+\subsection{二、自适应目标的扩散模型}\label{ux4e8cux81eaux9002ux5e94ux76eeux6807ux7684ux6269ux6563ux6a21ux578b}}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-6}{%
+\subsubsection{（一）问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-6}}
+
+在标准 DDPM 中，神经网络被训练用来预测添加到干净图像上的噪声 \(\epsilon\)。在生成过程的起点，也就是时间步 \(T\)、噪声极大时，输入给网络的几乎是纯高斯噪声，此时信号被完全淹没。如果仍强迫网络预测输入中的噪声成分，网络会找到一个让损失很低的捷径：直接输出输入本身。数学上，这相当于网络退化成恒等映射。
+
+扩散模型的本质是利用网络输出来估计数据分布的分数函数 \(\nabla_z\log p_T(z)\)。如果网络在采样第一步，也就是高噪声阶段，只输出输入本身，就会提供很差的分数估计。DDPM 可以依靠成百上千次微小去噪步逐渐修正，但在世界模型中，为保证智能体训练效率，通常只能负担少量去噪步，例如少于 10 步甚至 1 步。此时第一步误差无法被充分修正，会显著降低生成质量。
+
+\hypertarget{ux4e8cux6838ux5fc3ux7b97ux6cd5}{%
+\subsubsection{（二）核心算法}\label{ux4e8cux6838ux5fc3ux7b97ux6cd5}}
+
+对于一个基于扩散模型的生成式世界模型，假设在 \(t+1\) 时刻初始噪声为 \(x_{t+1}\)，此前上下文为 \(\psi_t\)，可使用带跳连的自适应目标：
+
+\[
+D_\theta(x_{t+1}^{\tau},\psi_t)
+=c_{\mathrm{skip}}^\tau x_{t+1}^{\tau}
++c_{\mathrm{out}}^\tau F_\theta(c_{\mathrm{in}}^\tau x_{t+1}^{\tau},\psi_t)
+\]
+
+在这个公式下，神经网络 \(F_\theta\) 的实际训练目标变为：
+
+\[
+\mathcal{L}(\theta)=
+\mathbb{E}\left[
+\left\|
+F_\theta(c_{\mathrm{in}}^\tau x_{t+1}^{\tau},\psi_t) -
+\frac{1}{c_{\mathrm{out}}^\tau}
+\left(x_{t+1}^{0}-c_{\mathrm{skip}}^\tau x_{t+1}^{\tau}\right)
+\right\|_2^2
+\right]
+\]
+
+这个公式实现了一个渐变目标：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  当噪声极小时（\(\tau\to 0\)），系数 \(c_{\mathrm{skip}}\to 1\)。此时目标变成 \(x_{t+1}^0-x_{t+1}^{\tau}\)，即要求网络预测那一点点微小的残差噪声。
+\item
+  原理优势：如果此时仍然让网络预测干净图像 \(x^0\)，由于输入 \(x^\tau\) 已经和 \(x^0\) 几乎一样，网络输出与输入差异极小，会导致梯度消失，训练目标变得平庸。预测残差噪声则放大了这部分微小差异，迫使模型在最后阶段精细组织，完善高频细节。
+\end{enumerate}
+
+\hypertarget{ux4e09ux6269ux6563-moe}{%
+\subsubsection{（三）扩散 MoE}\label{ux4e09ux6269ux6563-moe}}
+
+可采用双专家或多专家设计，以更好地实现自适应。高噪声专家负责早期去噪和全局结构，低噪声专家负责后期细节处理。
+
+\hypertarget{ux4e09ux79bbux6563ux6269ux6563ux6a21ux578b}{%
+\subsection{三、离散扩散模型}\label{ux4e09ux79bbux6563ux6269ux6563ux6a21ux578b}}
+
+\hypertarget{ux4e00ux72b6ux6001ux7a7aux95f4}{%
+\subsubsection{（一）状态空间}\label{ux4e00ux72b6ux6001ux7a7aux95f4}}
+
+一般扩散模型运行在连续高维空间中，无论是直接的像素空间，还是 VAE 映射后的连续潜空间。数据变量可以取任意实数值，因此细粒度的高斯噪声可以被量化和累加。
+
+Muddit 等离散扩散模型运行在有限的离散类别空间（Categorical Space）中。文本被转化为词表中的 token 索引，图像被 VQ-VAE 转化为预定义 codebook 中的离散索引。在离散空间中，变量状态是互斥的整数，不存在两个 token 中间的值，因此无法直接施加连续数值噪声。
+
+\hypertarget{ux4e8cux524dux5411ux6269ux6563ux8fc7ux7a0b}{%
+\subsubsection{（二）前向扩散过程}\label{ux4e8cux524dux5411ux6269ux6563ux8fc7ux7a0b}}
+
+离散扩散无法加减噪声，因此 Muddit 将前向破坏建模为状态的类别转移。具体来说，采用连续时间马尔可夫链（CTMC），由转移率矩阵 \(Q_t\) 控制：
+
+\[
+\frac{dp_t}{dt}=Q_t p_t
+\]
+
+其中 \(p_t\) 是时间 \(t\) 的状态分布，\(Q_t\) 是转移矩阵。
+
+模型采用吸收态（Masked）扩散：任何真实 token 都有概率变成一个特殊的掩码 token \(m=(0,\ldots,0,1)\)，并且一旦变成 \(m\) 就不会再恢复。
+
+模型在时间 \(t\) 观察到原 token 未被掩码的生存概率为 \(\alpha_t\)。Muddit 采用余弦掩码调度策略（Cosine Masking Schedule），掩码率 \(\gamma_t=1-\alpha_t\) 的密度函数为：
+
+\[
+\gamma_t=\frac{2}{\pi}\left(1-(1-t)^2\right)^{-1/2}
+\]
+
+这保证了 \(t\to 0\) 时接近全干净数据，\(t\to 1\) 时接近全掩码数据。
+
+当 \(t\) 较小、刚开始掩码时，曲线较为平缓，这意味着每码率增加得比较慢，保留了较多干净上下文信息。当 \(t\) 趋近于 1、掩码过程尾声时，曲线变得陡峭，掩码率迅速增加至完全掩码状态。
+
+根据上下文，公式左侧的 \(\gamma_t\) 实际上表示采样时间步 \(t\) 的概率密度函数，而非掩码率本身。该密度函数在 \(t\to 0\) 时趋于无穷大，意味着模型在训练时会更频繁地采样掩码率较低、包含大量干净 token 的时间步，从而让模型在拥有丰富上下文的情况下更好地学习预测剩余掩码。
+
+\hypertarget{ux4e09ux53bbux566aux635fux5931ux51fdux6570}{%
+\subsubsection{（三）去噪损失函数}\label{ux4e09ux53bbux566aux635fux5931ux51fdux6570}}
+
+在离散空间中，梯度 \(\nabla_x\log p_t(x)\) 在数学上未定义，因此 Muddit 的网络本质上是一个 masked-token predictor。模型通过观察当前未被掩码的 token 上下文，直接预测被掩码位置的原始干净 token 属于各个类别的概率分布。
+
+优化目标是连续时间负证据下界（Negative ELBO），使用交叉熵而非 MSE：
+
+\[
+\mathcal{L}_{\mathrm{unified}} =
+\mathbb{E}_{q(x_t|x)}
+\left[
+\int_0^1
+\frac{\alpha_t'}{1-\alpha_t}
+\log\left(G(x_t,\alpha_t,c)\cdot x\right)\,dt
+\right]
+\]
+
+其中 \(q(x_t|x)\) 表示前向后验概率：给定干净序列 \(x\) 时，时间 \(t\) 的掩码序列分布。积分项说明 Muddit 将离散扩散建模为连续时间马尔可夫链，因此损失计算覆盖整个时间轨迹 \(t\in[0,1]\)。
+
+系数 \(\alpha_t'/(1-\alpha_t)\) 是时间相关的动态权重。\(\alpha_t'\) 是生存概率对时间的导数，分母 \(1-\alpha_t\) 是掩码率；它会根据当前时间步的掩码比例动态调整交叉熵惩罚力度。
+
+对数似然项 \(\log(G(x_t,\alpha_t,c)\cdot x)\) 是标准交叉熵的核心。\(G(x_t,\alpha_t,c)\) 是模型 MM-DiT 预测出的分类概率向量，\(x\) 是真实干净 token 的 one-hot 向量，\(c\) 是跨模态条件。执行文生图时，\(c\) 是文本嵌入；执行图生文时，\(c\) 是图像嵌入。
+
+\hypertarget{ux56dbux6a21ux578bux67b6ux6784}{%
+\subsubsection{（四）模型架构}\label{ux56dbux6a21ux578bux67b6ux6784}}
+
+Muddit 的目标函数具有高度对称性。切换生成任务时，例如从文本到图像变为图像到文本，只改变条件信号 \(c\)，而 \(\mathcal{L}_{\mathrm{unified}}\) 的主体结构不变。这使优化过程在不同任务间保持一致，允许模型用同一套参数联合训练双向生成能力。
+
+模型包含以下组件：
+
+\begin{itemize}
+\tightlist
+\item
+  文本编码器 \(E_{\mathrm{text}}\)：采用预训练且冻结的 CLIP 模型，用于提取文本 token 的嵌入特征。
+\item
+  图像编码器 \(E_{\mathrm{img}}\)：采用预训练且冻结的 VQ-VAE，将原始像素图像量化映射为紧凑的离散 codebook 索引，即图像 token。
+\item
+  统一生成器 \(G\)：这是模型的核心，采用多模态扩散 Transformer（MM-DiT）主干网络。最关键的是，该生成器使用 Meissonic 等高分辨率文本到图像模型的预训练权重初始化，以注入图像先验和跨模态语义关联。
+\item
+  采样器 \(S\)：负责逆向扩散过程，根据生成器预测的概率分布动态更新和选择 token。
+\item
+  统一解码器：包含图像解码器 \(D_{\mathrm{img}}\) 和文本解码器 \(D_{\mathrm{text}}\)。图像解码器直接使用 VQ Decoder 将 token 还原为像素，文本解码器是附加在共享特征空间上的轻量线性头。
+\end{itemize}
+
+\hypertarget{ux56dbux4e3aux4ec0ux4e48ux6269ux6563ux8fc7ux7a0bux5b9eux8d28ux4e0aux5b9eux73b0ux4e86ux63a8ux7406}{%
+\subsection{四、为什么扩散过程实质上实现了推理？}\label{ux56dbux4e3aux4ec0ux4e48ux6269ux6563ux8fc7ux7a0bux5b9eux8d28ux4e0aux5b9eux73b0ux4e86ux63a8ux7406}}
+
+此前，业界通常假设视频模型的推理遵循帧思维链（Chain-of-Frames, CoF），即推理随着视频帧按时间顺序展开。该研究提出并验证了步思维链（Chain-of-Steps, CoS）机制。由于扩散模型中的双向注意力可以覆盖整个视频序列，模型实际上是在每一个去噪步中同时对所有帧进行全局推理和不断修正。
+
+在基于流匹配的扩散框架下，潜变量在噪声和清晰数据之间的连续演变路径可以写为：
+
+\[
+z_t=(1-t)z_0+t z_1
+\]
+
+其中 \(z_0\) 是干净数据潜变量，\(z_1\) 是符合正态分布的噪声。模型学习速度场 \(v_\theta(z_t,s,c)\)，从而在任意去噪步 \(s\) 估计当前清晰结果：
+
+\[
+\hat{z}_0=z_s-\sigma_s v_\theta(z_s,s,c)
+\]
+
+通过解码不同扩散步的 \(\hat{z}_0\)，可观察到两类典型的步思维链探索工作流。
+
+\hypertarget{ux4e00ux591aux8defux5f84ux63a2ux7d22}{%
+\subsubsection{（一）多路径探索}\label{ux4e00ux591aux8defux5f84ux63a2ux7d22}}
+
+在早期去噪步骤中，模型表现得类似同图经典的广度优先搜索（BFS）算法。它会同时在隐空间中实例化并探索多个候选推理轨迹，例如让视频里的机器人在迷宫中同时走向两条岔路。随着去噪步骤推进，次优路径被逐渐修剪和抑制，最终在晚期步骤中收敛到唯一正确路线。
+
+\hypertarget{ux4e8cux53e0ux52a0ux5f0fux63a2ux7d22}{%
+\subsubsection{（二）叠加式探索}\label{ux4e8cux53e0ux52a0ux5f0fux63a2ux7d22}}
+
+在处理空间对齐或物体排序等任务时，模型在早期并不会只是确定一个状态，而是将多个互斥的逻辑假设叠加在一起。随着噪声降低，这些重叠阴影会逐渐塌缩为最终符合逻辑的实体。
+
+为了证明 CoS 才是主导机制，作者设计了干扰实验：
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.33}}@{}}
+\toprule
+干扰注入模式 & 操作机制 & 对基准测试性能的影响 \\
+\midrule
+\endhead
+Noise at Step & 在特定的某一个去噪步（Step），对所有帧注入强噪声。 & 严重阻断推理轨迹，导致模型在 VBVR-Bench 的得分从约 0.685 断崖式下跌至 0.3 以下。 \\
+Noise at Frame & 在特定的某一帧（Frame），对所有去噪步注入强噪声。 & 性能下降很小。由于模型能通过其他帧的上下文在后续步骤中自我修复，推理并未受阻。 \\
+\bottomrule
+\end{longtable}
+
+\hypertarget{ux4e94ux63a8ux7406ux80fdux529bux53caux5176ux5728ux67b6ux6784ux4e2dux7684ux5206ux5316}{%
+\subsection{五、推理能力及其在架构中的分化}\label{ux4e94ux63a8ux7406ux80fdux529bux53caux5176ux5728ux67b6ux6784ux4e2dux7684ux5206ux5316}}
+
+随着模型规模和数据量扩大，例如 Wan2.2 等大规模模型，作者观察到视频生成展现出类似大语言模型的涌现推理特性：
+
+\begin{itemize}
+\tightlist
+\item
+  工作记忆（Working Memory）：在遮挡或物体移出画面的任务中，早期扩散步能够建立持久的记忆锚点，确保被遮挡物体在后续帧中仍然保持物理状态的连贯性，从而解决客体永久性问题。
+\item
+  自我纠正与增强（Self-correction and Enhancement）：模型在扩散过程中会出现顿悟时刻。如果早期生成了错误形状或不完整的弹道轨迹，模型有能力在经历几个扩散步后推翻之前的假设，并将其修正为全面、结构正确的最终答案。
+\item
+  先感知后行动（Perception before Action）：模型自动发展出一定处理视频推理的通用协议。在早期的去噪步骤中，它先完成语义定位，找到 prompt 描述的关键物体；在后期步骤中，才开始为其添加动作规划、运动学变化和复杂物理交互。
+\end{itemize}
+
+为了从底层架构中寻找证据，研究提取了 DiT（Diffusion Transformer）在单次前向传播中的层级 token 激活状态，发现网络内部发生了高度的功能分化：
+
+\begin{itemize}
+\tightlist
+\item
+  浅层（Layers 0-9）：主要负责感知，注意力分散在全局结构和环境背景上。
+\item
+  中层（约 Layer 9-30）：激活特征开始高度集中到语义相关前景物体上，并爆发出大量与运动和交互相关的推理特征。作者进行了页级替换类的因果性干预实验：当把第 20 层的隐变量替换为另一个物体的表征时，最终的逻辑推理结果发生了彻底反转。这说明中间层是逻辑推理的核心区域。
+\item
+  深层（晚期层）：将推理完成的隐式表示加以巩固和融合，生成最终所需的像素级状态。
+\end{itemize}
+
+\hypertarget{ux516dux63a8ux7406ux96c6ux6210ux7b97ux6cd5}{%
+\subsection{六、推理集成算法}\label{ux516dux63a8ux7406ux96c6ux6210ux7b97ux6cd5}}
+
+基于早期扩散步会探索多条推理路径，以及推理信息主要集中在中间网络层这两个深刻洞察，作者提出了一套极其轻量、无需重新训练的算法工作流，以此来利用隐空间中偏向正确答案的概率偏差：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  多重初始化：给同一个模型分配 3 个不同的随机噪声种子（Seeds），独立启动前向推理进程。
+\item
+  锁定关键步骤：在决定推理轨迹走向的最关键的第一个扩散步（\(s=0\)）拦截模型。
+\item
+  提取活跃窗口：分别提取 3 个进程中 DiT 每个网络层的增量活跃层，即第 20 层到第 29 层的中间层隐表示 \(U_i^{(l)}\)。
+\item
+  时空集成投票：对这 3 个版本的隐变量进行空间和时间维度平均，这相当于在隐空间里进行一次专家投票，有效过滤掉随机种子带来的特定噪声干扰。
+\item
+  引导生成：利用平均后的稳定潜变量继续后续生成。实验证明，这一简单的集成策略使模型在 VBVR-Bench 推理基准测试上的绝对得分直接提升了 7.2\%。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-179}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-179}}
+
+\begin{itemize}
+\tightlist
+\item
+  Austin, J., Johnson, D. D., Ho, J., Tarlow, D., \& van den Berg, R. (2021). \href{https://arxiv.org/abs/2107.03006}{Structured Denoising Diffusion Models in Discrete State-Spaces}. NeurIPS.
+\item
+  Hoogeboom, E., Nielsen, D., Jaini, P., Forré, P., \& Welling, M. (2021). \href{https://arxiv.org/abs/2102.05379}{Argmax Flows and Multinomial Diffusion: Learning Categorical Distributions}. NeurIPS.
+\item
+  Shi, Y., De Bortoli, V., Campbell, A., \& Doucet, A. (2024). \href{https://arxiv.org/abs/2303.16852}{Diffusion Schrödinger Bridge Matching}. NeurIPS.
+\item
+  Hafner, D., Yan, W., \& Lillicrap, T. (2025). \href{https://arxiv.org/abs/2509.24527}{Training Agents Inside of Scalable World Models}. arXiv:2509.24527.
+\item
+  Shi, Q., Bai, J., Zhao, Z., Chai, W., Yu, K., Wu, J., Song, S., Tong, Y., Li, X., Li, X., \& Yan, S. (2025). \href{https://arxiv.org/abs/2505.23606}{Muddit: Liberating Generation Beyond Text-to-Image with a Unified Discrete Diffusion Model}. arXiv:2505.23606.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{diffusion-forcingux4e0eux4e0aux4e0bux6587ux5206ux6b65ux53bbux566aux8bbaux6587}{%
+\section{Diffusion Forcing与上下文分步去噪（论文）}\label{diffusion-forcingux4e0eux4e0aux4e0bux6587ux5206ux6b65ux53bbux566aux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00diffusion-forcing}{%
+\subsection{一、Diffusion Forcing}\label{ux4e00diffusion-forcing}}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-7}{%
+\subsubsection{（一）问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-7}}
+
+传统序列建模主要有两种极端形式。
+
+\begin{itemize}
+\tightlist
+\item
+  下一个 Token 预测模型（Teacher Forcing）：例如 GPT 系列，支持生成可变长度序列，但它往往在连续数据（如视频生成）上由于误差累积容易导致预测崩溃，并且由于是逐步确定未来，无法根据未来的奖励或目标对当前步骤进行引导（Guidance）。
+\item
+  全序列扩散模型（Full-Sequence Diffusion）：常用于视频生成或离线强化学习规划。它将所有时间步作为一个整体添加相同水平的噪声，这虽然支持多步引导，但它采用了非因果架构，只能生成固定长度的序列，无法像人类一样基于因果不确定性来做决策。
+\end{itemize}
+
+目前大多扩散与自回归结合的模型都是分块生成，每次根据已经生成的块 \(x_1,\ldots,x_t\)，用扩散模型从噪声中生成新的一块 \(x_{t+1}\)。这里的隐含前提是，每一块的噪声水平相同。Diffusion Forcing 则不同，它为序列中的每一个 token 或每一块分配独立、随机的噪声水平，并训练一个因果模型来解掩码。
+
+\hypertarget{ux4e8cux8badux7ec3ux9636ux6bb5}{%
+\subsubsection{（二）训练阶段}\label{ux4e8cux8badux7ec3ux9636ux6bb5}}
+
+Diffusion Forcing 的训练目标是让模型学会对具有任意且独立噪声水平的序列进行去噪。训练流程如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  从数据集中采样出真实观测序列 \((x_1,\ldots,x_T)\)。
+\item
+  分配独立噪声：遍历时间步 \(t=1,\ldots,T\)，为每一个 \(x_t\) 独立、均匀地采样一个噪声水平 \(k_t\in\{0,1,\ldots,K\}\)。
+\item
+  前向加噪：根据每个 token 对应的噪声水平进行前向扩散，得到观测值 \(x_t^{k_t}\)，并计算目标噪声 \(\epsilon_t\)。
+\item
+  隐状态更新与噪声预测：模型根据前一时刻的隐状态 \(z_{t-1}\)、当前带噪观测 \(x_t^{k_t}\) 和噪声水平 \(k_t\)，预测噪声：
+\end{enumerate}
+
+\[
+\hat{\epsilon}_t=\epsilon_\theta(z_{t-1},x_t^{k_t},k_t)
+\]
+
+同时更新新的状态 \(z_t\)。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{4}
+\tightlist
+\item
+  反向传播：将所有时间步的预测噪声与真实噪声计算均方误差（MSE Loss），并更新网络权重 \(\theta\)。
+\end{enumerate}
+
+\hypertarget{ux4e09ux63a8ux7406ux9636ux6bb5ux57faux4e8eux6392ux7a0bux77e9ux9635ux7684ux63a7ux5236}{%
+\subsubsection{（三）推理阶段：基于排程矩阵的控制}\label{ux4e09ux63a8ux7406ux9636ux6bb5ux57faux4e8eux6392ux7a0bux77e9ux9635ux7684ux63a7ux5236}}
+
+在算法定义中，排程矩阵 \(K\) 是一个维度为 \(M\times T\) 的二维网格：
+
+\begin{itemize}
+\tightlist
+\item
+  列（\(T\)）：代表序列的时间步长（Time steps），即 \(t\in\{1,2,\ldots,T\}\)。
+\item
+  行（\(M\)）：代表去噪采样的迭代步骤（Denoising steps），索引为 \(m\)。
+\item
+  元素数值 \(K_{m,t}\)：矩阵中的每一个元素 \(K_{m,t}\in\{0,1,\ldots,K\}\)，精确指定了第 \(t\) 个 token 在第 \(m\) 次去噪迭代时，所必须达到的目标噪声水平。其中 \(K\) 是纯白噪声，\(0\) 是干净数据。
+\end{itemize}
+
+模型在推理时，会完全遵循这个矩阵的乐谱来演奏。具体流程如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  全局初始化：算法开始时，将整个目标序列 \(x_{1:T}\) 初始化为独立的高斯白噪声，此时所有 token 的噪声水平均是 \(K\)。
+\item
+  外层循环（按行降噪）：沿着矩阵的行向下遍历，例如从 \(M\) 减到 \(0\)。每一行代表一轮全局去噪刷新。
+\item
+  内层循环（因果推进）：在固定的行 \(m\) 内，沿着时间轴 \(t=1,\ldots,T\) 从左到右遍历。
+\item
+  目标读取与单步去噪：对于当前的 \((m,t)\)，算法读取矩阵设定值 \(k=K_{m,t}\)。随后，模型利用当前的隐状态 \(z_{t-1}\) 和带有当前实际噪声的 \(x_t\)，预测噪声 \(\epsilon_\theta(z_{t-1},x_t,k)\)，并通过 Langevin 动力学公式或 DDIM，将 \(x_t\) 的噪声精确降至目标层级 \(k\)。
+\item
+  因果状态更新：利用刚刚去噪后的 \(x_t\) 更新隐状态 \(z_t\)。由于是因果架构，这个更新后的 \(z_t\) 将包含 \(x_{1:t}\) 的最新信息，并传递给下一个时间步 \(t+1\)。
+\end{enumerate}
+
+\hypertarget{ux56dbux57faux4e8eux6392ux7a0bux77e9ux9635ux7684ux751fux6210ux8303ux5f0f}{%
+\subsubsection{（四）基于排程矩阵的生成范式}\label{ux56dbux57faux4e8eux6392ux7a0bux77e9ux9635ux7684ux751fux6210ux8303ux5f0f}}
+
+基于排程矩阵 \(K\)，可以得到三种典型生成范式。
+
+\hypertarget{ux5168ux5e8fux5217ux6269ux6563ux6a21ux5f0f}{%
+\paragraph{1. 全序列扩散模式}\label{ux5168ux5e8fux5217ux6269ux6563ux6a21ux5f0f}}
+
+如果我们要模仿传统视频扩散模型，如 SVD 或 Sora 的某一层逻辑，只需让矩阵的每一行元素完全相同。所有 token 同步均匀去噪。这接近传统的全序列扩散。
+
+\hypertarget{ux81eaux56deux5f52ux6a21ux5f0f}{%
+\paragraph{2. 自回归模式}\label{ux81eaux56deux5f52ux6a21ux5f0f}}
+
+如果我们要模仿语言模型逐字生成，只需让矩阵呈现阶梯移动：确保前一个 token 和底噪降为 0 后，再开始生成下一个 token。这样既能保持因果顺序，又能保留扩散式局部细化。
+
+\hypertarget{ux56e0ux679cux4e0dux786eux5b9aux6027ux6216ux91d1ux5b57ux5854ux6392ux7a0b}{%
+\paragraph{3. 因果不确定性或金字塔排程}\label{ux56e0ux679cux4e0dux786eux5b9aux6027ux6216ux91d1ux5b57ux5854ux6392ux7a0b}}
+
+这是论文的核心创新。它让矩阵呈现一种半金字塔或拉链状分布：让近期未来下降噪声较多，而远期未来保持较高噪声。控制原理是：当预测到 \(x_1\) 时，\(x_2\) 和 \(x_3\) 并没有完全成型，但它们携带了未来规划趋势的残影。这种安排完美地契合了贝叶斯滤波中对不确定世界中未来不确定性递增的建模，并允许现代尚未显现的信息平滑地反向传播回当前决策点，从而实现规划 Guidance。
+
+\hypertarget{ux4e94ux566aux58f0ux7b49ux4ef7ux7684ux56e0ux679cux63a7ux5236}{%
+\subsubsection{（五）噪声等价的因果控制}\label{ux4e94ux566aux58f0ux7b49ux4ef7ux7684ux56e0ux679cux63a7ux5236}}
+
+在传统的自回归模型中，过去 token 一旦生成就固定死了，未来奖励无法修改过去的决定。而在 Diffusion Forcing 中，由于未来 token 虽然还处在较高噪声状态，但它们可以通过因果架构的隐状态 \(z_t\) 将梯度反向传播回较早的 token。这意味着模型可以``预见''远期未来的奖励，并在尚未完全固定的现在做出路径修正。
+
+这对应到 Transformer 注意力中，可以理解为两种机制：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  信息的彻底遮挡（DF 独有的 Fractional Masking）：如果我们改变排程矩阵，让未来 token 带有部分噪声，例如 \(k=K/2\)。此时，未来 token 变成了 \(\sqrt{\bar{\alpha}_k}x^0+\sqrt{1-\bar{\alpha}_k}\epsilon\)。它体内既含有真实的未来特征 \(x^0\)，又包含噪声。过去的 token 在计算自注意力时，可以从 \(V\) 矩阵中提取到被衰减过的未来信号。
+\item
+  当未来 token 被设为纯噪声时，它的 key 和 value 都接近随机噪声，注意力即使读到它，也不能获得真实信息，相当于传统 causal mask。
+\end{enumerate}
+
+通过控制未来 token 的噪声比例，Transformer 不需要改变任何网络结构，也不需要复杂的 attention mask 设计，就能实现从完全不因果到部分因果，再到严格因果的平滑过渡。
+
+Diffusion Forcing 范式的优雅之处在于：噪声不再仅仅是需要被去除的障碍，而是变成了调节网络感受野、控制因果性以及传播规划梯度的核心控制介质。
+
+\hypertarget{ux516dux5229ux7528ux8499ux7279ux5361ux6d1bux5f15ux5bfcux5b9eux73b0ux89c4ux5212}{%
+\subsubsection{（六）利用蒙特卡洛引导实现规划}\label{ux516dux5229ux7528ux8499ux7279ux5361ux6d1bux5f15ux5bfcux5b9eux73b0ux89c4ux5212}}
+
+传统全序列扩散中，所有 token 处在相同噪声水平，当前和未来被绑定在同一条去噪轨迹上，很难在固定当前状态时采样多种未来。Diffusion Forcing 允许未来位置保持更高噪声，因此可以固定当前附近的状态，对未来噪声重复采样，得到多条可能轨迹。
+
+Monte-Carlo Guidance（MCG）在每次去噪时都采样未来。具体步骤如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  当前时刻的观测：智能体在环境的当前真实时间步，获得了历史积累的隐状态 \(z_{t-1}\)。
+\item
+  生成规划视距（Look-ahead Window）：模型并不会一口气规划到宇宙末日，而是设定一个向未来的视距 \(H\)。此时模型开始在隐空间中生成一个局部的未来序列 \(x_{t:t+H}\)。
+\item
+  每个去噪步的 MCG 采样：在这个局部序列 \(x_{t:t+H}\) 的每一次去噪迭代中，为了决定如何给当前的 \(x_t^k\) 去噪，模型都会在隐海中向未来 \(t+1\) 到 \(t+H\) 平行分叉出多条带有不确定性的轨迹。
+\end{enumerate}
+
+计算这 \(N\) 条轨迹的预期未来奖励 \(R^{(i)}\)，并求平均值：
+
+\[
+\bar{R}(x_t^k)=\frac{1}{N}\sum_{i=1}^N R^{(i)}
+\]
+
+然后对当前正在去噪的那个模糊输入 \(x_t^k\) 求偏导数（梯度）：
+
+\[
+\nabla_{x_t^k}\bar{R}(x_t^k)
+\]
+
+这个梯度代表着：如果想让当前带噪而模糊的 \(x_t^k\) 往梯度方向稍微挪动一点，那么它在未来演化出高奖励轨迹的概率就会最大化。
+
+随后，将未来奖励梯度直接注入到去噪预测中，类似于分类器引导（Classifier Guidance）的做法：
+
+\[
+\begin{aligned}
+\tilde{\epsilon}
+&=
+\epsilon_\theta(x_t^k,k_t)
+\\
+&\quad -
+\eta\sqrt{1-\bar{\alpha}_{k_t}}\nabla_{x_t^k}\bar{R}(x_t^k)
+\end{aligned}
+\]
+
+然后使用这个被修正过的噪声 \(\tilde{\epsilon}\)，去把 \(x_t^k\) 降噪到下一个更清晰的层级 \(x_t^{k-1}\)。
+
+在 MCG 中，被采样出来的 \(N\) 条未来轨迹在计算完梯度后会被直接丢弃。它们的作用只是充当临时侦察兵，为计算期望梯度（Expected Reward Gradient）提供方差更小的无偏估计。
+
+经过多轮去噪，当前 token \(x_t\)，即当前需要执行的动作 \(\hat{u}_t\)，会被清晰化。智能体在现实中只执行这个动作，并将环境返回的真实奖励 \(r_t\) 和下一个观测 \(o_{t+1}\) 继续用于下一轮滚动规划。这与 MPC（Model Predictive Control）思想一致。
+
+通过这种方式，当前动作在从纯噪声降为 0 的漫长过程中，每走一步，都会受到未来预期梯度的拉扯。最终，当它降噪为 0 时，它本身就已经是一条通向最优解的动作。这种方法不仅采样效率极高，而且生成的轨迹更加平滑且符合物理规律。
+
+\hypertarget{ux4e03ux4e3aux4ec0ux4e48ux4f20ux7edfux81eaux56deux5f52ux548cux6269ux6563ux6a21ux578bux90fdux96beux4ee5ux505aux5230}{%
+\subsubsection{（七）为什么传统自回归和扩散模型都难以做到}\label{ux4e03ux4e3aux4ec0ux4e48ux4f20ux7edfux81eaux56deux5f52ux548cux6269ux6563ux6a21ux578bux90fdux96beux4ee5ux505aux5230}}
+
+自回归的瓶颈是过早做硬承诺。自回归模型必须把当前 token 先完全确定下来，例如划分布采样、argmax 或温度采样，才能将它作为历史条件输入进去，从而推演未来 \(x_{t+1}\)。一旦已经被硬确认，当前状态就结束了，当然无法让未来奖励对它做梯度更新。
+
+纯扩散的瓶颈是无法产生分支。在全序列扩散中，如果固定了当前的带噪状态 \(x_t^k\)，并且大家都在同一个噪声层级上继续去噪，整个计算图就固定了。你只能得到一条确定的、和当前状态紧紧绑定的未来轨迹。轨迹方差极大时，这个梯度还可能非常不稳定。
+
+Diffusion Forcing 的优势是同时保留未来不确定性和当前可导性：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  未来的噪声水平较高，远远高于当下的噪声水平。这意味着未来还没有被锁定，我们可以把当前的 \(x_t^k\) 冻住，然后向未来注入成百上千个不同的纯白噪声，生成足够多的未来分支。
+\item
+  当下的 token 并没有像自回归模型那样被硬确认，而仍然处于一个微弱的噪声状态，例如 \(k=2\)。因为它还是一个连续的、带有不确定性的变量，奖励期望梯度可以直接作用于它，平滑地修改它在进一步 Langevin 动力学中的去噪方向。
+\end{enumerate}
+
+\hypertarget{ux516bux5386ux53f2ux4fe1ux606fux8f7bux5faeux52a0ux566aux6280ux5de7}{%
+\subsubsection{（八）历史信息轻微加噪技巧}\label{ux516bux5386ux53f2ux4fe1ux606fux8f7bux5faeux52a0ux566aux6280ux5de7}}
+
+在需要超长序列生成时，Diffusion Forcing 利用采样阶段的灵活性提出了一个极其聪明的技巧，防止误差累积：为历史信息轻微加噪。
+
+在生成下一帧 \(x_t\) 时，DF 并不完全信任上一帧 \(x_{t-1}\)。因为它是模型自己生成的，必定含有微小瑕疵。相反，DF 会保留一个带有极其微小噪声 \(k_{\mathrm{small}}\) 的上一帧隐状态 \(z_{t-1}\)，例如 \(K_{\mathrm{small}}\ll K\)，并以此为条件生成下一帧。由于模型在训练时本身就是基于带噪输入学习的，这使得自回归生成一直处于分布内（in-distribution），从而实现了无限长度的稳定 rollout，彻底解决了传统 Teacher Forcing 模型的崩溃问题。
+
+\hypertarget{ux4e5dux7406ux8bbaux53efux884cux6027ux8bc1ux660e}{%
+\subsubsection{（九）理论可行性证明}\label{ux4e5dux7406ux8bbaux53efux884cux6027ux8bc1ux660e}}
+
+从理论上看，论文附录 A 给出了一套基于证据下界（ELBO）的严格数学证明。模型实际上是在优化一个修改版的带权 ELBO。假设前向马尔可夫过程为 \(q(x^{1:K}|x^0)=\prod_{k=1}^K q(x^k|x^{k-1})\)，生成模型参数化为 \(p_\theta\)。作者证明，DF 的训练过程最大化了真实联合分布对数似然的下界。
+
+根据定理 A.1，对于随机独立采样的噪声水平 \(k_{1:T}\)，其期望对数似然的 ELBO 可以写为：
+
+\[
+\mathbb{E}_{\mathrm{forward}}
+\left[
+\log p_\theta\left((x_t^k)_{1\le t\le T}\right)
+\right]
+\ge
+\mathcal{C}(x_{1:T}^0) +
+\mathbb{E}_{\mathrm{forward},p_\theta,z_{1:T}}
+\left[
+\sum_{t=1}^T
+\left(
+\frac{1}{K+1}\log p_\theta(x_t^0\mid z_{1:t},z_{t-1}) +
+\sum_{j=2}^K
+\frac{j}{K+1}
+D_{\mathrm{KL}}\left(q(x_t^{j-1}\mid x_t^j,x_t^0)\middle\|p_\theta(x_t^{j-1}\mid x_t^j,z_{t-1})\right)
+\right)
+\right]
+\]
+
+这里的核心发现是：在隐变量 \(z_{t-1}\) 完全表达力足够的情况下，由于各时间步 \(t\) 上的损失项是解耦的，权重项 \(\frac{j}{K+1}\) 可以被忽略或重新加权。最终，训练目标简化为熟悉的扩散模型最小二乘形式：
+
+\[
+\mathcal{L}(\theta)=
+\mathbb{E}_{k_{1:T},x,\epsilon}
+\left[
+\sum_{t=1}^T
+\left\|
+\epsilon_t-\epsilon_\theta(z_{t-1},x_t^{k_t},k_t)
+\right\|^2
+\right]
+\]
+
+由于损失覆盖了序列中所有可能的局部掩码排列，这保证了在推理时，模型可以用任意的时间步调度策略来采样真实数据的子序列边缘分布。
+
+\hypertarget{ux4e8cux4e0aux4e0bux6587ux5206ux6b65ux53bbux566a}{%
+\subsection{二、上下文分步去噪}\label{ux4e8cux4e0aux4e0bux6587ux5206ux6b65ux53bbux566a}}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-8}{%
+\subsubsection{（一）问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-8}}
+
+近年来，自回归（AR）生成因其支持流式输出、无限扩展和实时交互，成为长视频生成和世界模型的核心技术路线。然而，AR 流程面临一个严峻挑战：分布偏移（Distribution Drift），表现为随着视频长度增加，画面会出现过度饱和、运动重复和语义漂移。
+
+现有方法的困境在于：AR 方法通常会先将前一个视频块完全去噪（使其噪声水平 \(t_c=0\)），然后将其作为高度清晰的上下文，用于生成下一个视频块。虽然这种极其干净的上下文确定了时间一致性，但它同时也极大地放大了模型自身的预测误差。模型会以极高的置信度将前几步积累的误差不断向后传播，从而加剧长视频的质量退化。
+
+\hypertarget{ux4e8cux6838ux5fc3ux601dux60f3-6}{%
+\subsubsection{（二）核心思想}\label{ux4e8cux6838ux5fc3ux601dux60f3-6}}
+
+该论文的核心洞见是：高质量干净的上下文并不是必需的。受双向扩散模型启发，论文指出，如果在与当前块相同的噪声水平下提供上下文，不仅能提供足够的时间一致性信号，还能有效抑制误差传播。
+
+设没有误差时的真实上下文 \(z_{n-1}\) 降噪到 \(t_{j+1}\)；对第 \(n\) 个视频块 \(B_n\) 进行去噪。令 \(\hat{x}_{n-1}^{(n-1)}\) 表示前一个块的真实干净潜变量，模型预测值为 \(\hat{x}_{n-1}^{(n-1)}=\hat{x}_{n-1}^{(0)}+\delta^{(n-1)}\)，其中 \(\delta^{(n-1)}\) 是积累的预测误差。
+
+如果当前上下文预测噪声水平 \(t_c\)，其表达式为：
+
+\[
+c_{n-1}^{(t_c)} =
+(1-\sigma_{t_c})\hat{x}_{n-1}^{(n-1)} +
+(1-\sigma_{t_c})\delta^{(n-1)} +
+\sigma_{t_c}\eta
+\]
+
+从公式可以看出，真实信号和传播偏差共享同一个系数 \((1-\sigma_{t_c})\)。降低噪声水平 \(t_c\) 会增加有用信号，但同时也以同等比例放大了误差 \(\delta^{(n-1)}\)。现有方法使用 \(t_c=0\)，使得系数变为 1，这等于放大了全量误差的无衰减传播。
+
+为了产生时间上连贯的视频，上下文携带的信息量必须大于或等于当前块在第 \(j\) 步结束时所拥有的信息量。论文称这种约束为 \(\mathrm{SNR}(t_c)\) 随着 \(t\) 的减小单调递增。
+
+因此在满足因果性的前提下，为了最大程度衰减误差，最优选择是等时上下文噪声，也就是让上下文噪声水平与当前块在本步结束时的噪声水平一致。
+
+\hypertarget{ux4e09ux6838ux5fc3ux7b97ux6cd5ux4e0eux63a8ux7406ux5de5ux4f5cux6d41}{%
+\subsubsection{（三）核心算法与推理工作流}\label{ux4e09ux6838ux5fc3ux7b97ux6cd5ux4e0eux63a8ux7406ux5de5ux4f5cux6d41}}
+
+传统 AR 就像盖楼：第一栋楼从地基盖到顶，再盖第二栋。HiAR 则是分层施工：所有楼先一起打地基，再一起盖一楼，然后依次类推。
+
+假设有 3 个视频块 \(B_1,B_2,B_3\)，去噪总步数 \(S=4\)，且噪声水平满足 \(t_1\gt t_2\gt t_3\gt t_4\gt 0\)。推理序列如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  初始化：生成所有块的纯噪声 \(z_1^{(1)},z_1^{(2)},z_1^{(3)}\)。
+\item
+  去噪步 \(j=1\)：处理 \(B_1\) 无上下文；处理 \(B_2\) 时，以上一步得到的 \(B_1\) 作为同噪声上下文；处理 \(B_3\) 时，以上一步得到的 \(B_2\) 作为上下文。
+\item
+  去噪步 \(j=2\)：重复上述过程，但使用上一个去噪层级的同层上下文。
+\item
+  去噪步 \(j=3\) 和 \(j=4\)：依次执行，直到所有块降噪至最终干净的视频块。
+\end{enumerate}
+
+论文在算法中指出，在第 \(j+1\) 步时，第 \(j\) 步的第 \(n\) 个块 \(B_n\) 只依赖于第 \(j\) 步它前面的块 \(B_{\lt n}\)，以及它自己上一阶段（第 \(j-1\) 步）的状态。因此，在 \(N\times S\) 的去噪网格中，位于同一条反对角线上的任务是相互独立的，可以同时计算。
+
+对于 3 个块、4 个去噪步，并行流水线如下：
+
+\begin{itemize}
+\tightlist
+\item
+  阶段 1：计算 \(B_1\) 的第 1 步。
+\item
+  阶段 2：同时计算 \(B_2\) 的第 1 步和 \(B_1\) 的第 2 步。
+\item
+  阶段 3：同时计算 \(B_3\) 的第 1 步、\(B_2\) 的第 2 步和 \(B_1\) 的第 3 步。
+\item
+  阶段 4：同时计算 \(B_3\) 的第 2 步、\(B_2\) 的第 3 步和 \(B_1\) 的第 4 步。
+\item
+  阶段 5：同时计算 \(B_3\) 的第 3 步和 \(B_2\) 的第 4 步。
+\item
+  阶段 6：计算 \(B_3\) 的第 4 步。
+\end{itemize}
+
+通过将每个去噪步分配给专用进程，总等待时间可从 \(N\times S=12\) 理解为约 \(N+S-1=6\) 个阶段。
+
+即使在单卡环境下无法做多进程物理并行，HiAR 也做了极具工程价值的算子融合。在分层循环中，单纯地更新 \(B_n\) 的 KV 缓存和去除 \(B_{n+1}\) 的噪声原本是两次独立的前向传递。论文将 \(B_n\) 和 \(B_{n+1}\) 在帧维度上拼接，通过一次前向调用同时完成写入上下文缓存和利用该缓存去噪下一个块两个动作。这种融合把每循环的成本降低了大约 \(N+2\) 次传递，最终在 4 步设置下实现了约 1.8 倍的挂钟时间（wall-clock）加速。
+
+\hypertarget{ux56dbux8badux7ec3ux7b97ux6cd5ux4e0eux5de5ux4f5cux6d41}{%
+\subsubsection{（四）训练算法与工作流}\label{ux56dbux8badux7ec3ux7b97ux6cd5ux4e0eux5de5ux4f5cux6d41}}
+
+训练过程分两类轨迹和两类损失。
+
+\hypertarget{ux6b65ux9aa4-aux6559ux5e08ux8f68ux8ff9ux51c6ux5907}{%
+\paragraph{步骤 A：教师轨迹准备}\label{ux6b65ux9aa4-aux6559ux5e08ux8f68ux8ff9ux51c6ux5907}}
+
+这一步通常可以离线预计算或在训练开始前准备好。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  调用强大的 Wan2.1-14B 教师模型。
+\item
+  在双向注意力模式下，让教师模型运行大量 ODE 去噪步，例如 50 步。
+\item
+  从这条高质量的密集轨迹中，提取出与学生模型 4 步时间表对齐的参考检查点（Checkpoints）：\(x_t^{\mathrm{ref}},\ldots,x_{t+4}^{\mathrm{ref}}\)。
+\end{enumerate}
+
+\hypertarget{ux6b65ux9aa4-bux5b66ux751fux6a21ux578bux524dux5411ux4f20ux64ad}{%
+\paragraph{步骤 B：学生模型前向传播}\label{ux6b65ux9aa4-bux5b66ux751fux6a21ux578bux524dux5411ux4f20ux64ad}}
+
+在同一次训练迭代中，学生模型需要走两条不同路径来获取计算损失所需的预测值：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  路径 1：对应 DMD 损失，即因果自展开。学生模型在因果注意力下运行，按照分层去噪方式，用自己的输出作为上下文进行多块（Blocks）展开。这产生了学生模型的单步输出分布 \(p_\theta(x_0|x_t)\)。
+\item
+  路径 2：对应 FKL 损失，即双向模式单步预测。学生模型切换到双向注意力模式，输入步骤 A 中的教师检查点 \(x_t^{\mathrm{ref}}\)，预测出一个速度场 \(v_\theta\)。
+\end{enumerate}
+
+\hypertarget{ux6b65ux9aa4-cux8054ux5408ux8ba1ux7b97ux635fux5931ux4e0eux53cdux5411ux4f20ux64ad}{%
+\paragraph{步骤 C：联合计算损失与反向传播}\label{ux6b65ux9aa4-cux8054ux5408ux8ba1ux7b97ux635fux5931ux4e0eux53cdux5411ux4f20ux64ad}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  计算 \(L_{\mathrm{DMD}}\)：根据路径 1 中学生因果自展开的分布，与教师模型的多步输出分布计算 Reverse-KL 散度。这迫使学生在自回归时的教师高密度区域靠拢。
+\item
+  计算 \(L_{\mathrm{FKL}}\)：拿路径 2 中学生预测的速度场 \(v_\theta\)，与教师轨迹中相邻两个检查点算出的真实速度进行对比，计算误差。这迫使学生在双向模式下保持动态多样性。
+\item
+  合并与更新：将两个损失按权重相加 \(L=L_{\mathrm{DMD}}+\lambda L_{\mathrm{FKL}}\)，其中 \(\lambda=0.1\)，然后反向传播，更新学生模型 Wan2.1-1.3B 的权重。
+\end{enumerate}
+
+\hypertarget{ux4e94ux4e24ux4e2aux635fux5931ux51fdux6570ux7684ux4f5cux7528}{%
+\subsubsection{（五）两个损失函数的作用}\label{ux4e94ux4e24ux4e2aux635fux5931ux51fdux6570ux7684ux4f5cux7528}}
+
+\hypertarget{ux5206ux5e03ux5339ux914dux84b8ux998fux635fux5931}{%
+\paragraph{1. 分布匹配蒸馏损失}\label{ux5206ux5e03ux5339ux914dux84b8ux998fux635fux5931}}
+
+这一项记为 \(L_{\mathrm{DMD}}\)，是在学生模型因果自展开（Causal Self-Rollout）过程中计算的损失，目的是让学生学会像老师一样进行多步去噪。它的本质是一个 Reverse-KL（逆 KL 散度）：
+
+\[
+L_{\mathrm{DMD}} =
+\mathbb{E}_{t,x}
+\left[
+D_{\mathrm{KL}}\left(p_\theta(x_0\mid x_t)\middle\|p_{\mathrm{teacher}}(x_0\mid x_t)\right)
+\right]
+\]
+
+物理意义是：逆 KL 散度评估的是学生分布覆盖教师分布的程度。由于公式中 \(p_\theta\) 在前，它天生具有寻求众数（mode-seeking）的倾向。带来的问题是，当学生模型在长序列中自己滚动生成时，预测复杂运动容易出错。为了快速拉低 \(L_{\mathrm{DMD}}\)，模型会自发地倾向于去拟合教师分布中最安全、最容易预测的模式，也就是几乎不动的静态画面。在分层去噪的复杂上下文中，这种坍缩效应甚至会被放大。
+
+\hypertarget{ux524dux5411-kl-ux6b63ux5219ux5316ux635fux5931}{%
+\paragraph{2. 前向 KL 正则化损失}\label{ux524dux5411-kl-ux6b63ux5219ux5316ux635fux5931}}
+
+为了防止模型变成静态图片生成器，作者引入了记为 \(L_{\mathrm{FKL}}\) 的基于轨迹采样的正则化项，迫使模型单步输出对齐教师的真实参考轨迹：
+
+\[
+L_{\mathrm{FKL}} =
+\mathbb{E}_{t}
+\left[
+\left\|
+v_\theta(x_t^{\mathrm{ref}},t) -
+\frac{x_{t+1}^{\mathrm{ref}}-x_t^{\mathrm{ref}}}{\sigma_{t+1}-\sigma_t}
+\right\|^2
+\right]
+\]
+
+物理意义是：目标参考值 \(x_t^{\mathrm{ref}}\) 是从教师的真实分布中采样的。优化这个均方误差（MSE）在数学上等价于优化一个 Forward-KL（前向 KL 散度）目标。
+
+解决的问题是：前向 KL 的特性是覆盖面广（mass-covering），它会惩罚模式丢弃（mode dropping）行为。这就强迫学生模型必须去覆盖教师模型所能生成的各种丰富动态，从而保持运动和细节多样性。
+
+\hypertarget{ux516dux4e3aux4ec0ux4e48-fkl-ux4f7fux7528ux53ccux5411ux6ce8ux610fux529b}{%
+\subsubsection{（六）为什么 FKL 使用双向注意力}\label{ux516dux4e3aux4ec0ux4e48-fkl-ux4f7fux7528ux53ccux5411ux6ce8ux610fux529b}}
+
+这是为了防止梯度干扰（Gradient Interference）。论文发现，这两种注意力机制在生成图像的物理特性上存在根本的不对称性：
+
+\begin{itemize}
+\tightlist
+\item
+  双向注意力（Bidirectional）均匀性：每一帧都能看到所有帧，因此所有位置生成的锐度质量和模糊程度较均匀。
+\item
+  因果注意力（Causal）的渐进锐化：前面的帧只能看自己，后面的帧能看到前面所有帧。随着前序上下文不断消解不确定性，后面的帧会变得越来越锐利。
+\end{itemize}
+
+因此，\(L_{\mathrm{FKL}}\) 是刚性轨迹匹配（Trajectory Matching）。在计算 FKL 时，公式要求学生模型预测的速度场 \(v_\theta\) 必须极其精确地拟合两个固定参考点之间的差值。这些参考点是教师模型在双向注意力模式下提前生成的。因为是双向生成的，这些参考画面在时空上是均匀的。如果学生模型处于因果模式，它的天生渐进锐化性质会与被强制要求的均匀性发生冲突，从而产生梯度噪声。
+
+\(L_{\mathrm{DMD}}\) 是柔性分布匹配（Distribution Matching）。DMD 优化的目标是逆向 KL 散度，不要求学生完全照搬教师的某一条具体轨迹。在实际操作中，它的梯度通过一个学习到的分数差值（learned score difference）提供。学生最终生成的状态只要落在教师模型认可的高概率密度区域即可。这里学生生成的预测看起来像真实的、符合教师分布的样本，DMD 并不要求学生逐点对齐，所以适合用学生自己的因果生成分布。
+
+换言之，\(L_{\mathrm{FKL}}\) 的输入是被强加的，来自教师的双向分布。学生在因果模式下，突然接到一个并非由因果规律产生的上下文，这会引起严重的水土不服，导致梯度信号混乱。\(L_{\mathrm{DMD}}\) 的输入是学生自己探索出来的，处在学生因果自展开的过程中。输入状态关联符合因果注意力一步步磨蹭真实生成出来的逻辑，后续的 DMD 判别器自然能给出平滑且准确的梯度指导，而不会产生错配。
+
+\hypertarget{ux4e03ux4eceux8ba1ux7b97ux56feux89d2ux5ea6ux770bux4e3aux4ec0ux4e48ux635fux5931ux53efux4ee5ux76f8ux52a0}{%
+\subsubsection{（七）从计算图角度看为什么损失可以相加}\label{ux4e03ux4eceux8ba1ux7b97ux56feux89d2ux5ea6ux770bux4e3aux4ec0ux4e48ux635fux5931ux53efux4ee5ux76f8ux52a0}}
+
+唯一的实体是学生网络参数 \(\theta\)。虽然有两条路径，但它们共享同一个神经网络，只是前向使用的权重矩阵不同：一个 MLP 投影层、注意力模式或网格参数 \(\theta\) 经过一系列复杂的矩阵乘法，输出结果；计算 \(L_{\mathrm{DMD}}\) 时，系统在内存中保留了针对 \(\theta\) 的第一组梯度图。
+
+构建计算图分支 A（主线）：传入因果 mask 和多步输入状态，网络参数 \(\theta\) 经过一系列复杂矩阵乘法，输出结果，计算出标量 \(L_{\mathrm{DMD}}\)。此时系统在内存中保留了针对 \(\theta\) 的一组梯度图。
+
+构建计算图分支 B（支线）：同一次迭代中，系统将同一套网络参数 \(\theta\) 的注意力 mask 切换为双向，传入教师的参考检查点，前向传播后计算标量 \(L_{\mathrm{FKL}}\)。此时系统构建了第二组梯度图。
+
+标量相加与梯度累加：
+
+\begin{itemize}
+\tightlist
+\item
+  将两个标量损失相加：\(L_{\mathrm{total}}=L_{\mathrm{DMD}}+0.1L_{\mathrm{FKL}}\)。
+\item
+  当执行反向传播时，反向传播算法会分别沿着分支 A 和分支 B 往回求导。
+\item
+  因为网络参数 \(\theta\) 是共享的，微积分中的链式法则决定了：注入参数 \(\theta\) 的总梯度，等于分支 A 传回梯度加上分支 B 传回梯度。
+\end{itemize}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-180}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-180}}
+
+\begin{itemize}
+\tightlist
+\item
+  Chen, B., Monso, D. M., Du, Y., Simchowitz, M., Tedrake, R., \& Sitzmann, V. (2024). \href{https://arxiv.org/abs/2407.01392}{Diffusion Forcing: Next-token Prediction Meets Full-Sequence Diffusion}. NeurIPS.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux7684ux4e0aux4e0bux6587ux5de5ux7a0bux8bbaux6587}{%
+\section{视频生成模型与生成式世界模型的上下文工程（论文）}\label{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux7684ux4e0aux4e0bux6587ux5de5ux7a0bux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux4e0aux4e0bux6587ux7684ux65f6ux7a7aux538bux7f29}{%
+\subsection{一、上下文的时空压缩}\label{ux4e00ux4e0aux4e0bux6587ux7684ux65f6ux7a7aux538bux7f29}}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-9}{%
+\subsubsection{（一）问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-9}}
+
+\textbf{要解决的问题}：在自回归生成长视频时，随着历史帧 \(z_c\) 数量的不断增加，Transformer（DiT）的 Context Length 会呈线性甚至平方级增长，导致显存爆炸和推理速度断崖式下降。传统的滑动窗口（Sliding Window）会丢失长程历史信息，而直接丢弃历史帧则会导致场景不一致。
+
+\hypertarget{ux4e8cux65f6ux95f4ux4e0eux7a7aux95f4ux538bux7f29}{%
+\subsubsection{（二）时间与空间压缩}\label{ux4e8cux65f6ux95f4ux4e0eux7a7aux95f4ux538bux7f29}}
+
+对于历史帧 \(z_c\)，模型首先在时间维度上进行每 32 帧抽样 1 帧的随机采样，然后使用高压缩比的 Patchify 操作。距离当前预测帧越远的历史帧，下采样率越大：
+
+\begin{itemize}
+\tightlist
+\item
+  距离 \(t-1\) 到 \(t-2\) 的帧：下采样率为 \((1,2,2)\)。
+\item
+  距离 \(t-3\) 到 \(t-6\) 的帧：下采样率为 \((1,4,4)\)。
+\item
+  距离 \(t-7\) 到 \(t-23\) 的帧：下采样率为 \((1,8,8)\)。
+\end{itemize}
+
+由于世界在时空上的近似连续性特质，这种下采样对世界模型性能的影响较小，但能大大减轻显存压力。
+
+\hypertarget{ux4e09ux901aux9053ux538bux7f29ux4e0eux7ebfux6027ux6ce8ux610fux529b}{%
+\subsubsection{（三）通道压缩与线性注意力}\label{ux4e09ux901aux9053ux538bux7f29ux4e0eux7ebfux6027ux6ce8ux610fux529b}}
+
+进一步地，历史帧 \(z_c\) 经过压缩率为 \((8,4,4)\) 的 Patchify，并将其通道维度压缩至 96，得到 \(z_{linear}\)。
+
+在 DiT Block 内部，当前视频 Token \(z^l\) 经过交叉注意力层后，提取出预测帧 \(z_p^l\)，并与 \(z_{linear}\) 拼接，得到融合特征 \(z_{fus}\)。
+
+为了避免标准注意力机制中序列长度带来的二次方计算复杂度，模型在此处使用了\textbf{线性注意力（Linear Attention）}。
+
+\hypertarget{ux4e8ckv-cacheux4e2dux7684ux91cdux951aux70b9}{%
+\subsection{二、KV Cache中的重锚点}\label{ux4e8ckv-cacheux4e2dux7684ux91cdux951aux70b9}}
+
+自回归模型有一个通病：误差累积。生成到第100块时，它参考的是第99块和第98块；如果第99块有一点点误差，第100块就会照着变形的画面继续生成，最后导致严重漂移。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  \textbf{注意力缓存（KV Cache）的常规逻辑}：模型在生成新帧时，会``回顾''之前的帧（即查阅 KV 缓存）。通常，模型倾向于关注最近的几帧以保持动作连贯。
+\item
+  \textbf{AHIS 的核心思想：``厚古薄今''}。
+
+  \begin{itemize}
+  \tightlist
+  \item
+    论文设定了一个容量为 \textbf{5 个 Block（区块）} 的注意力窗口。
+  \item
+    \textbf{身份锚点（Sink Tokens）}：将最开始生成的、质量最高、身份最完美的前 3 个 Block 永久性地锁定在缓存里（不随时间滑动而被淘汰）。这些就像是``身份证件照''。
+  \item
+    \textbf{滚动缓存（Rolling Tokens）}：剩下的 2 个 Block 用来存储最近刚刚生成的画面，并且随着时间不断滑动更新，用于保持当前嘴唇和动作的物理连贯性。
+  \end{itemize}
+\item
+  \textbf{为什么叫 Anchor-Heavy（重锚点）？}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    传统的注意力下沉（Attention Sinks，多用于大语言模型）通常只保留极少量的 Token（比如第一句话的首个词）用来稳定注意力计算。
+  \item
+    而这篇论文故意给身份锚点分配了极其不成比例的巨大权重（3 个 Block 对比 2 个 Block）。
+  \item
+    \textbf{效果}：这强迫模型在生成每一帧时，绝大部分的注意力都死死盯住最初始那张没有畸变的``完美脸（高保真表征）''，从而在根本上压制了模型去模仿最近帧里那些细微的扭曲误差。这使得数字人即使连续说话数分钟，长相也不会发生漂移。
+  \end{itemize}
+\end{enumerate}
+
+\hypertarget{ux4e09ux8badux7ec3ux4e0aux4e0bux6587ux6a21ux62dfux6ce8ux5165ux8befux5dee}{%
+\subsection{三、训练上下文模拟注入误差}\label{ux4e09ux8badux7ec3ux4e0aux4e0bux6587ux6a21ux62dfux6ce8ux5165ux8befux5dee}}
+
+在推理时，模型的上下文是自身已经生成的帧，难免有误差。如果训练时模型只学会了基于真实帧进行生成，则在推理时在出现误差时就容易进入OOD区域。为解决该问题，昆仑万维的Matrix-Game 3.0在训练上下文中就模拟注入误差，从而增强模型对真实场景下上下文误差的鲁棒性。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  \textbf{分组输入}：将视频潜变量序列分为前 \(k\) 帧（作为历史条件）和后 \(N-k\) 帧（作为当前需要预测的加噪目标）。
+\item
+  \textbf{误差收集}：计算模型预测的干净估计值 \(\hat{x}^t\) 与真实潜变量 \(x^t\) 之间的残差：
+\end{enumerate}
+
+\[
+\delta = \hat{x}^t - x^t
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{误差注入}：将残差存入误差缓冲区 \(\mathcal{E}\)，在训练时按照均匀分布采样标量 \(\gamma\)，对历史潜变量进行扰动：
+\end{enumerate}
+
+\[
+\tilde{x}^t = x^t + \gamma\delta
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  \textbf{条件注入与优化}：通过交叉注意力（Cross-Attention）准确注入离散的键盘动作，通过自注意力（Self-Attention）注入连续的鼠标控制信号。最终的流匹配（Flow-matching）优化目标为：
+\end{enumerate}
+
+\[
+\mathcal{L} = \mathbb{E}_{x,t,\epsilon,\delta}\left[\left\|\left(\epsilon - x^{k+1:N}\right) - v_{\theta}\left(x_t^{k+1:N}, t\mid \tilde{x}^{1:k}, c\right)\right\|_2^2\right]
+\]
+
+\hypertarget{ux56dbux76f8ux673aux611fux77e5ux7684ux957fux7a0bux8bb0ux5fc6ux673aux5236}{%
+\subsection{四、相机感知的长程记忆机制}\label{ux56dbux76f8ux673aux611fux77e5ux7684ux957fux7a0bux8bb0ux5fc6ux673aux5236}}
+
+Matrix-Game 3.0通过设计长程记忆模块，提升了在自回归的长程生成中的空间一致性与稳定性。
+
+为了保证玩家在虚拟世界中长时间漫游后``回头看''时，场景布局和细节不发生改变，模型引入了显式的长程记忆。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{统一自注意力机制}：检索到的记忆潜变量、近期过去帧和当前加噪帧被置于同一个注意力空间中，由同一个 DiT 进行联合时空建模，避免了外部记忆分支带来的特征不对齐和收敛缓慢问题。
+\item
+  \textbf{相机感知检索与编码}：并非所有历史都有用。模型根据相机的位姿和视场角重叠度来检索相关的记忆帧，并使用相对 Plücker 坐标（Plücker encoding）进行显式的几何编码，帮助模型准确对齐不同视角下的同一场景。记忆通路同样采用了上述的误差注入工作流，以减少训练和推理间的偏差。
+\item
+  \textbf{改进的旋转位置编码（RoPE）}：为了避免相隔很远的记忆帧和当前帧出现周期性的位置对齐（Positional aliasing），模型对不同注意力头引入了独立的扰动系数 \(\epsilon_h\)：
+\end{itemize}
+
+\[
+\hat{\theta}_h = \theta_{base}(1 + \sigma_{\theta}\epsilon_h)
+\]
+
+\hypertarget{ux53c2ux8003ux6587ux732e-181}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-181}}
+
+\begin{itemize}
+\tightlist
+\item
+  Wang, Z., Liu, Z., Li, J., Huang, K., Xu, B., Kang, F., An, M., Wang, P., Jiang, B., Wei, Y., Xietian, Y., Pei, J., Hu, L., Jiang, B., Xue, H., Wang, Z., Sun, H., Li, W., Ouyang, W., He, X., Liu, Y., Li, Y., \& Yang, Y. (2026). \href{https://arxiv.org/abs/2604.08995}{Matrix-Game 3.0: Real-Time and Streaming Interactive World Model with Long-Horizon Memory}. arXiv:2604.08995.
+\item
+  Chen, B., Monso, D. M., Du, Y., Simchowitz, M., Tedrake, R., \& Sitzmann, V. (2024). \href{https://arxiv.org/abs/2407.01392}{Diffusion Forcing: Next-token Prediction Meets Full-Sequence Diffusion}. NeurIPS.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux7684ux8868ux5f81ux5b66ux4e60ux548ctokenizerux8bbaux6587}{%
+\section{视频生成模型与生成式世界模型的表征学习和Tokenizer（论文）}\label{ux89c6ux9891ux751fux6210ux6a21ux578bux4e0eux751fux6210ux5f0fux4e16ux754cux6a21ux578bux7684ux8868ux5f81ux5b66ux4e60ux548ctokenizerux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00vaeux7684ux8badux7ec3}{%
+\subsection{一、VAE的训练}\label{ux4e00vaeux7684ux8badux7ec3}}
+
+\hypertarget{ux4e00ux4e0eux4e3bux6a21ux578bux7684ux89e3ux8026}{%
+\subsubsection{（一）与主模型的解耦}\label{ux4e00ux4e0eux4e3bux6a21ux578bux7684ux89e3ux8026}}
+
+目前主流的扩散模型中，VAE 和主网络是高度解耦且分阶段训练的。原因如下。
+
+第一，VAE 提供稳定的目标分布。扩散网络（DiT）的任务是学习如何在一个潜在空间（Latent Space）中去噪。如果 VAE 权重与 DiT 同时更新，就意味着这个潜在空间不断漂移和变形，DiT 将面对一个永远在移动的目标，模型很难收敛。
+
+第二，VAE 带来计算效率与工程解耦。VAE 的核心作用是降维，例如 Seedance 中将时空分辨率进行极高倍数压缩。在工程实践中，团队通常会先单独训练 VAE 到收敛，然后冻结其权重，再一次性把离线原始视频全部处理成极小体积的 VAE 特征张量并落盘保存。后续极其耗费算力的 DiT 训练只需直接读取这些轻量化特征。
+
+\hypertarget{ux4e8cux635fux5931ux51fdux6570-1}{%
+\subsubsection{（二）损失函数}\label{ux4e8cux635fux5931ux51fdux6570-1}}
+
+\hypertarget{l1-ux91cdux5efaux635fux5931}{%
+\paragraph{1. L1 重建损失}\label{l1-ux91cdux5efaux635fux5931}}
+
+L1 Reconstruction Loss 是最基础的像素级误差指标。它直接计算原始视频帧与 VAE 解码器输出视频帧在每个像素点上的绝对差值。相比 L2 损失（均方误差），L1 损失对异常点不那么敏感，因此能更好地保留画面清晰边缘，不容易导致全局过度模糊。它的职责是保证重建画面的大轮廓和色彩基调与原图严格一致。
+
+\hypertarget{kl-ux6563ux5ea6ux635fux5931}{%
+\paragraph{2. KL 散度损失}\label{kl-ux6563ux5ea6ux635fux5931}}
+
+KL Divergence Loss 是分布正则化项。为了防止 VAE 死记硬背样本，即过拟合成一个个孤立的点，KL 散度会强制 VAE 编码器输出的潜在特征分布 \(q(z|x)\) 尽可能贴近标准多元正态分布 \(p(z)\sim\mathcal{N}(0,I)\)。它像一个引力场，把所有视频特征都规整到一个连续且致密的数学空间中，确保后续 DiT 采样时不会走到无法解码的死区。
+
+KL 项常写为：
+
+\[
+\begin{aligned}
+L_{\mathrm{KL}}
+&=
+D_{\mathrm{KL}}(q(z|x)\|p(z))
+\\
+&=
+{}-\frac{1}{2}\sum_{j=1}^{J}
+\left(1+\log(\sigma_j^2)-\mu_j^2-\sigma_j^2\right)
+\end{aligned}
+\]
+
+其中 \(\mu_j\) 和 \(\sigma_j\) 分别是编码器在潜在空间第 \(j\) 维上预测的均值和标准差。
+
+\hypertarget{lpips-ux611fux77e5ux635fux5931}{%
+\paragraph{3. LPIPS 感知损失}\label{lpips-ux611fux77e5ux635fux5931}}
+
+LPIPS（Learned Perceptual Image Patch Similarity）用于填补机器与人类视觉感知的鸿沟。单纯 L1 像素误差非常死板：例如画面整体向右平移一两个像素，对人类来说几乎没有区别，但在像素矩阵相减时会产生巨大的惩罚。LPIPS 会把原图和重建图同时送入一个预先训练好的图像分类卷积网络（如 VGG），并在深层特征图（Feature Maps）的层面上计算它们的距离，强制 VAE 关注图像语义结构和高级视觉特征。
+
+其形式可以写为：
+
+\[
+L_{\mathrm{LPIPS}} =
+\sum_l
+\frac{1}{H_l W_l}
+\sum_{h,w}
+\left\|
+w_l\odot
+\left(
+\phi_l(x)_{h,w}-\phi_l(\hat{x})_{h,w}
+\right)
+\right\|_2^2
+\]
+
+其中 \(\phi_l\) 代表预训练网络在第 \(l\) 层的特征激活矩阵，\(w_l\) 是用于衡量该层重要性的学习权重。
+
+\hypertarget{ux5bf9ux6297ux8badux7ec3ux635fux5931}{%
+\paragraph{4. 对抗训练损失}\label{ux5bf9ux6297ux8badux7ec3ux635fux5931}}
+
+Adversarial Loss / GAN Loss 是细节与高频纹理的超分引擎。L1、L2 与 KL 的本质都是某种数学平滑或平均，仅靠它们会导致 VAE 生成画面缺乏极高频细节。因此 Seedance 引入生成对抗网络（GAN）的博弈思想，使用类似 PatchGAN 架构的混合判别器。判别器努力挑出重建画面中不自然的伪斑点，VAE 解码器则努力骗过判别器。这种对抗机制可以对局部纹理和精细结构施加更细粒度的监督，从而提升重建画面的锐度与物理逼真度。
+
+工作流如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  VAE 解码器作为 Generator，输出重建视频帧。
+\item
+  真实视频帧与重建视频帧分别送入混合判别器（Discriminator）。
+\item
+  判别器输出真假概率，计算交叉熵损失后反向传播给 VAE 解码器，逼迫其生成连判别器也难以分辨的数据细节。
+\end{enumerate}
+
+综合起来，常见的训练目标可表示为：
+
+\[
+\begin{aligned}
+\mathcal{L}
+&= \mathcal{L}_{\mathrm{L2}}
+\\
+&\quad + \mathcal{L}_{\mathrm{perceptual}}
+\\
+&\quad + \mathcal{L}_{\mathrm{GAN}}
+\\
+&\quad + \beta\,\mathcal{L}_{\mathrm{KL}}
+\end{aligned}
+\]
+
+\hypertarget{ux4e8cux63d0ux793aux8bcdux7684ux5904ux7406}{%
+\subsection{二、提示词的处理}\label{ux4e8cux63d0ux793aux8bcdux7684ux5904ux7406}}
+
+\hypertarget{ux4e00ux5229ux7528-llm-ux6269ux5199}{%
+\subsubsection{（一）利用 LLM 扩写}\label{ux4e00ux5229ux7528-llm-ux6269ux5199}}
+
+过于简短的提示词往往会影响生成效果。用户输入的简短提示词会发送到一个轻量级 LLM，将简单的提示词扩写为包含动态特征（人物动作、镜头运动）和静态特征（外观、风格、美学）的密集字幕。
+
+该 LLM 不与视频生成模型或世界模型联合训练，而是单独训练：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  第一阶段：监督微调（Supervised Fine-Tuning, SFT）。研究团队采用全量微调策略训练 LLM，使用大量人工标注的``用户提示词 - 密集字幕表示''数据对，并且专门针对图像到视频（I2V）和文本到视频（T2V）任务区分提示词风格。该阶段旨在赋予模型基础的扩写和重述能力。
+\item
+  第二阶段：强化学习（Reinforcement Learning, RL）。为了解决 SFT 可能带来的幻觉问题，也就是改写后的语义偏离用户原始意图，后续采用直接偏好优化（Direct Preference Optimization, DPO）。与第一阶段的全量微调不同，这里在 SFT 模型基础上应用 LoRA（Low-Rank Adaptation）微调策略，通过包含正确与错误改写结果的数据对进一步提升语义对齐精度。
+\end{enumerate}
+
+\hypertarget{ux4e8cux4e8bux4ef6-ux52a8ux4f5cux89e3ux8026}{%
+\subsubsection{（二）事件-动作解耦}\label{ux4e8cux4e8bux4ef6-ux52a8ux4f5cux89e3ux8026}}
+
+在一些互动型世界模型中，可将提示词解耦为事件描述和动作描述两部分。事件描述由 LLM 在初始生成或事件触发的那一刻一次性处理，后续所有 token 都可以复用；动作描述可能出现在每一帧中，因此可以将高频动作 embedding 与对应提示词或键盘输入之间的关系直接缓存。
+
+理想情况下，推理每一帧时，模型只需把缓存好的动作 embedding 与初始可复用的事件 embedding 拼接，就可以直接计算下一帧，从而省去 LLM 的实时重复计算并降低推理延迟。
+
+\hypertarget{ux4e09ux751fux6210ux4e0e-vae-ux89e3ux7801ux7684ux5e76ux884c}{%
+\subsection{三、生成与 VAE 解码的并行}\label{ux4e09ux751fux6210ux4e0e-vae-ux89e3ux7801ux7684ux5e76ux884c}}
+
+传统串行生成流程是：去噪预测第 \(N\) 块的潜变量，再用 VAE 将第 \(N\) 块解码为 RGB 像素；然后去噪预测第 \(N+1\) 块的潜变量，再解码第 \(N+1\) 块。流式播放时，如果去噪和解码总时间超过视频播放间隔，画面就会卡顿。
+
+并行流水线的关键在于：自回归视频扩散模型运行在潜空间中。预测第 \(N+1\) 块只需要第 \(N\) 块的潜变量缓存（KV Cache），不需要第 \(N\) 块的 RGB 像素画面。
+
+因此，当模型完成第 \(N\) 块的潜变量去噪后，会把该潜变量分发给两条线：
+
+\begin{itemize}
+\tightlist
+\item
+  线程 A（VAE 解码器）：立刻将第 \(N\) 块潜变量解码成用户可见的 RGB 视频画面。
+\item
+  线程 B（扩散生成器）：无需等待 VAE 解码完成，直接把第 \(N\) 块潜变量作为自回归上下文，开始预测第 \(N+1\) 块的潜变量。
+\end{itemize}
+
+这样去噪和解码在时间上发生重叠，单块处理延迟从两者之和降低为两者中的较大值，显著提升吞吐量，同时仍然遵守潜空间块间自回归因果性。
+
+\hypertarget{ux56dbux7528ux6269ux6563ux6a21ux578bux4f5cux4e3aux89e3ux7801ux5668}{%
+\subsection{四、用扩散模型作为解码器}\label{ux56dbux7528ux6269ux6563ux6a21ux578bux4f5cux4e3aux89e3ux7801ux5668}}
+
+由于直接在像素空间进行扩散的算力成本过高，现代的扩散生成式世界模型一般都在隐空间进行扩散。输入通过 VAE 编码器降维后进入扩散模型；扩散模型的输出经过 VAE 解码器后再输出。
+
+传统 VAE 的损失形式为：
+
+\[
+\mathcal{L}(x)=|x-D_\theta(z)|^2+\mathrm{KL}(q_\phi(z|x)\|p(z))
+\]
+
+这里 \(p(z)\) 是先验分布 \(\mathcal{N}(0,I)\)，后验分布 \(q_\phi(z|x)\) 由当前输入计算得到。KL 的作用是约束隐变量的信息量：限制 \(z\) 携带关于输入 \(x\) 的信息上界，使 VAE 学到的是受限压缩表示，而不是死记硬背。
+
+而现在的视频生成模型或生成式世界模型为了提高生成质量，往往使用混合损失：
+
+\[
+\begin{aligned}
+\mathcal{L}
+&= \mathcal{L}_{\mathrm{L2}}
+\\
+&\quad + \mathcal{L}_{\mathrm{perceptual}}
+\\
+&\quad + \mathcal{L}_{\mathrm{GAN}}
+\\
+&\quad + \beta\,\mathcal{L}_{\mathrm{KL}}
+\end{aligned}
+\]
+
+这种目标并不是严格基于似然（likelihood-based）的损失函数，必须手动设置 KL 项权重，导致难以精确推理和控制潜空间包含的实际信息量，也就是比特率。
+
+\hypertarget{ux4e00unified-latents-ux7684ux6838ux5fc3ux67b6ux6784}{%
+\subsubsection{（一）Unified Latents 的核心架构}\label{ux4e00unified-latents-ux7684ux6838ux5fc3ux67b6ux6784}}
+
+Unified Latents（UL）框架希望系统性解决上述权衡问题。核心思想是在潜空间上联合训练一个扩散先验模型（Diffusion Prior）和一个扩散解码器（Diffusion Decoder）。它建立在三个关键设计上。
+
+\hypertarget{stage-1ux8054ux5408ux8badux7ec3ux81eaux7f16ux7801ux5668}{%
+\paragraph{Stage 1：联合训练自编码器}\label{stage-1ux8054ux5408ux8badux7ec3ux81eaux7f16ux7801ux5668}}
+
+在传统 VAE 中，可以推导出基于潜变量 \(z_0\) 的对数似然变分下界：
+
+\[
+\begin{aligned}
+{}-\log p_\theta(x)
+&\le
+\mathbb{E}_{z_0\sim q_\phi(z_0|x)}
+\left[-\log p_\theta(x|z_0)\right]
+\\
+&\quad +
+\mathrm{KL}(p_\theta(z_0|x)\|p_\theta(z_0))
+\\
+&=
+\mathcal{L}(x)
+\end{aligned}
+\]
+
+第一项衡量解码出的 \(x\) 的精度，第二项衡量输入 \(x\) 时的隐变量后验分布与先验分布之间的差距。UL 将第一项中的解码器和第二项中的先验分布都替换为扩散模型。
+
+给定从数据分布 \(p_{\mathrm{data}}\) 采样的纯净样本 \(x\)，通过编码器网络 \(E_\theta\) 得到一个确定性的纯净潜在表示：
+
+\[
+z_{\mathrm{clean}}=E_\theta(x)
+\]
+
+随后对 \(z_{\mathrm{clean}}\) 进行前向加噪。研究团队将最终对数信噪比（log-SNR）固定设定为 \(\lambda(0)=5\)，从而得到微小噪声状态的潜在表示 \(z_0\)：
+
+\[
+z_0=\alpha_z(0)z_{\mathrm{clean}}+\sigma_z(0)\epsilon_z
+\]
+
+这里 \(z_{\mathrm{clean}}\) 是确定性输出，\(z_0\) 是 \(z_{\mathrm{clean}}\) 与高斯噪声之间的中间值，类似 VAE 的输出，并作为后续基座生成模型的输入。
+
+扩散先验（Diffusion Prior）先训练模型 \(P_\theta\)，负责学习从纯噪声 \(z_1\) 去噪到微噪声状态 \(z_0\) 的路径。为避免编码器通过把信息隐藏在低频噪声层级来作弊，先验损失 \(L_z(\theta)\) 使用未加权 ELBO：
+
+\[
+\mathcal{L}_z(\theta)=
+\mathbb{E}_t
+\left[
+\frac{d\lambda_z(t)}{dt}
+\frac{\exp(\lambda_z(t))}{2}
+\left\|
+z_{\mathrm{clean}}-\hat{z}(z_t,\theta)
+\right\|^2
+\right]
+\]
+
+这个先验扩散模型的任务是拟合编码器输出的 \(z_{\mathrm{clean}}\)。如果编码器为了讨好解码器，把 \(z_{\mathrm{clean}}\) 编码得极其复杂、充满高频突变，先验扩散模型在预测时就会产生巨大的均方误差。
+
+扩散解码器（Diffusion Decoder）同样是一个扩散模型，但它运行在像素空间。它通过条件注入，同时基于加噪像素数据 \(x_t\) 和低噪声潜在表示 \(z_0\)，预测出纯净数据。为防止强大的解码器完全无视潜在特征而导致后验坍塌，解码器使用重加权 ELBO：
+
+\[
+\mathcal{L}_x(\theta)=
+\mathbb{E}_{x_t,z_0,t}
+\left[
+\frac{d\lambda_x(t)}{dt}
+\frac{\exp(\lambda_x(t))}{2}
+w_x(\lambda_x(t))
+\left\|
+x-\hat{x}(x_t,z_0,\theta)
+\right\|^2
+\right]
+\]
+
+系统最终将先验损失和解码器损失相加，进行端到端反向传播：
+
+\[
+\mathcal{L}(\theta)=\mathcal{L}_z(\theta)+\mathcal{L}_x(\theta)
+\]
+
+\hypertarget{stage-2ux8badux7ec3ux57faux5ea7ux6a21ux578b}{%
+\paragraph{Stage 2：训练基座模型}\label{stage-2ux8badux7ec3ux57faux5ea7ux6a21ux578b}}
+
+一旦自编码器（Encoder 和 Decoder）训练收敛，研究人员会冻结它。在得到严格正则化且约束比特率的潜在表示后，使用标准扩散损失结合 Sigmoid 损失加权，训练一个容量庞大的基座生成模型（Base Model），负责高质量图像或视频合成。
+
+实际生成阶段与训练阶段不同，因为此时要无中生有地生成新图像，手里没有原图，自然不能通过对原图加噪得到 \(x_t\)。解码器的生成输入来自两部分：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  纯噪声起点 \(x_1\)：像素空间扩散起点直接从标准高斯分布 \(\mathcal{N}(0,I)\) 中随机采样得到一张完全纯粹的白噪声图。
+\item
+  逐步去噪生成：解码器模型以基座模型生成的潜在表示 \(z_0\) 为条件，从 \(x_1\) 开始一步步反向迭代去噪，最终雕刻出清晰的像素图像 \(x_0\)。
+\end{enumerate}
+
+\hypertarget{ux4e8cux4e3aux4ec0ux4e48ux5148ux9a8cux635fux5931ux4f7fux7528ux7eafux51c0ux6f5cux53d8ux91cf}{%
+\subsubsection{（二）为什么先验损失使用纯净潜变量}\label{ux4e8cux4e3aux4ec0ux4e48ux5148ux9a8cux635fux5931ux4f7fux7528ux7eafux51c0ux6f5cux53d8ux91cf}}
+
+这里的纯净潜变量指 \(z_{\mathrm{clean}}\)。这是现代扩散模型和变分扩散模型最标准的范式，通常称为 \(x_0\) 预测（\(x_0\)-prediction）。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  网络任务永远是看透本质：在任意扩散时间步，无论当前潜在特征被加了多少噪声，神经网络都要预测最原始、最纯净的数据，也就是 \(z_{\mathrm{clean}}\)。
+\item
+  预测终点不代表一步到位：虽然网络直接预测纯净的 \(z_{\mathrm{clean}}\)，但真正采样时，算法不会直接采用这个预测值，而是利用它计算当前梯度（Score），再引导噪声变量朝正确方向迈出一小步，到达 \(t-\Delta t\)。
+\item
+  为什么不预测 \(z_0\)：因为 \(z_0=\alpha_z(t)z_{\mathrm{clean}}+\sigma_z(t)\epsilon\)，它是对 \(z_{\mathrm{clean}}\) 加噪后的相对起点。以 \(z_{\mathrm{clean}}\) 作为绝对坐标系（Ground Truth）来计算均方误差，能够闭环推导出变分下界（ELBO）。
+\end{enumerate}
+
+\hypertarget{ux4e09ux91cdux52a0ux6743ux907fux514dux540eux9a8cux574dux584c}{%
+\subsubsection{（三）重加权避免后验坍塌}\label{ux4e09ux91cdux52a0ux6743ux907fux514dux540eux9a8cux574dux584c}}
+
+如果解码器很弱，例如简单线性层或浅层 MLP，它无法记住复杂图像分布，就必须依赖编码器提取并压缩到 \(z\) 中的信息来完成重建。此时为了降低重建损失，模型愿意忍受一点 KL 散度惩罚。
+
+但如果解码器非常强大，例如自回归模型或扩散模型，它可以忽略潜在条件，仅凭自身网络容量就很好地拟合数据分布。优化器会发现：把编码器输出变成接近先验分布 \(p(z)\)，可以把 KL 项压得很低；而强解码器仍能独立重建图像。这会导致编码器停止工作，输出变成纯高斯噪声，不包含输入信息，解码器完全无视 \(z\)，这就是后验坍塌（Posterior Collapse）。
+
+Unified Latents 的解决方案是利用解码器损失中的 \(w_x(\lambda_x(t))\)。作者引入损失因子（Loss Factor, LF），人为放大解码器重建损失权重，例如设定 LF 为 1.3 到 1.7。这在数学上等价于下调 KL 散度的相对权重。
+
+通过放大解码器损失，解码器必须做到极致完美重建。即便扩散解码器很强，如果没有 \(z_0\) 作为潜在蓝图，它也无法完美还原图像高频细节。为了对抗放大的惩罚，解码器会被迫读取 \(z_0\) 中的信息，从而倒逼编码器把更多有用图像比特率压入 \(z_0\)。
+
+\hypertarget{ux56dbux663eux5b58ux548cux6210ux672cux9650ux5236}{%
+\subsubsection{（四）显存和成本限制}\label{ux56dbux663eux5b58ux548cux6210ux672cux9650ux5236}}
+
+作者明确指出，相比 GAN 解码器，从扩散解码器中采样的计算成本高出一个数量级。如果没有额外蒸馏（Distillation）减少采样步数，Unified Latents 的计算成本将显著高于标准 LDM。
+
+为缓解实验阶段的显存和算力消耗，作者采用三种技术路线：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  引入 Patching 机制：编码器和解码器模型都使用 \(2\times2\) patching 操作，在网络早期降低空间分辨率，以节省计算资源和显存。
+\item
+  控制解码器规模：解码器采用 UViT 架构，其核心 Transformer 部分只使用 8 个 block 和 1024 个通道，相对轻量，没有无限堆叠参数。
+\item
+  信息量转移策略：论文发现，如果让 \(z_0\) 携带更高信息量（比特率），解码器重建图像会更轻松。作者可以通过调节超参数，把生成高频细节的压力分摊给潜空间，从而避免使用庞大且耗费显存的像素级解码器。
+\end{enumerate}
+
+\hypertarget{ux4e94ux89c6ux89c9ux56e0ux679cux6d41ux7f16ux7801ux5668}{%
+\subsection{五、视觉因果流编码器}\label{ux4e94ux89c6ux89c9ux56e0ux679cux6d41ux7f16ux7801ux5668}}
+
+传统 VLM 在将视觉特征输入给大语言模型（LLM）时，通常采用固定的光栅扫描顺序，即从左上角到右下角逐行扫描，并附加固定的位置编码。这种处理方式与人类视觉感知真实机制相悖：人类阅读复杂排版的文档、表格或公式时，视线移动是基于语义逻辑结构进行因果驱动的连贯扫描，而不是机械的物理坐标平移。
+
+DeepSeek OCR 2 中提出的视觉因果流，将视觉 token 转化为一系列具有因果关系的 token 序列，再送入 Transformer 进行统一的 next-token prediction，突破了从左上到右下的传统顺序。
+
+\hypertarget{ux4e00ux6838ux5fc3ux5de5ux4f5cux6d41}{%
+\subsubsection{（一）核心工作流}\label{ux4e00ux6838ux5fc3ux5de5ux4f5cux6d41}}
+
+视觉因果流编码器的流程如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  特征提取与压缩：输入图像 \(I\in\mathbb{R}^{H\times W\times 3}\) 经过视觉分词器，被映射为 \(m\) 个视觉 token：
+\end{enumerate}
+
+\[
+V\in\mathbb{R}^{m\times d}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  序列拼接：将视觉 token \(V\) 与预设的 \(n\) 个可学习因果查询向量 \(Q_0\in\mathbb{R}^{n\times d}\) 拼接，形成长度为 \(m+n\) 的联合序列。
+\item
+  因果流重排：联合序列进入 \(L\) 层自注意力 Transformer 模块 \(T_L\)，并在掩码 \(M\in\{0,1\}^{2n\times2n}\) 的约束下进行特征交互，查询符隐式完成视觉语义重排提取。
+\item
+  特征截断：通过投影算子 \(T_Q\)，截断并仅保留序列末尾的 \(n\) 个查询符输出，即 \(Z=X_{m+1:m+n}\)，因为这部分特征已经编码了基于逻辑顺序的视觉信息。
+\item
+  大模型解码：将截断后的重排特征送入约 3B 规模的 MoE 语言解码器 \(D\)，进行自回归预测，输出最终 token 概率分布 \(O\in\mathbb{R}^{n\times |V|}\)。
+\end{enumerate}
+
+\hypertarget{ux4e8cux6838ux5fc3ux67b6ux6784-3}{%
+\subsubsection{（二）核心架构}\label{ux4e8cux6838ux5fc3ux67b6ux6784-3}}
+
+\hypertarget{vision-tokenizerux5757ux5207ux5206ux4e0eux538bux7f29}{%
+\paragraph{1. Vision Tokenizer：块切分与压缩}\label{vision-tokenizerux5757ux5207ux5206ux4e0eux538bux7f29}}
+
+模型首先使用一个包含 80M 参数的 SAM-base 模型配合两层卷积层（SAM-Conv 结构）作为分词器。它既能用较低参数量实现 16 倍视觉 token 压缩，又能大幅降低后续全局注意力模块的计算成本和显存激活量。最终输出特征维度为 896。
+
+\hypertarget{vision-encoderux5f97ux5230ux89c6ux89c9ux56e0ux679cux6d41}{%
+\paragraph{2. Vision Encoder：得到视觉因果流}\label{vision-encoderux5f97ux5230ux89c6ux89c9ux56e0ux679cux6d41}}
+
+DeepEncoder V2 最大创新是移除传统 CLIP ViT 模块，替换为纯解码器（Decoder-only）语言模型架构，基于 Qwen2 0.5B、约 500M 参数。视觉 token 和新引入的因果流查询符（Causal Flow Query）被拼接在一起输入到这个类 LLM 编码器中。
+
+为了实现 token 重新排序，模型在视觉 token 之后拼接等量可学习查询符（Learnable Queries）。为适配不同分辨率，模型采用多裁剪（Multi-crop）策略：
+
+\begin{itemize}
+\tightlist
+\item
+  全局视图分辨率固定为 \(1024\times1024\)，对应 256 个查询符（queryglobal）。
+\item
+  局部视图分辨率固定为 \(768\times768\)，产生 0 到 6 个 local crops，每块共享 144 个查询符（querylocal）。
+\end{itemize}
+
+最终，经重排并喂给 LLM 的视觉 token 总量被严格控制在 \([256,1120]\) 之间，与 Gemini-3-Pro 的最大视觉 token 预算对齐，具备很高的实际生产部署价值。
+
+DeepEncoder V2 的注意力掩码矩阵拼接了两种机制：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  左半部分针对原始视觉 token，采用类似 ViT 的双向注意力（Bidirectional Attention），使所有视觉 token 之间可以互相看到，保持全局感受野。
+\item
+  右半部分针对因果查询符，采用类似 LLM 解码器的因果注意力（下三角掩码），使每个查询符只能关注所有视觉 token 以及排在它前面的查询符。
+\end{enumerate}
+
+这种掩码矩阵可写为：
+
+\[
+M=
+\begin{bmatrix}
+\mathbf{1}_{m\times m} & \mathbf{0}_{m\times n} \\
+\mathbf{1}_{n\times m} & \mathrm{LowerTri}(n)
+\end{bmatrix}
+\]
+
+其中 \(m\) 代表原始视觉 token 数量，\(n\) 代表因果查询符数量；在本文设计中 \(m=n\)。\(1\) 表示允许注意力交互，\(0\) 表示被掩码屏蔽，\(\mathrm{LowerTri}(n)\) 表示下三角矩阵（对角线及以下为 1，以上为 0）。
+
+\hypertarget{ux516dinfotokux57faux4e8eux4fe1ux606fux8bbaux7684ux89c6ux89c9ux52a8ux6001-tokenizer}{%
+\subsection{六、INFOTOK：基于信息论的视觉动态 Tokenizer}\label{ux516dinfotokux57faux4e8eux4fe1ux606fux8bbaux7684ux89c6ux89c9ux52a8ux6001-tokenizer}}
+
+处理长视频序列时，准确且高效的离散视频分词（Tokenization）至关重要。现有大多数视频分词器，如 Cosmos、OmniTokenizer 等，使用固定压缩率策略。这带来一个显著瓶颈：视频本身的复杂度和信息密度不断变化。
+
+\begin{itemize}
+\tightlist
+\item
+  简单或静态画面：固定长度会分配过多 token，导致严重信息冗余。
+\item
+  复杂或动态画面：固定长度分配的 token 不足，导致关键信息丢失。
+\end{itemize}
+
+近期虽然有一些自适应分词尝试，例如 ElasticTok 允许通过启发式随机掩码改变序列长度，但作者从 Shannon 信息论出发，严格证明这类与数据无关的训练方法在表示长度上是次优的，并且推理时需要反复试错，效率较低。
+
+\hypertarget{ux4e00ux73b0ux6709ux65b9ux6cd5ux7684ux6b21ux4f18ux6027}{%
+\subsubsection{（一）现有方法的次优性}\label{ux4e00ux73b0ux6709ux65b9ux6cd5ux7684ux6b21ux4f18ux6027}}
+
+根据 Shannon Source Coding Theorem，对于能够完美重建概率分布为 \(p(x)\) 的视频 \(x\)、且码本大小为 \(C\) 的任意分词器 \(T\)，其预期 token 长度 \(N_x\) 受到信息熵下界限制：
+
+\[
+\mathbb{E}_{x\sim p(x)}[N_x]\ge H_C(D)
+\triangleq
+\mathbb{E}_{x\sim p(x)}[-\log_C p(x)]
+\]
+
+定理 2.2 证明，如果使用类似 ElasticTok 那样的均匀随机分布 \(r(\cdot|x)\)，即在 \(\{1,\ldots,N\}\) 中均匀采样长度作为路由器，那么在最优化的分词器中，其预期序列长度会偏离理论最优值：
+
+\[
+\mathbb{E}[N_x]\ge kH_C(D)
+\]
+
+其中 \(k\gt 1\)。这意味着启发式自适应方法存在固有偏差。
+
+\hypertarget{ux4e8cux57faux4e8eux4fe1ux606fux8bbaux7684ux81eaux9002ux5e94ux8defux7531}{%
+\subsubsection{（二）基于信息论的自适应路由}\label{ux4e8cux57faux4e8eux4fe1ux606fux8bbaux7684ux81eaux9002ux5e94ux8defux7531}}
+
+为了逼近理论最优压缩率，\(N_x\) 应当与视频负对数似然成正比，即 \(N_x=-\log p(x)\)。由于任意视频的真实对数似然难以直接计算，作者使用证据下界（ELBO）作为替代估计：
+
+\[
+\mathrm{ELBO}(x) =
+\mathbb{E}_{q_\phi(z|x)}[\log p_\theta(x|z)] -
+D_{\mathrm{KL}}(q_\phi(z|x)\|p(z))
+\]
+
+ELBO 是数据对数似然的可证明下界。INFOTOK 因此设计如下路由器函数来决定视频 token 长度：
+
+\[
+r_\beta(N_x|x) =
+\delta\left(
+\beta\cdot
+\frac{\mathrm{ELBO}(x)}
+{\mathbb{E}[\mathrm{ELBO}(x)]}
+\right)
+\]
+
+其中 \(\beta\) 是平均压缩因子，决定平均使用的 token 数量；\(\delta(\cdot)\) 代表狄拉克分布，即确定性输出；\(\mathbb{E}[\mathrm{ELBO}(x)]\) 用于归一化。
+
+定理 3.1 证明，只要这种分词器成功最小化重建损失，那么在推理时，INFOTOK 的预期长度将严格以熵为界，逼近理论最优压缩率。
+
+\hypertarget{ux4e09ux538bux7f29ux6b65ux9aa4ux5de5ux4f5cux6d41}{%
+\subsubsection{（三）压缩步骤工作流}\label{ux4e09ux538bux7f29ux6b65ux9aa4ux5de5ux4f5cux6d41}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  确定当前片段的总 token 预算 \(N_x\)。处理长视频时，模型先把视频切成多个片段，例如每 33 帧一个 clip。路由器根据该片段整体信息复杂度，计算这一片段总共需要保留多少个 token。
+\item
+  计算所有位置的 ELBO 值。模型通过一次快速解码器前向传播，计算出每个 token 对应时空块的像素级 ELBO 值。
+\item
+  全局排序与掩码（Masking）。算法不是逐帧处理，而是把 \(N\) 个原始 token 放在一起，根据它们的 ELBO 值全局排序。自适应压缩器生成二值掩码 \(m\in\{0,1\}\)，舍弃对数似然最高、信息量最低、最容易预测的背景或静止画面 token，只保留信息复杂度最高的 top-\(N_x\) token。
+\item
+  最终效果是各帧 token 数量自然分化。由于是全局竞争预算，每一帧保留的 token 数动态变化。例如论文附录 A 展示：画面剧烈运动时，某一帧可能调用约 65\% 的 token 捕捉动态；画面静止或聚焦局部时，后续帧可能只用约 17\% 的 token，大面积静态背景对应 token 会被掩码，因为解码器可以从上下文推断它们。
+\end{enumerate}
+
+\hypertarget{ux56dbux6574ux4f53ux5de5ux4f5cux6d41}{%
+\subsubsection{（四）整体工作流}\label{ux56dbux6574ux4f53ux5de5ux4f5cux6d41}}
+
+INFOTOK 建立在现有固定长度分词器（如 Cosmos）之上，利用其编码器 \(E_0\) 和解码器 \(D_0\)，并引入路由器（Router）和自适应压缩器/解压器。训练过程如下：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  采样输入：从视频分布 \(\mathcal{D}\) 中采样视频 \(x\)。
+\item
+  初步编码：使用编码器将视频映射为固定长度连续潜在表示（Embeddings），\(h\leftarrow E_0(x)\)。
+\item
+  计算 ELBO 并路由：通过基础模型前向传播计算重建误差，即负 ELBO 近似；路由器据此决定该视频所需 token 序列长度 \(N_x\)，即 \(N_x\sim r(N|x)\)。
+\item
+  自适应压缩：自适应压缩器 \(\mathcal{M}_\phi\) 提取前述 ELBO 值，生成二值掩码（Mask）。它将信息量最低的 token 掩码掉，保留前 \(N_x\) 个信息最丰富的 token：\(h'\leftarrow\mathcal{M}_\phi(h,N_x)\)。
+\item
+  量化为离散 token：通过量化器将压缩后的连续表示量化为离散 token 序列 \(z\leftarrow Q(h')\)。
+\item
+  反量化与解压：解码时，先反量化得到 \(h'\leftarrow Q^{-1}(z)\)，再由自适应解压器 \(\mathcal{M}^{-1}\) 根据掩码信息，将长度为 \(N_x\) 的序列恢复回原始固定长度 \(N\)：\(h\leftarrow \mathcal{M}^{-1}(h',N_x)\)。
+\item
+  视频重建：使用解码器重建视频画面 \(\hat{x}\leftarrow D_0(h)\)。
+\item
+  计算损失并优化：通过优化重建损失函数，例如 MSE，来端到端训练网络模型。
+\end{enumerate}
+
+\hypertarget{ux53c2ux8003ux6587ux732e-182}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-182}}
+
+\begin{itemize}
+\tightlist
+\item
+  van den Oord, A., Vinyals, O., \& Kavukcuoglu, K. (2017). \href{https://arxiv.org/abs/1711.00937}{Neural Discrete Representation Learning}. NeurIPS.
+\item
+  Esser, P., Rombach, R., \& Ommer, B. (2021). \href{https://arxiv.org/abs/2012.09841}{Taming Transformers for High-Resolution Image Synthesis}. CVPR.
+\item
+  Rombach, R., Blattmann, A., Lorenz, D., Esser, P., \& Ommer, B. (2022). \href{https://arxiv.org/abs/2112.10752}{High-Resolution Image Synthesis with Latent Diffusion Models}. CVPR.
+\end{itemize}
+
+\clearpage

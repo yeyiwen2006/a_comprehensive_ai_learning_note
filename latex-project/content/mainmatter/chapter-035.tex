@@ -1,0 +1,625 @@
+\hypertarget{ux5efaux6a21ux4e09ux7ef4ux4e0eux5bf9ux8c61ux7684ux4e16ux754cux6a21ux578b}{%
+\chapter{建模三维与对象的世界模型}\label{ux5efaux6a21ux4e09ux7ef4ux4e0eux5bf9ux8c61ux7684ux4e16ux754cux6a21ux578b}}
+
+\hypertarget{ux540cux4e00ux6027ux4e09ux7ef4ux4e16ux754cux7684ux591aux89c6ux89d2ux4e16ux754cux6a21ux578bux8bbaux6587}{%
+\section{同一性三维世界的多视角世界模型（论文）}\label{ux540cux4e00ux6027ux4e09ux7ef4ux4e16ux754cux7684ux591aux89c6ux89d2ux4e16ux754cux6a21ux578bux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux6838ux5fc3ux601dux60f3-22}{%
+\subsection{一、核心思想}\label{ux4e00ux6838ux5fc3ux601dux60f3-22}}
+
+World Labs认为，现有的生成式世界模型生成的视频是2维+1维的，且生成的世界没有持久性和同一性，每一个视频片段对应的世界模型都是不同的；但真实世界是3维+1维的，且它要建构的世界是同一的，人可以从不同角度观察世界，得到2维的部分观测，不同观测需要通过视角结合等方式，``拼接''出一个完整的3维世界模型。
+
+RTFM即基于此思想的一种世界模型，它始终构建的是一个统一的``世界''，我们看到的不同观测只是视角的变换。这里把``Next State''简化理解为了观察者的移动和视角变换后的改变，没有显式引入干扰。
+
+RTFM通过上下文记忆检索的方式实现世界的持久性和同一性。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{主流生成式模型}：通常采用一次性全局去噪（或时间轴分块自回归）来生成整个时间窗口。设视频张量为 \(V\)，条件为 \(c\)（文本或首帧），生成过程可以表示为：
+\end{itemize}
+
+\[
+V \sim p_\theta(V \mid c)
+\]
+
+一旦这段视频生成完毕，模型并没有真正``记住''画面之外的世界。如果强制要求模型继续向后生成，由于缺乏显式的空间锚点，模型极易产生物理规律崩坏或物体形变（Morphing），即世界会``随时间的流逝而消散''。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{RTFM}：采用了\textbf{空间记忆（Spatial Memory）}机制来实现世界的``无限持久性（Unbounded Persistence）''。RTFM在运行过程中，会将已经生成过的帧 \(x_i\) 及其对应的精确相机位姿 \(p_i\) 持续存储在一个记忆库中：
+\end{itemize}
+
+\[
+M = \{(x_1,p_1),(x_2,p_2),\ldots,(x_{t-1},p_{t-1})\}
+\]
+
+当用户移动到新视角 \(p_t\) 需要生成当前帧 \(x_t\) 时，RTFM会利用上下文抛接（Context Juggling）技术，基于空间接近度从 \(M\) 中检索出最相关的历史帧子集 \(M_{sub}\)，并以此为条件进行自回归生成：
+
+\[
+x_t \sim p_\theta(x_t \mid M_{sub},p_t)
+\]
+
+这种机制保证了当你``回头看''时，原本的建筑或物品依然存在且严格保持3D几何一致性。
+
+\hypertarget{ux4e8cux5de5ux4f5cux6d41-8}{%
+\subsection{二、工作流}\label{ux4e8cux5de5ux4f5cux6d41-8}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{场景初始化}：接收一张或多张场景的2D图像作为世界的初始锚点。
+\item
+  \textbf{交互位姿接收}：实时捕获用户的操控输入（如键盘、鼠标或手柄的移动），并解算为下一帧的相机位姿 \(p_t\)。
+\item
+  \textbf{空间检索（Memory Retrieval）}：算法在毫秒级时间内，从已生成的带位姿历史帧库中，提取与 \(p_t\) 物理距离和朝向最接近的帧集合 \(M_{sub}\)。
+\item
+  \textbf{视点生成（View Generation）}：自回归扩散 Transformer 将检索到的 \(M_{sub}\) 和当前位姿 \(p_t\) 输入网络，实时生成该视角下的高质量2D图像 \(x_t\)。
+\item
+  \textbf{记忆更新与循环}：将新生成的 \((x_t,p_t)\) 写入空间记忆库中。整个流程在数十毫秒内完成并不断循环，为用户提供无缝的实时3D探索体验。
+\end{enumerate}
+
+\hypertarget{ux4e09ux8bb0ux5fc6ux673aux5236}{%
+\subsection{三、记忆机制}\label{ux4e09ux8bb0ux5fc6ux673aux5236}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{隐式世界表示与 KV 缓存机制（Implicit World Representation）}
+\end{enumerate}
+
+在传统的3D引擎中，世界是由顶点、纹理和材质球表示的。而在RTFM中，世界被隐式地表示为神经网络的激活值（即 Transformer 的 KV Cache）。
+
+当模型接收到输入的2D图像时，编码器会将其压缩为隐空间（Latent Space）的特征，并通过自注意力机制将其转化为键-值对（Key-Value Cache）。在生成新视角的帧时，网络通过交叉注意力（Cross-Attention）直接从这些海量的 KV 缓存中``读取''世界信息，从而渲染出符合透视和光影关系的新画面。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{空间记忆与上下文抛接（Spatial Memory \& Context Juggling）}
+\end{enumerate}
+
+如果把用户探索过的所有画面都塞进 Transformer 的上下文窗口，内存和算力会呈平方级爆炸。RTFM提出了 Context Juggling（上下文抛接）架构来解决无限持久性问题。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{带位姿的帧记忆库（Posed Frames）}：模型不仅记忆生成的2D图像 \(x_i\)，还精确记录生成该帧时的3D相机位姿 \(p_i\)。记忆库可以形式化为一个集合：
+\end{itemize}
+
+\[
+M = \{(x_i,p_i,K_i,V_i)\}_{i=1}^{t-1}
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{动态路由注意力}：当用户移动到新区域时，架构不会关注整个记忆库，而是基于当前位姿计算距离权重，动态提取（Retrieve）物理空间上最接近的几帧（或其对应的 KV Cache 子集）作为条件输入。这意味着，无论你漫游多远，Transformer 的计算复杂度始终被约束在一个常数范围内。
+\end{itemize}
+
+\hypertarget{ux56dbux8badux7ec3ux65b9ux6cd5}{%
+\subsection{四、训练方法}\label{ux56dbux8badux7ec3ux65b9ux6cd5}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Stage I：基础预训练（Foundation Pre-Training）}
+\end{enumerate}
+
+选用一个高效且表达能力强的 DiT 作为骨干网络，在海量高质量图像上进行预训练，建立强大的2D图像生成先验（Prior）。此时，模型掌握了逼真的纹理和光影生成能力，但还没有时间或空间的概念。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{Stage II：引入空间记忆的中期训练（Middle-Training for Spatial Memory）}
+\end{enumerate}
+
+将预训练的图像生成器改造为``带空间记忆的可控帧模型''。使用具有强多视角一致性（Multi-view Consistency）的真实世界视频和合成3D环境数据进行训练。模型被强制要求在给定历史帧 \(M_{sub}\) 和目标相机位姿 \(p_t\) 的条件下，自回归地预测下一帧。扩散模型的损失函数优化目标为：
+
+\[
+\mathcal{L} = \mathbb{E}_{x_0,\epsilon \sim \mathcal{N}(0,I),t}\left[\left\lVert \epsilon - \epsilon_\theta(x_t,t,M_{sub},p_t) \right\rVert^2\right]
+\]
+
+在这一阶段，模型学会了如何利用上下文抛接机制，并内化了透视投影和遮挡关系等3D物理法则。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{Stage III：面向实时的少步蒸馏（Post-Training Distillation）}
+\end{enumerate}
+
+标准的扩散模型需要几十甚至上百步的反向去噪才能生成一帧，这会导致巨大的交互延迟。RTFM在此阶段引入了分布匹配蒸馏（Distribution Matching Distillation，DMD）等技术，将多步扩散过程压缩为极少步（例如1到2步去噪）。这一步是模型能够从``离线渲染器''蜕变为``实时空间引擎''的关键。
+
+\hypertarget{ux4e94ux4f4dux59ffux6570ux636eux4eceux54eaux91ccux6765}{%
+\subsection{五、位姿数据从哪里来？}\label{ux4e94ux4f4dux59ffux6570ux636eux4eceux54eaux91ccux6765}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{在训练阶段（给模型``喂''数据时）}：
+\end{enumerate}
+
+真实世界的视频本身是不带3D坐标的。为了让模型学习3D几何，研究人员在训练前会使用 SfM（运动恢复结构，例如 COLMAP 算法）或 SLAM（同步定位与建图）技术对海量视频进行预处理。这些算法可以通过分析视频中静止特征点在不同帧里的位移，反向解算出拍摄这段视频时，摄像机在每一帧的精确3D轨迹和角度。这套被解算出来的位姿数据，会和画面一起送入 RTFM 进行训练。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{在交互/推理阶段（你玩这个模型时）}：
+\end{enumerate}
+
+此时的位姿完全来自于你的操作指令。当你按下键盘的 \texttt{W/A/S/D} 或移动鼠标时，前端的虚拟引擎（例如 WebGL 渲染循环）会把这些输入转换为一个虚拟摄像机在数学空间中的移动。引擎会实时计算出：``根据用户的输入，下一帧相机应该在虚拟空间的哪个坐标，看向哪个方向''。这个计算出的结果，就是实时传给模型的当前位姿 \(p_t\)。
+
+正是因为需要位姿数据，RTFM的训练无法直接利用互联网上海量的、无标注的视频，纯无监督地预测下一帧。它的训练数据必须包含精确的相机运动轨迹，获取这类多视角、带位姿的高质量数据极其昂贵，用确定性算法则客观上存在误差，这构成了RTFM在Data Scaling上的一堵隐形墙。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-183}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-183}}
+
+\begin{itemize}
+\tightlist
+\item
+  World Labs team. (2025). \href{https://www.worldlabs.ai/blog/rtfm}{RTFM: A Real-Time Frame Model}. World Labs Research Preview.
+\item
+  Sch?nberger, J. L., \& Frahm, J.-M. (2016). \href{https://openaccess.thecvf.com/content_cvpr_2016/html/Schonberger_Structure-From-Motion_Revisited_CVPR_2016_paper.html}{Structure-from-Motion Revisited}. CVPR.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux591aux89c6ux89d2ux4e00ux81f4ux6027ux7684ux5177ux8eabux4e16ux754cux6a21ux578bux8bbaux6587}{%
+\section{多视角一致性的具身世界模型（论文）}\label{ux591aux89c6ux89d2ux4e00ux81f4ux6027ux7684ux5177ux8eabux4e16ux754cux6a21ux578bux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+机器人往往有多个摄像头，这些摄像头所获得的图像信息必须满足三维一致性，即共同构成一个一致的三维世界。
+
+\hypertarget{ux4e00ux987aux5e8fux4ea4ux9519ux751fux6210ux6cd5}{%
+\subsection{一、顺序交错生成法}\label{ux4e00ux987aux5e8fux4ea4ux9519ux751fux6210ux6cd5}}
+
+UMM-World等采取的方法是不孤立地生成每个视角的图像，而是将头部视角、腕部视角等放在同一个序列中交替解码，每次先生成其中一个视角，再把该视角的图像放入上下文，以此作为条件生成下一个视角，以此类推。
+
+\hypertarget{ux4e8cux62fcux63a5ux751fux6210ux6cd5}{%
+\subsection{二、拼接生成法}\label{ux4e8cux62fcux63a5ux751fux6210ux6cd5}}
+
+IC-World 摒弃了传统的顺序独立生成方法，转而提出了一种基于指令的上下文生成（In-context Generation）框架，以并行方式处理所有视角。结合论文中的 Figure 2 和 Algorithm 1，该算法的核心工作流包含以下关键步骤：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{像素级拼接与指令前缀（Pixel-wise Couple \& Prompting）}：对于给定的 \(N\) 张输入图像（论文重点实验了 \(N=2\) 的情况），系统首先在像素级别将它们拼接成一张大网格图像。随后，附加上一段特定的指导性文本指令（例如提示模型这是一个``捕捉自不同相机视角的同步共享世界''）。
+\item
+  \textbf{并行生成大视频（Candidate Generation）}：当前的视频生成策略模型 \(\pi_{\theta_{old}}\) 会被这段指令激活，在网格图像的条件下，一次性并行生成 \(M\) 个候选的大网格视频样本 \(O_i\)。
+\item
+  \textbf{像素级解耦（Pixel-wise Decouple）}：将生成的 \(M\) 个大网格视频，按原来的拼接比例，在像素级别重新解耦回 \(N\) 个独立的子视频。
+\item
+  \textbf{一致性奖励计算（Reward Calculation）}：将解耦出的子视频组输入到两个专门设计的奖励模型中，分别计算几何一致性奖励 \(r_{g,i}\) 和运动一致性奖励 \(r_{m,i}\)。综合奖励定义为两者的加权和：\(r_i=\lambda_g r_{g,i}+\lambda_m r_{m,i}\)。
+\item
+  \textbf{优势评估（Advantage Computation）}：利用当前样本在其所在组（共 \(M\) 个样本）内的相对表现，计算出组内归一化的优势值 \(A_i\)。
+\item
+  \textbf{梯度上升与策略更新（Gradient Ascent）}：将计算出的优势值代入 GRPO 目标函数，对策略模型的参数 \(\theta\) 进行梯度上升更新，使其逐渐倾向于生成高一致性的视频。
+\end{enumerate}
+
+其中强化学习运用了几何一致性奖励和运动一致性奖励：
+
+为了确保多视角生成的静态场景符合真实的3D物理规律，论文构建了基于3D重建的奖励模型。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{点云重建与配准}：利用 Pi3 模型将两段视频重建为密集的3D点云 \(\mathcal{P}_1\) 和 \(\mathcal{P}_2\)。由于坐标系不同，使用 Lepard 算法进行特征匹配配准，将它们对齐。
+\item
+  \textbf{对称倒角距离评估}：配准后，采用对称倒角距离（Symmetric Chamfer Distance）\(D_g\) 精确量化两个点云之间的几何差异：
+\end{enumerate}
+
+\[
+D_g(\mathcal{P}_1,\mathcal{P}_2)=\frac{1}{2}\left[\frac{1}{N_1}\sum_{x\in\mathcal{P}_1}\min_{y\in\mathcal{P}_2}\lVert x-y\rVert_2+\frac{1}{N_2}\sum_{y\in\mathcal{P}_2}\min_{x\in\mathcal{P}_1}\lVert y-x\rVert_2\right]
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{奖励映射}：几何奖励 \(r_g\) 定义为距离的负指数，即倒角距离越小，两段视频的3D几何越一致，奖励越高：
+\end{enumerate}
+
+\[
+r_g = \exp(-D_g)
+\]
+
+对于动态场景，需要约束动态物体在不同视角的运动轨迹同步。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{3D点轨迹提取与坐标系对齐}：使用 SpatialTracker 提取视频对在 \(T_p\) 帧内的3D点轨迹集 \(\mathcal{B}_1\) 和 \(\mathcal{B}_2\)，并估计相机外参。通过相对相机外参 \(C_a\)，利用旋转 \(C_{a,\mathrm{rotate}}\) 和平移 \(C_{a,\mathrm{trans}}\) 分量，将轨迹对齐到同一坐标系：
+\end{enumerate}
+
+\[
+b_{1,i}(t_p) = C_{a,\mathrm{rotate}} \cdot b_{1,i}(t_p) + C_{a,\mathrm{trans}}
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{轨迹匹配与误差计算}：计算轨迹的时间平均位置来建立匹配函数 \(\delta(i)\)。随后，计算匹配轨迹在时间上的欧氏距离误差总和 \(D_m\)：
+\end{enumerate}
+
+\[
+D_m(\mathcal{B}_1,\mathcal{B}_2)=\frac{1}{BT_p}\sum_{i=1}^{B}\sum_{t_p=1}^{T_p}\lVert b_{1,i}(t_p)-b_{2,\delta(i)}(t_p)\rVert_2
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{奖励映射}：同样的，运动奖励 \(r_m\) 取负指数，惩罚那些在3D空间中运动轨迹存在分歧的生成结果：
+\end{enumerate}
+
+\[
+r_m = \exp(-D_m)
+\]
+
+\hypertarget{ux4e09ux589eux52a0ux7ef4ux5ea6ux751fux6210ux6cd5}{%
+\subsection{三、增加维度生成法}\label{ux4e09ux589eux52a0ux7ef4ux5ea6ux751fux6210ux6cd5}}
+
+传统的自回归扩散模型在单人潜变量空间 \(x_{SP}\in \mathbb{R}^{H\times W\times C}\) 上运行。Solaris 将状态空间扩展到了多智能体环境，增加了一个玩家维度 \(P\)（论文中限制 \(P=2\)），在形状为 \((P,H,W,C)\) 的联合张量上执行扩散过程。
+
+为了实现多玩家建模，DiT 块中引入了共享自注意力层（Shared Self-Attention）。模型为每个玩家的 Token 独立应用3D旋转位置编码（RoPE），并在进入共享自注意力层之前，将学习到的玩家 ID 嵌入（Player ID embeddings）加到每个玩家的 Token 上，以此来交换并区分不同玩家的信息。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{阶段1：双向单人预训练（Bidirectional Single-Player）}
+\end{enumerate}
+
+使用海量的人类单人游玩数据集 VPT 对基础模型进行微调，以支持全方位的 Minecraft 动作空间。这一步为多玩家建模提供了关键的有效初始化。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{阶段2：双向多玩家训练（Bidirectional Multiplayer）}
+\end{enumerate}
+
+引入架构修改，在 Solaris 数据集上使用全序列扩散（共享噪声水平）进行双向注意力训练，用于作为后续阶段的高质量``教师模型''。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{阶段3：因果多玩家训练（Causal Multiplayer）}
+\end{enumerate}
+
+引入因果掩码（Causal Mask）的滑动窗口，并采用 Diffusion Forcing 技术（为每个玩家和每一帧采样独立的噪声水平），赋予模型自回归生成未来的能力。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{3}
+\tightlist
+\item
+  \textbf{阶段4：自强制训练（Self Forcing）}
+\end{enumerate}
+
+通过监督模型自身的生成输出来缓解自回归训练与测试时的分布偏移（Train-test mismatch），从而大幅提升长上下文的生成质量。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-184}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-184}}
+
+\begin{itemize}
+\tightlist
+\item
+  Zhang, Z., Ren, H., Sun, Y., Sheng, Y., Wang, H., Wu, Z., Lin, H., Bacon, P.-L., \& Yu, Y. (2026). \href{https://openreview.net/forum?id=gB1yFEd106}{Towards Practical World Model-based Reinforcement Learning for Vision-Language-Action Models}. ICLR 2026 Workshop on World Models.
+\item
+  Savva, G., Michel, O., Lu, D., Waiwitlikhit, S., Meehan, T., Mishra, D., Poddar, S., Lu, J., \& Xie, S. (2026). \href{https://arxiv.org/abs/2602.22208}{Solaris: Building a Multiplayer Video World Model in Minecraft}. arXiv:2602.22208.
+\end{itemize}
+
+\clearpage
+
+\hypertarget{ux4ee5ux5bf9ux8c61ux4e3aux4e2dux5fc3ux7684ux4e16ux754cux6a21ux578bux8bbaux6587}{%
+\section{以对象为中心的世界模型（论文）}\label{ux4ee5ux5bf9ux8c61ux4e3aux4e2dux5fc3ux7684ux4e16ux754cux6a21ux578bux8bbaux6587}}
+
+\begin{quote}
+本文是论文阅读笔记，内容代表对应论文方法或作者理解，不应直接视为领域共识或工程最佳实践。
+\end{quote}
+
+\hypertarget{ux4e00ux95eeux9898ux80ccux666f-10}{%
+\subsection{一、问题背景}\label{ux4e00ux95eeux9898ux80ccux666f-10}}
+
+人类认知能够自然地将场景分解为对象、关系和层次结构。然而，让机器学习模型直接从原始感官数据中提取这种结构化世界模型极具挑战性。传统的生成式方法通常通过优化像素空间的重建损失来发现对象，为了降低整体重建误差，模型可能会忽略对预测未来至关重要但视觉上较小的特征（例如子弹），或者将大量模型容量浪费在视觉丰富但对动态演化无关紧要的静态背景上。
+
+为了解决这些问题，C-SWM和SlotFormer等采用了对空间中不同对象结构化建模的方式建构世界模型，在``以对象为中心的槽位（Slots）''上进行联合时空推理。
+
+\hypertarget{ux4e8cux6838ux5fc3ux7b97ux6cd5ux4e0eux5de5ux4f5cux6d41}{%
+\subsection{二、核心算法与工作流}\label{ux4e8cux6838ux5fc3ux7b97ux6cd5ux4e0eux5de5ux4f5cux6d41}}
+
+\hypertarget{ux4e00ux5bf9ux8c61ux63d0ux53d6ux4e0eux69fdux4f4dux7f16ux7801}{%
+\subsubsection{（一）对象提取与槽位编码}\label{ux4e00ux5bf9ux8c61ux63d0ux53d6ux4e0eux69fdux4f4dux7f16ux7801}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  每个对象一个槽位的方法
+\end{enumerate}
+
+该模块是一个基于卷积神经网络（CNN）的视觉特征提取器，直接处理环境的原始图像观测数据 \(s_t\)。它的最后一层输出 \(K\) 个特征图，每个特征图 \(m_t^k\) 相当于一个特定``对象槽''（object slot）的掩码，用于定位场景中的不同实体。
+
+提取出的特征图被展平后，输入到一个基于多层感知机（MLP）的对象编码器中。该编码器在所有对象槽之间共享权重，并将每个视觉掩码映射为低维的抽象状态表示 \(z_t^k \in \mathcal{Z}_k\)（本文中设置 \(\mathcal{Z}_k=\mathbb{R}^D\)）。这一步完成了从高维像素到解耦的对象级状态空间的转换。
+
+C-SWM 使用一个简单的多层卷积神经网络（CNN）作为对象提取器，最后一层强制输出 \(K\) 个特征图（Feature Maps），以此作为 \(K\) 个对象的掩码（Masks）。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Scaling 困境}：现实世界视频中的对象数量是动态变化的，而 C-SWM 的 \(K\) 值是超参数，必须提前硬编码设定。此外，正如作者在论文局限性中所承认的，这种前馈 CNN 架构\textbf{无法区分场景中外观相同的多个对象实例}（例如《太空侵略者》中多个一模一样的外星人），它极易将同类对象折叠到同一个特征图谱中，导致特征提取混乱。
+\end{itemize}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  基于 Slot Attention 的固定槽位数动态编码方法
+\end{enumerate}
+
+在人类的视觉认知中，当我们看一张包含多个物体的图片时，我们的注意力会在物体之间动态游走，并将特定的视觉特征``绑定''到我们脑海中的``对象实体''上。
+
+Slot Attention 用数学方法模拟了这一过程。它并没有给任何一个槽预设固定的语义（比如规定槽1必须是红色方块，槽2必须是绿色圆圈），而是让所有的槽在初始化时从一个共享的分布中随机采样。随后，它利用一种特殊的交叉注意力（Cross-Attention）机制，迫使这些无序的槽去``争夺''输入图像中的像素特征。这种竞争机制类似于机器学习中的 K-Means 聚类：每个槽相当于一个聚类中心，它们在多次迭代中不断调整自身的位置，最终每个槽``吸收''并收敛到一个独立的物理对象上。
+
+首先，从一个可学习的高斯先验分布 \(\mathcal{N}(\mu,\sigma)\) 中独立地随机采样 \(K\) 个槽向量 \(slots \in \mathbb{R}^{K\times D}\)。这种随机初始化赋予了模型极强的置换对称性（Permutation Symmetry）。由于所有槽的起点在统计学上是等价的，模型在测试时甚至可以无缝泛化到与训练时不同数量的对象槽。
+
+在每一次迭代 \(t=1\ldots T\)（通常 \(T=3\) 次）中，模型执行以下计算：
+
+将当前的槽向量投影为查询矩阵（Queries），将图像特征投影为键矩阵（Keys）和值矩阵（Values）：
+
+计算特征与槽之间的点积相似度矩阵：
+
+\[
+M = \frac{k q^\top}{\sqrt{D}} \in \mathbb{R}^{N\times K}
+\]
+
+标准的自注意力机制（Self-Attention）会对 \(N\) 维度（序列长度）应用 Softmax，但 Slot Attention 巧妙地将 Softmax 作用在了 \(K\) 维度（槽的维度）上。
+
+\[
+A_{n,k} = \frac{\exp(M_{n,k})}{\sum_{j=1}^{K}\exp(M_{n,j})}
+\]
+
+这里的物理意义是：对于图像上的每一个像素特征 \(n\)，分配给所有 \(K\) 个槽的注意力权重之和必须为1。这直接引入了槽与槽之间的零和博弈（竞争）-- 如果槽 A 强力关注了某个像素，槽 B 对该像素的关注度就会被强制压低，从而确保不同的槽能够解耦并``捕获''不同的视觉对象。
+
+为了让槽的更新更加稳定，模型会将注意力矩阵在 \(N\) 维度上进行归一化，得到权重 \(W\)，然后用它对值矩阵 \(v\) 进行加权求和，得到每个槽的更新信号 \(updates\)：
+
+\[
+W_{n,k} = \frac{A_{n,k}}{\sum_{i=1}^{N} A_{i,k}}
+\]
+
+\[
+\mathrm{updates} = W^\top v \in \mathbb{R}^{K\times D}
+\]
+
+最后，利用门控循环单元（GRU）来更新槽的内部状态，其中上一轮的 \(slots\) 作为隐藏状态，\(updates\) 作为输入。更新后的槽还会经过一个带残差连接的多层感知机（MLP）进行特征映射精炼：
+
+\[
+\mathrm{slots} = \mathrm{GRU}(\mathrm{state}=\mathrm{slots},\ \mathrm{inputs}=\mathrm{updates})
+\]
+
+\[
+\mathrm{slots} = \mathrm{slots} + \mathrm{MLP}(\mathrm{LayerNorm}(\mathrm{slots}))
+\]
+
+经过 \(T\) 次循环，这 \(K\) 个槽向量就包含了高度解耦的、独立的``对象级''抽象特征。
+
+Slot Attention的突破在于：
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  \textbf{解决``实例消歧''难题}：C-SWM 的前馈 CNN 提取器无法区分场景中外观完全相同的多个对象（例如屏幕上的两颗相同的子弹），因为它只是在做特征过滤。而 Slot Attention 通过动态迭代与软聚类，即使两个对象外观相同，只要它们的空间坐标编码或周围上下文有微小差异，就会在竞争机制中被强制分配到不同的槽中。
+\item
+  \textbf{摆脱固定拓扑的束缚}：C-SWM 必须硬编码每个特征图对应哪个对象。Slot Attention 的无序性（基于集合的表示）使得它完全不需要预设对象的身份，槽与对象之间的绑定在每次前向传播时都是动态生成的。
+\item
+  \textbf{支持复杂纹理与背景分离}：在多轮迭代中，Slot Attention 能够自发地学会将某个槽专门用于吸收大面积的``背景''像素，而将其余的槽用于吸附前景的独立实体，这使得它能够处理比简单的堆块游戏复杂得多的真实世界图像。
+\end{enumerate}
+
+\hypertarget{ux4e8cux4e0bux4e00ux72b6ux6001ux9884ux6d4b}{%
+\subsubsection{（二）下一状态预测}\label{ux4e8cux4e0bux4e00ux72b6ux6001ux9884ux6d4b}}
+
+SlotFormer采用了自回归的Transformer架构：
+
+提取完对象槽位后，模型将这些特征映射并准备送入 Transformer：
+
+\begin{itemize}
+\tightlist
+\item
+  使用线性层将多帧的 Slots \(\{S_t\}_{t=1}^{T}\) 映射到维度为 \(D_e\) 的潜在空间，得到 \(G_t = \mathrm{Linear}(S_t)\)。
+\item
+  \textbf{核心创新点}：为了保留不同物体槽位之间的置换等变性（Permutation Equivariance），SlotFormer 摒弃了传统的全局位置编码，转而采用时间级别的位置编码（Temporal Positional Encoding）。也就是说，同一时间步 \(t\) 内的 \(N\) 个槽位共享相同的正弦位置编码 \(P_t\)。
+\end{itemize}
+
+整合好的特征序列 \(V \in \mathbb{R}^{(TN)\times D_e}\) 被输入到一个包含 \(N_T\) 层的 Transformer Encoder（表示为 \(\mathcal{T}\)）中。
+
+\begin{itemize}
+\tightlist
+\item
+  得益于全局自注意力机制，Transformer 可以同时跨越时间和空间维度，分析所有物体在历史帧中的运动轨迹及其可能的碰撞与交互。
+\item
+  经过推理，得到带有丰富物理动态信息的特征表示 \(U = \mathcal{T}(V)\)。
+\item
+  模型截取 Transformer 输出序列的最后 \(N\) 个特征 \(U_T \in \mathbb{R}^{N\times D_e}\)，并通过一个线性层输出对下一个时间步 \((T+1)\) 的物体槽位预测：
+\end{itemize}
+
+\[
+\hat{S}_{T+1} = \mathrm{Linear}(U_T)
+\]
+
+\begin{itemize}
+\tightlist
+\item
+  随后，将新预测出的 \(\hat{S}_{T+1}\) 作为已知状态重新送回模型，与过去的帧一起预测 \(S_{T+2}\)，依此类推进行长程的未来推演。
+\end{itemize}
+
+\hypertarget{ux4e09ux635fux5931ux51fdux6570-2}{%
+\subsection{三、损失函数}\label{ux4e09ux635fux5931ux51fdux6570-2}}
+
+\hypertarget{ux4e00transformerux7684ux8badux7ec3}{%
+\subsubsection{（一）Transformer的训练}\label{ux4e00transformerux7684ux8badux7ec3}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{槽位重构损失（Slot Reconstruction Loss, \(\mathcal{L}_S\)）}：
+\end{enumerate}
+
+直接在特征空间中约束模型，通过计算预测槽位 \(\hat{s}\) 与预训练模型提取的真实槽位 \(s\) 之间的 \(L_2\) 距离，确保动力学规律的准确。对于预测的 \(K\) 个未来步和 \(N\) 个槽位，公式为：
+
+\[
+\mathcal{L}_S = \frac{1}{K \cdot N}\sum_{k=1}^{K}\sum_{n=1}^{N}\left\lVert \hat{s}_{T+k}^{n} - s_{T+k}^{n} \right\rVert^2
+\]
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{图像重构损失（Image Reconstruction Loss, \(\mathcal{L}_I\)）}：
+\end{enumerate}
+
+为了促使模型能够长期维持物体原本的外观属性（如颜色、形状等），将预测的 Slots 送入冻结的解码器 \(f_{dec}\)（如 SAVi 解码器）还原为图像，并与真实像素 \(x\) 对比：
+
+\[
+\mathcal{L}_I = \frac{1}{K}\sum_{k=1}^{K}\left\lVert f_{dec}(\hat{S}_{T+k}) - x_{T+k}\right\rVert^2
+\]
+
+总体损失函数使用超参数 \(\lambda\) 权衡两者：
+
+\[
+\mathcal{L} = \mathcal{L}_S + \lambda \mathcal{L}_I
+\]
+
+\textbf{深入细节：Stochastic SAVi 改进}
+
+在复杂的 CLEVRER 数据集中，原版 SAVi 在视频中途有新物体进入时容易漏检。论文巧妙地发现这是因为空闲槽位太相似导致的置换对称性问题。因此，作者通过一个双层 MLP 预测正态分布参数，并在初始化中引入极小的随机噪声，随后用 KL 散度约束，成功解决了新物体检测的问题。其 KL 损失推导为：
+
+\[
+\mathcal{L}^{t+1} = D_{\mathrm{KL}}\left(\mathcal{N}(\mu_{t+1}, \log \sigma_{t+1}^2) \parallel \mathcal{N}(\mu_{t+1}, \log \hat{\sigma}^2)\right)
+\]
+
+\hypertarget{ux4e8cux7279ux5f81ux63d0ux53d6ux4e0eux69fdux4f4dux5206ux914dux7684ux8badux7ec3}{%
+\subsubsection{（二）特征提取与槽位分配的训练}\label{ux4e8cux7279ux5f81ux63d0ux53d6ux4e0eux69fdux4f4dux5206ux914dux7684ux8badux7ec3}}
+
+在训练 Transformer 之前，作者首先在目标数据集上使用视频重建损失来独立预训练底层的对象中心模型（如 SAVi 或 STEVE）。
+
+\begin{itemize}
+\tightlist
+\item
+  这一阶段的任务是让 CNN 和 Slot Attention 模块学会如何将画面中的像素分解并压缩成具有物理意义的独立对象槽位（Slots）。
+\item
+  预训练完成后，这个视觉感知模块（包含编码器和解码器）的权重就会被固定下来。
+\end{itemize}
+
+\hypertarget{ux56dbux95eeux9898ux4e0eux6539ux8fdbux65b9ux5411}{%
+\subsection{四、问题与改进方向}\label{ux56dbux95eeux9898ux4e0eux6539ux8fdbux65b9ux5411}}
+
+\hypertarget{ux4e00ux5b58ux5728ux7684ux95eeux9898}{%
+\subsubsection{（一）存在的问题}\label{ux4e00ux5b58ux5728ux7684ux95eeux9898}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{``前端感知''的灾难（Garbage In, Garbage Out）}
+\end{enumerate}
+
+SlotFormer 高度依赖预训练的无监督对象发现模型（如 SAVi 或 STEVE）来提供槽位（Slots）。这些模型在合成数据集（如纯色背景、规则形状的物块碰撞）上表现完美，但一旦面对真实的物理世界（复杂的背景杂乱度、多变的纹理、光影变化、遮挡），槽位提取器常常会崩溃。如果前端提取出了错误的``垃圾槽位''，后端的 Transformer 即使再强大，预测出的动态也是错乱的。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{1}
+\tightlist
+\item
+  \textbf{割裂的两阶段训练（Two-Stage Training）}
+\end{enumerate}
+
+SlotFormer 的工作流是分离的：先在像素层面用无监督重建来预训练 Slot 提取器，然后冻结它，再去单独训练 Transformer 动力学模型。
+
+这种非端到端（Non end-to-end）的训练使得动力学模块无法反哺视觉模块，模型无法在学习物理规律时，主动去引导视觉层``关注那些对运动至关重要，但视觉上不那么明显的物体''。随着时间的推移，这种早期积累的表征误差在自回归生成中会被急剧放大。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\setcounter{enumi}{2}
+\tightlist
+\item
+  \textbf{确定性系统无法应对真实世界的``不确定性''}
+\end{enumerate}
+
+原版 SlotFormer 是一个决定论（Deterministic）模型，给定过去的帧，它只会推演出一种固定的未来。但在真实的物理世界中，环境存在极大的随机性和部分可观测性（比如一个球滚到视野盲区，它未来的轨迹会有无数种可能）。无法对未来动力学进行``多模态随机采样''，阻碍了它向真实世界视频的扩展。
+
+\hypertarget{ux4e8cux6539ux8fdbux65b9ux5411}{%
+\subsubsection{（二）改进方向}\label{ux4e8cux6539ux8fdbux65b9ux5411}}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{从``重构像素''升级为``重构大模型特征''（如 DINOSAUR / VideoSAUR）}：
+\end{itemize}
+
+过去的模型死磕``像素级重建''来提取对象，在真实世界中会因为纹理太复杂而失败。以 DINOSAUR 和 VideoSAUR 为代表的最新研究发现，如果抛弃原始像素，改为去重构自监督图像大模型（如 DINOv2）的高级语义特征，就能成功让 Slot 机制无缝扩展到 MS COCO、PASCAL VOC 甚至真实的无约束 YouTube 视频上。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{引入扩散模型降维打击（如 SlotDiffusion）}：
+\end{itemize}
+
+为了解决原版解码器画质差和无法应对随机性的问题，SlotDiffusion 将提取出的 Object Slots 视作类似文本 Prompt 里的概念词，引导潜在扩散模型（Latent Diffusion Models）进行去噪。这极大增强了模型应对真实世界高分辨率复杂视频的能力。
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{用 SSM 替代 Transformer 降低复杂度（如 SlotSSMs）}：
+\end{itemize}
+
+随着视频数据 Scaling 到更长序列，以及画面中需要提取的槽位（物体数量）急剧增加，SlotFormer 基于 Transformer 的二次方计算复杂度会成为负担。2025 年新出的 SlotSSMs 架构尝试用状态空间模型（State Space Models，如 Mamba 背后的机制）来维持并行的多槽位状态转换，在保持独立物理机制的同时，实现了对长视频的低显存高效建模。
+
+\hypertarget{ux53c2ux8003ux6587ux732e-185}{%
+\subsection{参考文献}\label{ux53c2ux8003ux6587ux732e-185}}
+
+\begin{itemize}
+\tightlist
+\item
+  Kipf, T., van der Pol, E., \& Welling, M. (2020). \href{https://arxiv.org/abs/1911.12247}{Contrastive Learning of Structured World Models}. ICLR.
+\item
+  Greff, K., Kaufmann, R. L., Kabra, R., et al.~(2019). \href{https://arxiv.org/abs/1903.00450}{Multi-Object Representation Learning with Iterative Variational Inference}. ICML.
+\item
+  Locatello, F., Weissenborn, D., Unterthiner, T., et al.~(2020). \href{https://arxiv.org/abs/2006.15055}{Object-Centric Learning with Slot Attention}. NeurIPS.
+\item
+  Wu, Z., Dvornik, N., Greff, K., Kipf, T., \& Garg, A. (2023). \href{https://arxiv.org/abs/2210.05861}{SlotFormer: Unsupervised Visual Dynamics Simulation with Object-Centric Models}. ICLR.
+\end{itemize}
+
+\clearpage
