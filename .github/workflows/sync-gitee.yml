@@ -22,6 +22,8 @@ jobs:
       # 需要在 GitHub 仓库的 Actions secrets 中配置：
       # - GITEE_REPO_SSH：Gitee 仓库 SSH 地址，例如 git@gitee.com:owner/repo.git
       # - GITEE_SSH_PRIVATE_KEY：拥有该 Gitee 仓库写权限的 SSH 私钥
+      # 可选配置 GitHub repository variable：
+      # - GITEE_TARGET_BRANCH：Gitee 目标分支，未配置时使用 main
       # 未配置时跳过同步，避免公开仓库在 secrets 配好前每次 push 都显示失败。
       - name: Check Gitee mirror configuration
         id: config
@@ -60,7 +62,9 @@ jobs:
         shell: bash
         env:
           GITEE_REPO_SSH: ${{ secrets.GITEE_REPO_SSH }}
+          GITEE_TARGET_BRANCH: ${{ vars.GITEE_TARGET_BRANCH }}
         run: |
+          target_branch="${GITEE_TARGET_BRANCH:-main}"
           git remote add gitee "$GITEE_REPO_SSH"
-          git push gitee HEAD:main
+          git push gitee HEAD:"$target_branch"
           git push gitee --tags
