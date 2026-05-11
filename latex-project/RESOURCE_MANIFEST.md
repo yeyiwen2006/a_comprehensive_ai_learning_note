@@ -1,7 +1,7 @@
 # LaTeX 项目资源清单
 
 - 已纳入根目录 Markdown：6
-- 已纳入 docs Markdown：209
+- 已纳入 docs Markdown：210
 - 原始 assets 文件：57
 - 已转换图片引用：57
 
