@@ -153,4 +153,6 @@ V-JEPA 2.1 的深度自监督彻底改变了这一点。
 ## 参考文献
 
 - Bardes, A., Garrido, Q., Ponce, J., et al. (2024). [V-JEPA: Revisiting Feature Prediction for Learning Visual Representations from Video](https://arxiv.org/abs/2404.08471). arXiv:2404.08471.
+- Assran, M., Bardes, A., Fan, D., et al. (2025). [V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction and Planning](https://arxiv.org/abs/2506.09985). arXiv:2506.09985.
+- Mur-Labadia, L., Muckley, M., Bar, A., et al. (2026). [V-JEPA 2.1: Unlocking Dense Features in Video Self-Supervised Learning](https://arxiv.org/abs/2603.14482). arXiv:2603.14482.
 - Assran, M., Duval, Q., Misra, I., et al. (2023). [Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture](https://arxiv.org/abs/2301.08243). CVPR.

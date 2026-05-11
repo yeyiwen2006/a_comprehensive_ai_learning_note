@@ -3,11 +3,11 @@
 本报告只检查 Markdown 结构和配对类问题，不改动源文档。条目为正则与轻量解析的疑似结果，建议人工确认后再修改源 Markdown。
 
 - 扫描 Markdown 文件：215
-- 疑似语法问题：359
+- 疑似语法问题：357
 
 ## 规则统计
 
-- 列表标记后缺少空格：4
+- 列表标记后缺少空格：2
 - 有序列表标记后缺少空格：352
 - 标题缺少空格：3
 
@@ -144,8 +144,6 @@
 | docs/02-reinforcement-learning/13-综合价值与策略的算法/13-01-Actor-Critic算法.md | 131 | 有序列表标记后缺少空格 | `5.` | 【5.】训练和前向推理时的组件 |
 | docs/02-reinforcement-learning/13-综合价值与策略的算法/13-01-Actor-Critic算法.md | 145 | 有序列表标记后缺少空格 | `1.` | 【1.】A3C（Google DeepMind,ICML 2016） |
 | docs/02-reinforcement-learning/13-综合价值与策略的算法/13-01-Actor-Critic算法.md | 149 | 有序列表标记后缺少空格 | `2.` | 【2.】A2C（OpenAI,2017） |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-03-PPO算法与GAE.md | 172 | 列表标记后缺少空格 | `-` | 【-】V(s_t) |
-| docs/02-reinforcement-learning/13-综合价值与策略的算法/13-03-PPO算法与GAE.md | 216 | 列表标记后缺少空格 | `-` | 【-】V(s_t) |
 | docs/02-reinforcement-learning/14-强化学习的其他算法/14-02-基于模型的强化学习.md | 34 | 有序列表标记后缺少空格 | `1.` | 【1.】核心步骤 |
 | docs/02-reinforcement-learning/14-强化学习的其他算法/14-02-基于模型的强化学习.md | 48 | 有序列表标记后缺少空格 | `2.` | 【2.】和交叉熵的关系 |
 | docs/03-large-language-model/15-注意力机制与Transformer/15-02-Bahdanau注意力.md | 19 | 有序列表标记后缺少空格 | `1.` | 【1.】评分：使用一个小型神经网络（通常是单层前馈网络），以解码器上一时间步的隐藏状态作为查... |

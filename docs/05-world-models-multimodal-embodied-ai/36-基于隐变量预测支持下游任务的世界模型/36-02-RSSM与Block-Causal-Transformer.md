@@ -312,12 +312,14 @@ $$
 通过数学推导，序列状态可以展开为一系列二元操作符 $\bullet$ 的连续运算。这个操作符定义为：
 
 $$
+\begin{aligned}
 a_i \bullet a_j
-=
+&=
 \left(
-a_{j,a} \odot a_{i,a},
+a_{j,a} \odot a_{i,a},\,
 a_{j,a} \otimes a_{i,b} + a_{j,b}
 \right)
+\end{aligned}
 $$
 
 这里 $\odot$ 代表矩阵乘法，$\otimes$ 代表矩阵向量乘法。
@@ -349,12 +351,14 @@ $$
 并设计了带有条件分支的新并行操作符：
 
 $$
+\begin{aligned}
 a_j \bullet a_i
-=
+&=
 \begin{cases}
-(a_{j,a} \odot a_{i,a}, a_{j,a} \otimes a_{i,b} + a_{j,b}, a_{i,c}), & \mathrm{if}\; a_{j,c} = 0 \\
-(a_{j,a}, a_{j,b}, a_{j,c}), & \mathrm{if}\; a_{j,c} = 1
+(a_{j,a} \odot a_{i,a},\, a_{j,a} \otimes a_{i,b} + a_{j,b},\, a_{i,c}), & \mathrm{if}\ a_{j,c} = 0, \\
+(a_{j,a},\, a_{j,b},\, a_{j,c}), & \mathrm{if}\ a_{j,c} = 1.
 \end{cases}
+\end{aligned}
 $$
 
 这个分段函数的设计非常关键。当 $a_{j,c} = 1$ 时（代表回合结束），操作符会直接丢弃来自左侧子树（历史数据）的 $a_i$ 信息，只保留当前的 $a_j$ 信息。这就使得模型在执行 $O(\log L)$ 的大规模并行计算时，能够自动且并行地处理序列中任意位置的“重置”信号。
@@ -368,12 +372,14 @@ RSSM作为RNN，在长程规划上存在劣势。Block-Causal Transformer是Tran
 它采用严格的 Token 级下三角掩码。对于任意两个 Token 索引 $i, j \in \{1, 2, \ldots, N\}$，掩码定义为：
 
 $$
+\begin{aligned}
 M^{\mathrm{causal}}_{i,j}
-=
+&=
 \begin{cases}
-0, & \mathrm{if}\; i \ge j \\
--\infty, & \mathrm{if}\; i \lt j
+0, & \mathrm{if}\ i \ge j, \\
+-\infty, & \mathrm{if}\ i < j.
 \end{cases}
+\end{aligned}
 $$
 
 这意味着，即使 Token $i$ 和 Token $j$ 属于同一帧视频，在序列中排在后面的 Token 也只能单向观测排在前面的 Token。这在自然语言中是合理的，但在图像中会迫使模型采用从左上角到右下角的逐块阅读顺序，破坏同一时刻空间的整体连贯性。
@@ -383,15 +389,17 @@ $$
 它采用块级因果掩码（Block-lower-triangular Mask）。定义映射函数 $t(i)$ 为 Token $i$ 所在的时间步（帧序号），其掩码定义为：
 
 $$
+\begin{aligned}
 M^{\mathrm{block}}_{i,j}
-=
+&=
 \begin{cases}
-0, & \mathrm{if}\; t(i) \ge t(j) \\
--\infty, & \mathrm{if}\; t(i) \lt t(j)
+0, & \mathrm{if}\ t(i) \ge t(j), \\
+-\infty, & \mathrm{if}\ t(i) < t(j).
 \end{cases}
+\end{aligned}
 $$
 
-在这个矩阵中，主对角线上是大小为 $S \times S$ 的全零矩阵块，允许同一时间帧内双向注意力；主对角线右上方则是 $-\infty$。当 $t(i) = t(j)$ 时，也就是两个 Token 在同一时间帧内，$M^{block}_{i,j} = 0$。
+在这个矩阵中，主对角线上是大小为 $S \times S$ 的全零矩阵块，允许同一时间帧内双向注意力；主对角线右上方则是 $-\infty$。当 $t(i) = t(j)$ 时，也就是两个 Token 在同一时间帧内，$M^{\mathrm{block}}_{i,j} = 0$。
 
 当用于诸如 Dreamer 4 的交互式动力学建模或物理 PDE 预测时，BCT 的工作流如下：
 
