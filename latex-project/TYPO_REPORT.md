@@ -358,11 +358,11 @@
 | docs/05-world-models-multimodal-embodied-ai/36-基于隐变量预测支持下游任务的世界模型/36-01-RL中的世界模型.md | 49 | 有序列表标记后缺少空格 | `4.` | 【4.】最后冻结感知模型和预测模型，训练控制模型。 |
 | docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-02-隐变量的时间直道化-论文.md | 34 | 有序列表标记后缺少空格 | `1.` | 【1.】基于MSE Loss |
 | docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-02-隐变量的时间直道化-论文.md | 40 | 有序列表标记后缺少空格 | `2.` | 【2.】基于余弦相似度的损失 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 130 | 有序列表标记后缺少空格 | `1.` | 【1.】依赖动作数据 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 140 | 有序列表标记后缺少空格 | `2.` | 【2.】难以捕捉细粒度旋转与姿态信息 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 144 | 有序列表标记后缺少空格 | `3.` | 【3.】规划视野受限 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 148 | 有序列表标记后缺少空格 | `4.` | 【4.】高度依赖数据覆盖率 |
-| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 154 | 有序列表标记后缺少空格 | `5.` | 【5.】SIGReg在极简环境中的正则化匹配挑战 |
+| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 133 | 有序列表标记后缺少空格 | `1.` | 【1.】依赖动作数据 |
+| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 143 | 有序列表标记后缺少空格 | `2.` | 【2.】难以捕捉细粒度旋转与姿态信息 |
+| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 147 | 有序列表标记后缺少空格 | `3.` | 【3.】规划视野受限 |
+| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 151 | 有序列表标记后缺少空格 | `4.` | 【4.】高度依赖数据覆盖率 |
+| docs/05-world-models-multimodal-embodied-ai/37-在抽象表示空间中预测的世界模型/37-03-LeWorldModel-论文.md | 157 | 有序列表标记后缺少空格 | `5.` | 【5.】SIGReg在极简环境中的正则化匹配挑战 |
 | docs/05-world-models-multimodal-embodied-ai/38-统一架构的多模态理解-生成模型/38-01-多模态统一理解-生成模型概述.md | 23 | 有序列表标记后缺少空格 | `1.` | 【1.】图像生成需要复杂的空间规划、物理常识和语义推理，模型在一次前向传播中能执行的逻辑推理... |
 | docs/05-world-models-multimodal-embodied-ai/38-统一架构的多模态理解-生成模型/38-01-多模态统一理解-生成模型概述.md | 25 | 有序列表标记后缺少空格 | `2.` | 【2.】图像信息丰富，而单一有限的离散Token词表表征容量太小，结果只能要么丢失整体语义信... |
 | docs/05-world-models-multimodal-embodied-ai/38-统一架构的多模态理解-生成模型/38-01-多模态统一理解-生成模型概述.md | 27 | 有序列表标记后缺少空格 | `3.` | 【3.】理解任务的逻辑是从具体到抽象的认知过程，生成任务的逻辑是从抽象到具体的重建过程。 |
